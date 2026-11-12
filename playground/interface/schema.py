@@ -1,0 +1,261 @@
+"""Tool catalogue: the complete, provider-neutral description of what an agent can do.
+
+Descriptions say what a tool does and what its arguments mean. They deliberately
+say nothing about how the world's physics behaves: that is for agents to find out.
+"""
+from __future__ import annotations
+
+import json
+from typing import Any
+
+NUM = {"type": "number"}
+STR = {"type": "string"}
+BOOL = {"type": "boolean"}
+INT = {"type": "integer"}
+VEC = {"type": "array", "items": {"type": "number"}}
+DIRECTION = {"anyOf": [STR, NUM, VEC],
+             "description": "A compass name (north, south, east, west, northeast, ..., up, down), a heading in "
+                            "degrees (0 = east, 90 = north), or a vector [dx, dy, dz]."}
+TARGET = {"anyOf": [STR, VEC],
+          "description": "'self', an object id, or a point [x, y, z]."}
+STEPS = {"type": "array", "items": {"type": "object", "properties": {"tool": STR, "args": {"type": "object"}},
+                                    "required": ["tool"]},
+         "description": "Ordered tool calls: [{\"tool\": name, \"args\": {...}}, ...]."}
+
+
+def _tool(name: str, category: str, description: str, props: dict | None = None,
+          required: list[str] | None = None, program_ok: bool = True) -> dict:
+    return {"name": name, "category": category, "description": description, "program_ok": program_ok,
+            "parameters": {"type": "object", "properties": props or {}, "required": required or []}}
+
+
+TOOLS: list[dict] = [
+    # ---------------------------------------------------------------- observation
+    _tool("observe_world", "observation",
+          "Full structured snapshot: your body, every object and structure, and what rests on what."),
+    _tool("inspect_object", "observation", "Everything known about one object.",
+          {"object_id": STR}, ["object_id"]),
+    _tool("inspect_position", "observation",
+          "What is at a point: what occupies it, the surface below it, whether you can reach it.",
+          {"x": NUM, "y": NUM, "z": NUM}, ["x", "y", "z"]),
+    _tool("get_inventory", "observation", "What you are holding and the state of your body."),
+    _tool("get_world_boundaries", "observation", "The coordinate system and the limits of the island."),
+    _tool("get_object_positions", "observation", "Compact list of every object's id and position."),
+    _tool("look_around", "observation",
+          "What is near you: objects and ledges sorted by distance, with bearings and relative heights.",
+          {"radius": {**NUM, "description": "Metres. Default 6."}}),
+    # ---------------------------------------------------------------- movement
+    _tool("move", "movement", "Walk in a straight line.",
+          {"direction": DIRECTION, "distance": {**NUM, "description": "Metres."},
+           "speed": {**NUM, "description": "Metres per second, 0.1 to 4. Default 2."},
+           "keep_moving": {**BOOL, "description": "If true, do not brake at the end of the walk. Default false."}},
+          ["direction", "distance"]),
+    _tool("walk_to", "movement", "Walk in a straight line to a point. There is no path-finding.",
+          {"x": NUM, "y": NUM, "z": {**NUM, "description": "Optional. The feet height you expect to end at."},
+           "speed": NUM}, ["x", "y"]),
+    _tool("jump", "movement", "Jump.",
+          {"wait": {"type": "string", "enum": ["landing", "apex", "takeoff"],
+                    "description": "When this call returns, so that another action can follow at that moment. "
+                                   "Default landing."}}),
+    _tool("climb", "movement", "Pull yourself up onto a ledge next to you.",
+          {"direction": {**DIRECTION, "description": DIRECTION["description"] +
+                         " Optional: without it, the nearest ledge around you is used."}}),
+    _tool("wait", "movement", "Let time pass.", {"seconds": {**NUM, "description": "0 to 60."}}, ["seconds"]),
+    # ---------------------------------------------------------------- objects
+    _tool("pick_up", "object", "Pick up an object. You can carry one object at a time.",
+          {"object_id": STR}, ["object_id"]),
+    _tool("put_down", "object", "Put the object you are holding down next to you.",
+          {"object_id": {**STR, "description": "Optional; defaults to the held object."}}),
+    _tool("throw", "object", "Throw the object you are holding.",
+          {"object_id": STR, "direction": DIRECTION,
+           "force": {**NUM, "description": "Newtons, greater than 0 and at most 200."},
+           "wait": {"type": "string", "enum": ["rest", "impact", "none"],
+                    "description": "Return when the object has come to rest (default), at its first impact, "
+                                   "or immediately."}},
+          ["object_id", "direction", "force"]),
+    _tool("place", "object", "Set the object you are holding down at a position.",
+          {"object_id": STR,
+           "position": {**VEC, "description": "[x, y] to set it on top of whatever is there, or [x, y, z] to "
+                                              "release it with its centre at exactly that point."}},
+          ["object_id", "position"]),
+    _tool("rotate_object", "object", "Turn an object you are holding or one within reach.",
+          {"object_id": STR, "rotation": {**VEC, "description": "[roll, pitch, yaw] in degrees."}},
+          ["object_id", "rotation"]),
+    _tool("catch", "object", "Wait for a moving object to come within reach and grab it.",
+          {"object_id": STR, "max_wait": {**NUM, "description": "Seconds to wait at most. Default 5."}},
+          ["object_id"]),
+    # ---------------------------------------------------------------- experimentation
+    _tool("measure_height", "experiment", "Measure heights of yourself, an object or the surface at a point.",
+          {"target": TARGET}),
+    _tool("measure_distance", "experiment", "Measure the distance and bearing between two things.",
+          {"from": TARGET, "to": TARGET}, ["to"]),
+    _tool("measure_velocity", "experiment", "Measure the current velocity of yourself or an object.",
+          {"target": TARGET}),
+    _tool("measure_flight_time", "experiment",
+          "The engine's measurements of the most recent flight of an object, or of your own last jump or fall.",
+          {"target": TARGET}),
+    _tool("inspect_collision", "experiment", "The engine's records of recent collisions.",
+          {"object_id": {**STR, "description": "Optional: only collisions involving this object."},
+           "limit": {**INT, "description": "Default 5."}}),
+    _tool("run_physics_test", "experiment",
+          "Try a sequence of actions in a private copy of the world as it is right now. The real world is not "
+          "changed. Returns what each step measured.",
+          {"parameters": {"type": "object", "properties": {"steps": STEPS, "label": STR}, "required": ["steps"]}},
+          ["parameters"], program_ok=False),
+    # ---------------------------------------------------------------- world history and programs
+    _tool("inspect_world_history", "world",
+          "Search this session's record of physical events (throws, landings, collisions, appearances...).",
+          {"types": {"type": "array", "items": STR}, "object_id": STR,
+           "since_action": INT, "limit": {**INT, "description": "Default 30."}}),
+    _tool("inspect_recent_events", "world", "The most recent physical events.",
+          {"limit": {**INT, "description": "Default 12."}}),
+    _tool("save_program", "world",
+          "Save a reusable sequence of tool calls. Use ${name} inside args for values supplied when it is run. "
+          "Programs persist between sessions.",
+          {"name": STR, "description": STR, "steps": STEPS}, ["name", "steps"], program_ok=False),
+    _tool("execute_program", "world", "Run a saved program.",
+          {"name": STR, "params": {"type": "object", "description": "Values for ${name} placeholders."},
+           "repeat": {**INT, "description": "1 to 20. Default 1."},
+           "on_error": {"type": "string", "enum": ["stop", "continue"]}}, ["name"], program_ok=False),
+    _tool("list_programs", "world", "List your saved programs.", program_ok=False),
+    # ---------------------------------------------------------------- memory and reflection
+    _tool("read_memory", "memory", "Read one of your memory files.",
+          {"file": {"type": "string", "enum": ["handbook", "diary", "mistakes", "goals", "discoveries",
+                                               "experiments", "programs"]}}, ["file"], program_ok=False),
+    _tool("write_diary", "memory", "Add a diary entry.", {"text": STR}, ["text"], program_ok=False),
+    _tool("add_note", "memory", "Add a free-form working note to your handbook.", {"text": STR}, ["text"],
+          program_ok=False),
+    _tool("record_experiment", "memory",
+          "Record an experiment. Cite the action_index numbers of the actions that produced the evidence; the "
+          "record is checked against what those actions actually measured.",
+          {"question": {**STR, "description": "What you wanted to find out."},
+           "hypothesis": STR, "action_description": {**STR, "description": "What you did."},
+           "expected_result": STR, "actual_result": STR,
+           "measurements": {"type": "object", "description": "Named numeric results, e.g. {\"max_height\": 3.1}."},
+           "action_refs": {"type": "array", "items": INT},
+           "supported": {**BOOL, "description": "Whether the result supports the hypothesis."},
+           "needs_followup": BOOL, "conclusion": STR},
+          ["question", "hypothesis", "actual_result", "action_refs", "supported"], program_ok=False),
+    _tool("record_discovery", "memory",
+          "Add an entry to your handbook. The status you ask for is granted only if the cited experiments "
+          "support it; otherwise the entry is filed under the status the evidence justifies.",
+          {"statement": STR,
+           "status": {"type": "string", "enum": ["confirmed", "probable", "hypothesis", "disproven"]},
+           "experiment_ids": {"type": "array", "items": STR}, "category": STR},
+          ["statement", "status"], program_ok=False),
+    _tool("update_discovery", "memory", "Add evidence or a note to a handbook entry, or ask for a new status.",
+          {"discovery_id": STR,
+           "status": {"type": "string", "enum": ["confirmed", "probable", "hypothesis", "disproven"]},
+           "add_experiment_ids": {"type": "array", "items": STR}, "note": STR}, ["discovery_id"],
+          program_ok=False),
+    _tool("record_mistake", "memory", "Record a mistake and what you learned from it.",
+          {"what": STR, "why": STR, "lesson": STR, "action_refs": {"type": "array", "items": INT}}, ["what"],
+          program_ok=False),
+    _tool("set_goal", "memory", "Note an objective you have chosen for yourself.",
+          {"title": STR, "description": STR}, ["title"], program_ok=False),
+    _tool("update_goal", "memory",
+          "Change a goal's status. A goal marked completed can carry a claim, which is checked independently.",
+          {"goal_id": STR, "status": {"type": "string", "enum": ["active", "paused", "completed", "abandoned"]},
+           "note": STR,
+           "claim": {"type": "object", "description": "Optional: {\"type\": ..., \"params\": {...}} as for "
+                                                      "claim_achievement."}},
+          ["goal_id", "status"], program_ok=False),
+    _tool("assign_meaning", "memory",
+          "Give an object, or a group of objects, a name or meaning of your own.",
+          {"target": {"anyOf": [STR, {"type": "array", "items": STR}]}, "meaning": STR}, ["target", "meaning"],
+          program_ok=False),
+    _tool("claim_achievement", "memory",
+          "State that you have achieved something and have it checked against the physical record. Types: "
+          "tower, object_on, agent_on, height_reached, block_count, juggle, structure.",
+          {"type": STR, "params": {"type": "object"}, "description": STR}, ["type"], program_ok=False),
+    _tool("end_session", "memory", "Finish for now. Your memory files are kept; the island is reset.",
+          {"reason": STR}, program_ok=False),
+]
+
+SPECS: dict[str, dict] = {t["name"]: t for t in TOOLS}
+CATEGORIES = ("observation", "movement", "object", "experiment", "world", "memory")
+
+
+class ToolError(Exception):
+    def __init__(self, code: str, message: str, **details: Any):
+        super().__init__(message)
+        self.code, self.message, self.details = code, message, details
+
+
+def openai_tools(names: list[str] | None = None) -> list[dict]:
+    return [{"type": "function", "function": {"name": t["name"], "description": t["description"],
+                                              "parameters": t["parameters"]}}
+            for t in TOOLS if names is None or t["name"] in names]
+
+
+def anthropic_tools(names: list[str] | None = None) -> list[dict]:
+    return [{"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
+            for t in TOOLS if names is None or t["name"] in names]
+
+
+def catalogue() -> list[dict]:
+    return [{"name": t["name"], "category": t["category"], "description": t["description"],
+             "parameters": t["parameters"]} for t in TOOLS]
+
+
+def _coerce(value: Any, schema: dict) -> Any:
+    """Be forgiving about encodings models commonly produce ('[1,2]' strings, {'x':..} dicts)."""
+    if isinstance(value, str):
+        v = value.strip()
+        kinds = {schema.get("type")} | {s.get("type") for s in schema.get("anyOf", [])}
+        if v[:1] in "[{" and kinds & {"array", "object"}:
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return value
+        if schema.get("type") in ("number", "integer"):
+            try:
+                return int(v) if schema["type"] == "integer" else float(v)
+            except ValueError:
+                return value
+        if schema.get("type") == "boolean" and v.lower() in ("true", "false"):
+            return v.lower() == "true"
+    if isinstance(value, dict) and schema.get("type") == "array" and {"x", "y"} <= set(value):
+        return [value["x"], value["y"]] + ([value["z"]] if "z" in value else [])
+    return value
+
+
+def normalise_args(tool: str, args: Any) -> dict:
+    spec = SPECS[tool]
+    if args is None:
+        args = {}
+    if isinstance(args, str):
+        try:
+            args = json.loads(args) if args.strip() else {}
+        except json.JSONDecodeError as exc:
+            raise ToolError("invalid_argument", f"Arguments for {tool} are not valid JSON: {exc}.") from None
+    if not isinstance(args, dict):
+        raise ToolError("invalid_argument", f"Arguments for {tool} must be an object of named values.")
+    props = spec["parameters"]["properties"]
+    unknown = sorted(set(args) - set(props))
+    if unknown:
+        raise ToolError("invalid_argument", f"{tool} has no argument(s) {unknown}. It accepts: {sorted(props)}.",
+                        accepted=sorted(props))
+    missing = [r for r in spec["parameters"]["required"] if args.get(r) is None]
+    if missing:
+        raise ToolError("invalid_argument", f"{tool} needs argument(s) {missing}.", required=missing)
+    out = {}
+    for k, v in args.items():
+        if v is None:
+            continue
+        v = _coerce(v, props[k])
+        typ = props[k].get("type")
+        ok = {"number": isinstance(v, (int, float)) and not isinstance(v, bool),
+              "integer": isinstance(v, int) and not isinstance(v, bool),
+              "string": isinstance(v, str), "boolean": isinstance(v, bool),
+              "array": isinstance(v, list), "object": isinstance(v, dict)}.get(typ, True)
+        if typ == "integer" and isinstance(v, float) and v.is_integer():
+            v, ok = int(v), True
+        if not ok:
+            raise ToolError("invalid_argument", f"Argument '{k}' of {tool} must be of type {typ}.",
+                            argument=k, received=repr(v)[:80])
+        if "enum" in props[k] and v not in props[k]["enum"]:
+            raise ToolError("invalid_argument", f"Argument '{k}' of {tool} must be one of {props[k]['enum']}.",
+                            argument=k, received=repr(v)[:80])
+        out[k] = v
+    return out

@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AI Experimental Playground</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/static/style.css">
+<script type="importmap">{"imports": {"three": "/static/vendor/three.module.min.js"}}</script>
+</head>
+<body>
+<header>
+  <h1>AI Experimental Playground</h1>
+  <nav id="tabs">
+    <button data-tab="watch" class="active">Watch &amp; replay</button>
+    <button data-tab="memory">Memory</button>
+    <button data-tab="analytics">Analytics</button>
+    <button data-tab="compare">Compare agents</button>
+    <button data-tab="bench">Benchmarks</button>
+  </nav>
+  <span id="health"></span>
+</header>
+
+<section id="tab-watch" class="tab active">
+  <div class="bar">
+    <label>Agent <select id="w-agent"></select></label>
+    <label>Session <select id="w-session"></select></label>
+    <label><input type="checkbox" id="w-follow" checked> follow live</label>
+    <span id="w-status" class="muted"></span>
+  </div>
+  <div class="watch">
+    <div class="viewer-col">
+      <div id="viewer"></div>
+      <div class="replay">
+        <button id="r-play">▶</button>
+        <input type="range" id="r-scrub" min="0" max="0" value="0">
+        <select id="r-speed"><option value="1">1×</option><option value="2">2×</option><option value="4" selected>4×</option><option value="10">10×</option></select>
+        <span id="r-time" class="mono">t=0.0s</span>
+      </div>
+      <div id="legend" class="muted small">Grid: 1 m. Red axis = +x (east), green = +y (north). Dotted lines = recorded throw trajectories.</div>
+    </div>
+    <div class="side">
+      <div class="card"><h3>Current state</h3><div id="w-state"></div></div>
+      <div class="card"><h3>Self-selected objectives</h3><div id="w-goals"></div></div>
+      <div class="card"><h3>Agent's words</h3><div id="w-msgs" class="scroll"></div></div>
+      <div class="card"><h3>Recent actions</h3><div id="w-actions" class="scroll"></div></div>
+      <div class="card"><h3>Experiments &amp; hypotheses (this session)</h3><div id="w-exps" class="scroll"></div></div>
+      <div class="card"><h3>Integrity: claimed vs verified</h3><div id="w-integ"></div></div>
+    </div>
+  </div>
+</section>
+
+<section id="tab-memory" class="tab">
+  <div class="bar"><label>Agent <select id="m-agent"></select></label><span id="m-stats" class="muted"></span></div>
+  <div class="cols2">
+    <div>
+      <div class="card"><h3>Memory items <span class="muted small">(researcher controls: challenge / mark unverified / remove)</span></h3><div id="m-items" class="scroll tall"></div></div>
+      <div class="card"><h3>Audit trail</h3><div id="m-audit" class="scroll"></div></div>
+    </div>
+    <div>
+      <div class="filetabs" id="m-filetabs">
+        <button data-f="handbook" class="active">handbook.md</button><button data-f="diary">diary.md</button>
+        <button data-f="mistakes">mistakes.md</button><button data-f="unfinished_goals">unfinished_goals.md</button>
+        <button data-f="experiments">experiments.json</button><button data-f="programs">programs/</button>
+      </div>
+      <pre id="m-file" class="file"></pre>
+    </div>
+  </div>
+</section>
+
+<section id="tab-analytics" class="tab">
+  <div class="bar"><label>Agent <select id="a-agent"><option value="">all</option></select></label></div>
+  <div class="card"><h3>Session timeline</h3><div id="a-chart"></div></div>
+  <div class="card"><h3>Sessions</h3><div id="a-table" class="scroll tall"></div></div>
+</section>
+
+<section id="tab-compare" class="tab">
+  <div class="card"><h3>All agents</h3><div id="c-table"></div></div>
+  <div class="card"><h3>What each agent believes</h3><div id="c-disc" class="scroll tall"></div></div>
+</section>
+
+<section id="tab-bench" class="tab">
+  <div class="card"><h3>Benchmark and ablation runs</h3><div id="b-runs"></div></div>
+</section>
+
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+# AI Experimental Playground - runtime + test dependencies.
+# Deliberately small: one physics engine, one web framework, one HTTP client.
+mujoco
+numpy
+fastapi
+uvicorn
+httpx
+pyyaml
+pytest

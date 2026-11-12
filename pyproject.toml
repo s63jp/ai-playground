@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-playground"
+version = "1.0.0"
+description = "A laboratory where autonomous AI agents explore a simulated physical island."
+requires-python = ">=3.11"
+dependencies = ["mujoco>=3.2", "numpy", "fastapi", "uvicorn", "httpx", "pyyaml"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+playground = "playground.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["playground*"]
+
+[tool.setuptools.package-data]
+playground = ["dashboard/static/*", "dashboard/static/vendor/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

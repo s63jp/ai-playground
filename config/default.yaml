@@ -1,0 +1,125 @@
+# AI Experimental Playground - default configuration.
+# Units: metres, kilograms, seconds, Newtons. Axes: +x east, +y north, +z up.
+# Everything an experiment depends on lives here so runs are reproducible:
+# the SHA-256 of the resolved config is stored with every session.
+
+world:
+  island:
+    half_extent: 12.0        # walkable ground spans [-12, 12] in x and y
+    sea_level: -2.0          # anything that sinks below this is lost for the session
+  start: [0.0, 0.0]          # central starting location (ground level)
+  gravity: 9.81
+  timestep: 0.002            # 500 Hz
+  platforms:
+    - {id: platform_low,     name: "Low Step",      center: [-5.0,  5.0], size: [3.0, 3.0], height: 0.5, colour: "#7fae7f"}
+    - {id: platform_mid,     name: "Mid Deck",      center: [-5.0, -5.0], size: [3.0, 3.0], height: 1.0, colour: "#6f9fb8"}
+    - {id: platform_high,    name: "High Deck",     center: [ 2.0,  7.0], size: [3.0, 2.5], height: 1.5, colour: "#b89a6f"}
+    # The terrace is flush against the west face of the spire (terrace spans x 4.6..7.6, spire 7.6..8.4).
+    - {id: platform_terrace, name: "Spire Terrace", center: [ 6.1,  0.0], size: [3.0, 3.0], height: 2.0, colour: "#a98fc2"}
+  spire: {id: spire, name: "THE SPIRE", center: [8.0, 0.0], size: [0.8, 0.8], height: 6.0, colour: "#d9d4c7"}
+  blocks:
+    count: 12
+    reserve: 8               # extra block bodies that only exist once generated in-world
+    size: 0.5
+    mass: 5.0
+    friction: 0.9
+    colours: ["#d1495b", "#3b7dd8", "#edae49", "#3fa66b"]
+    origin: [-2.5, -3.0]     # first block; laid out in rows of 6
+    spacing: 1.0
+  rock: {id: rock, name: "Large Rock", position: [-3.0, 2.0], radius: 0.3, mass: 12.0, friction: 0.9, colour: "#6b6b6b"}
+  ring: {id: ring, name: "The Ring", position: [3.0, 3.0], major_radius: 0.7, tube_radius: 0.06, mass: 2.0,
+         friction: 0.8, colour: "#f2c14e", segments: 16}
+
+agent_body:
+  width: 0.44
+  height: 1.6
+  mass: 50.0
+  walk_speed: 2.0            # default speed for move / walk_to
+  max_speed: 4.0
+  walk_force: 300.0          # traction limit of the walking controller
+  traction_tau: 0.05         # time constant of the foot-traction controller
+  jump_force: 2200.0         # N, leg force during push-off (acts on body + carried load)
+  jump_push_time: 0.1        # s, duration of the push-off
+  catch_max_speed: 15.0      # fastest relative speed at which a moving object can be grabbed
+  max_climb: 1.05            # highest ledge, relative to the feet, that can be mantled
+  climb_reach: 0.6           # horizontal reach when looking for a ledge
+  climb_time: 0.8
+  climb_max_carry: 6.0       # kg that can be carried while climbing
+  reach: 1.5                 # pick-up / place reach from the body centre
+  reach_up: 2.1              # highest placement point above the feet
+  reach_down: 0.6
+  max_carry: 25.0
+  throw_force_max: 200.0
+  throw_stroke: 0.6          # metres over which the throwing force acts
+  hold_height: 1.2           # held objects ride this far above the feet
+
+rules:
+  # World rule that is never described to agents. See docs/RESEARCHER_NOTES.md.
+  ring_generation:
+    enabled: true
+    dwell: 1.0               # seconds the configuration must persist
+    charges: 8               # at most `blocks.reserve`
+
+recording:
+  frame_interval: 25         # physics steps between replay frames (20 Hz)
+  keyframe_every: 200
+  checkpoint_every_calls: 10
+  collision_speed_threshold: 0.3
+  collision_cooldown: 0.25   # a repeat contact between the same pair within this time is the same collision
+  rest_speed: 0.05
+  rest_time: 0.3
+  min_air_time: 0.15         # airborne phases shorter AND lower than these are contact
+  min_air_height: 0.03       # chatter (landing rebound), not recorded as falls
+
+session:
+  duration_minutes: 60
+  max_steps: null            # optional cap on agent tool calls, for reproducible runs
+  wrap_up_notice_minutes: 5
+  wrap_up_notice_steps: 8
+  max_wait_seconds: 30.0
+  idle_turn_limit: 3
+
+memory:
+  root: experiments/agents
+  diary_entries_in_briefing: 12
+  confirm_min_experiments: 2     # verified supporting experiments needed for "confirmed"
+  probable_min_experiments: 1
+
+agents:
+  count: 13
+  id_format: "agent_{:03d}"
+
+database: experiments/playground.db
+
+server:
+  host: 127.0.0.1
+  port: 8765
+
+# Agent "brains". The simulator is provider neutral; pick one with --adapter.
+# Secrets are never stored here: api_key_env names an environment variable.
+adapters:
+  scripted: {type: scripted}
+  random:   {type: random}
+  lmstudio:
+    type: openai_compat
+    base_url: http://127.0.0.1:1234/v1
+    model: qwen/qwen3.5-9b
+    api_key_env: LM_API_KEY
+    temperature: 0.7
+  ollama_cloud:
+    type: openai_compat
+    base_url: https://ollama.com/v1
+    model: kimi-k3
+    api_key_env: OLLAMA_API_KEY
+    temperature: 0.7
+  openai:
+    type: openai_compat
+    base_url: https://api.openai.com/v1
+    model: gpt-5
+    api_key_env: OPENAI_API_KEY
+  claude:
+    type: anthropic
+    model: claude-sonnet-4-5
+    api_key_env: ANTHROPIC_API_KEY
+    max_tokens: 2048
+  external: {type: external}     # driven over the HTTP API (Hermes, custom models, humans)
