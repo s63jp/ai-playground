@@ -523,11 +523,40 @@ class TestSessions:
             yield ("call", "end_session", {})
         run_session(cfg, db, "a1", PolicyAdapter(policy))
         s = seen["system"]
-        assert "You are naturally curious." in s and "There is no mandatory objective." in s
+        # Default is the researcher's free-agency prompt, verbatim (PERSONALITY_FREE_AGENCY_V2).
+        assert s.startswith("You are an autonomous AI agent inhabiting a simulated physical world.")
+        assert "You have no assigned mission." in s and "You decide what happens next." in s
+        assert "Never claim to have accomplished something without evidence from the environment." in s
         import re as _re
         for leak in ("ring", "the ring", "jump-throw", "take-off", "momentum", "generate", "velocity"):
             pat = _re.compile(rf"\b{_re.escape(leak)}\b", _re.I)        # whole words: "exploring" is fine
             assert not pat.search(s) and not pat.search(seen["opening"]), leak
+
+    def test_exploration_prompt_is_selectable_and_recorded(self, cfg, db):
+        import copy
+        from playground.agents.prompts import PERSONALITY_BRIEF_V1, exploration_system, prompt_hash
+        seen = {}
+
+        def policy(system, opening, tools):
+            seen["system"] = system
+            yield ("call", "end_session", {})
+        c = copy.deepcopy(cfg)
+        c["agents"]["exploration_prompt"] = "brief_v1"
+        s = run_session(c, db, "a1", PolicyAdapter(policy))
+        assert seen["system"].startswith(PERSONALITY_BRIEF_V1)
+        started = [e for e in db.events(s["session_id"]) if e["type"] == "session_started"][0]["data"]
+        assert started["prompt_id"] == "brief_v1"
+        assert started["system_prompt_hash"] == prompt_hash(exploration_system("brief_v1"))
+        # the stored system message is exactly what the agent received
+        assert db.q("SELECT content FROM messages WHERE session_id=? AND role='system'",
+                    (s["session_id"],))[0]["content"] == seen["system"]
+
+    def test_unknown_exploration_prompt_is_rejected(self, cfg, db):
+        import copy
+        c = copy.deepcopy(cfg)
+        c["agents"]["exploration_prompt"] = "does_not_exist"
+        with pytest.raises(ValueError, match="unknown exploration prompt"):
+            run_session(c, db, "a1", PolicyAdapter(_policy([])))
 
     def test_reset_and_persistence_across_sessions(self, cfg, db):
         run_session(cfg, db, "a1", PolicyAdapter(_policy([

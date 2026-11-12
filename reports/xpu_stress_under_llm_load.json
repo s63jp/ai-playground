@@ -1,0 +1,88 @@
+{
+  "original": [
+    {
+      "ok": false,
+      "epochs": 0,
+      "error": "RuntimeError: level_zero backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)",
+      "tb": "Traceback (most recent call last):\n  File \"<string>\", line 22, in <module>\n    opt.zero_grad(); loss = lf(net(X[b]), Y[b]); loss.backward(); opt.step()\n                                                 ~~~~~~~~~~~~~^^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\_tensor.py\", line 623, in backward\n    torch.autograd.backward(\n    ~~~~~~~~~~~~~~~~~~~~~~~^\n        self, gradient, retain_graph, create_graph, inputs=inputs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\autograd\\__init__.py\", line 395, in backward\n    _engine_run_backward(\n    ~~~~~~~~~~~~~~~~~~~~^\n        tensors,\n        ^^^^^^^^\n    ...<5 lines>...\n        accumulate_grad=True,\n        ^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\autograd\\graph.py\", line 1113, in _engine_run_backward\n    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        t_outputs, *args, **kwargs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )  # Calls into the C++ engine to run the backward pass\n    ^\nRuntimeError: level_zero backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)\n",
+      "at": "18:33:21"
+    },
+    {
+      "ok": false,
+      "epochs": 0,
+      "error": "RuntimeError: level_zero backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)",
+      "tb": "Traceback (most recent call last):\n  File \"<string>\", line 22, in <module>\n    opt.zero_grad(); loss = lf(net(X[b]), Y[b]); loss.backward(); opt.step()\n                                                 ~~~~~~~~~~~~~^^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\_tensor.py\", line 623, in backward\n    torch.autograd.backward(\n    ~~~~~~~~~~~~~~~~~~~~~~~^\n        self, gradient, retain_graph, create_graph, inputs=inputs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\autograd\\__init__.py\", line 395, in backward\n    _engine_run_backward(\n    ~~~~~~~~~~~~~~~~~~~~^\n        tensors,\n        ^^^^^^^^\n    ...<5 lines>...\n        accumulate_grad=True,\n        ^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\autograd\\graph.py\", line 1113, in _engine_run_backward\n    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        t_outputs, *args, **kwargs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )  # Calls into the C++ engine to run the backward pass\n    ^\nRuntimeError: level_zero backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)\n",
+      "at": "18:33:25"
+    },
+    {
+      "ok": false,
+      "epochs": 0,
+      "error": "RuntimeError: level_zero backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)",
+      "tb": "Traceback (most recent call last):\n  File \"<string>\", line 22, in <module>\n    opt.zero_grad(); loss = lf(net(X[b]), Y[b]); loss.backward(); opt.step()\n                                                 ~~~~~~~~~~~~~^^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\_tensor.py\", line 623, in backward\n    torch.autograd.backward(\n    ~~~~~~~~~~~~~~~~~~~~~~~^\n        self, gradient, retain_graph, create_graph, inputs=inputs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\autograd\\__init__.py\", line 395, in backward\n    _engine_run_backward(\n    ~~~~~~~~~~~~~~~~~~~~^\n        tensors,\n        ^^^^^^^^\n    ...<5 lines>...\n        accumulate_grad=True,\n        ^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\autograd\\graph.py\", line 1113, in _engine_run_backward\n    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        t_outputs, *args, **kwargs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )  # Calls into the C++ engine to run the backward pass\n    ^\nRuntimeError: level_zero backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)\n",
+      "at": "18:33:28"
+    },
+    {
+      "ok": false,
+      "epochs": 0,
+      "error": "RuntimeError: level_zero backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)",
+      "tb": "Traceback (most recent call last):\n  File \"<string>\", line 22, in <module>\n    opt.zero_grad(); loss = lf(net(X[b]), Y[b]); loss.backward(); opt.step()\n                                                 ~~~~~~~~~~~~~^^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\_tensor.py\", line 623, in backward\n    torch.autograd.backward(\n    ~~~~~~~~~~~~~~~~~~~~~~~^\n        self, gradient, retain_graph, create_graph, inputs=inputs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\autograd\\__init__.py\", line 395, in backward\n    _engine_run_backward(\n    ~~~~~~~~~~~~~~~~~~~~^\n        tensors,\n        ^^^^^^^^\n    ...<5 lines>...\n        accumulate_grad=True,\n        ^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\autograd\\graph.py\", line 1113, in _engine_run_backward\n    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        t_outputs, *args, **kwargs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )  # Calls into the C++ engine to run the backward pass\n    ^\nRuntimeError: level_zero backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)\n",
+      "at": "18:33:32"
+    }
+  ],
+  "index": [
+    {
+      "ok": false,
+      "epochs": 0,
+      "error": "RuntimeError: level_zero backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)",
+      "tb": "Traceback (most recent call last):\n  File \"<string>\", line 28, in <module>\n    opt.zero_grad(); loss = lf(net(X[b]), Y[b]); loss.backward(); opt.step()\n                                                 ~~~~~~~~~~~~~^^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\_tensor.py\", line 623, in backward\n    torch.autograd.backward(\n    ~~~~~~~~~~~~~~~~~~~~~~~^\n        self, gradient, retain_graph, create_graph, inputs=inputs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\autograd\\__init__.py\", line 395, in backward\n    _engine_run_backward(\n    ~~~~~~~~~~~~~~~~~~~~^\n        tensors,\n        ^^^^^^^^\n    ...<5 lines>...\n        accumulate_grad=True,\n        ^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\autograd\\graph.py\", line 1113, in _engine_run_backward\n    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        t_outputs, *args, **kwargs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )  # Calls into the C++ engine to run the backward pass\n    ^\nRuntimeError: level_zero backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)\n",
+      "at": "18:33:35"
+    },
+    {
+      "ok": false,
+      "epochs": 0,
+      "error": "RuntimeError: level_zero backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)",
+      "tb": "Traceback (most recent call last):\n  File \"<string>\", line 28, in <module>\n    opt.zero_grad(); loss = lf(net(X[b]), Y[b]); loss.backward(); opt.step()\n                                                 ~~~~~~~~~~~~~^^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\_tensor.py\", line 623, in backward\n    torch.autograd.backward(\n    ~~~~~~~~~~~~~~~~~~~~~~~^\n        self, gradient, retain_graph, create_graph, inputs=inputs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\autograd\\__init__.py\", line 395, in backward\n    _engine_run_backward(\n    ~~~~~~~~~~~~~~~~~~~~^\n        tensors,\n        ^^^^^^^^\n    ...<5 lines>...\n        accumulate_grad=True,\n        ^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\autograd\\graph.py\", line 1113, in _engine_run_backward\n    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        t_outputs, *args, **kwargs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )  # Calls into the C++ engine to run the backward pass\n    ^\nRuntimeError: level_zero backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)\n",
+      "at": "18:33:39"
+    },
+    {
+      "ok": false,
+      "epochs": 0,
+      "error": "RuntimeError: level_zero backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)",
+      "tb": "Traceback (most recent call last):\n  File \"<string>\", line 28, in <module>\n    opt.zero_grad(); loss = lf(net(X[b]), Y[b]); loss.backward(); opt.step()\n                                                 ~~~~~~~~~~~~~^^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\_tensor.py\", line 623, in backward\n    torch.autograd.backward(\n    ~~~~~~~~~~~~~~~~~~~~~~~^\n        self, gradient, retain_graph, create_graph, inputs=inputs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\autograd\\__init__.py\", line 395, in backward\n    _engine_run_backward(\n    ~~~~~~~~~~~~~~~~~~~~^\n        tensors,\n        ^^^^^^^^\n    ...<5 lines>...\n        accumulate_grad=True,\n        ^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\autograd\\graph.py\", line 1113, in _engine_run_backward\n    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        t_outputs, *args, **kwargs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )  # Calls into the C++ engine to run the backward pass\n    ^\nRuntimeError: level_zero backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)\n",
+      "at": "18:33:43"
+    },
+    {
+      "ok": false,
+      "epochs": 0,
+      "error": "RuntimeError: level_zero backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)",
+      "tb": "Traceback (most recent call last):\n  File \"<string>\", line 28, in <module>\n    opt.zero_grad(); loss = lf(net(X[b]), Y[b]); loss.backward(); opt.step()\n                                                 ~~~~~~~~~~~~~^^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\_tensor.py\", line 623, in backward\n    torch.autograd.backward(\n    ~~~~~~~~~~~~~~~~~~~~~~~^\n        self, gradient, retain_graph, create_graph, inputs=inputs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\autograd\\__init__.py\", line 395, in backward\n    _engine_run_backward(\n    ~~~~~~~~~~~~~~~~~~~~^\n        tensors,\n        ^^^^^^^^\n    ...<5 lines>...\n        accumulate_grad=True,\n        ^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"<repo>\\.venv\\Lib\\site-packages\\torch\\autograd\\graph.py\", line 1113, in _engine_run_backward\n    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        t_outputs, *args, **kwargs\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )  # Calls into the C++ engine to run the backward pass\n    ^\nRuntimeError: level_zero backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)\n",
+      "at": "18:33:46"
+    }
+  ],
+  "slice": [
+    {
+      "ok": true,
+      "epochs": 60,
+      "s": 5.38,
+      "at": "18:33:55"
+    },
+    {
+      "ok": true,
+      "epochs": 60,
+      "s": 15.4,
+      "at": "18:34:14"
+    },
+    {
+      "ok": true,
+      "epochs": 60,
+      "s": 7.61,
+      "at": "18:34:25"
+    },
+    {
+      "ok": true,
+      "epochs": 60,
+      "s": 5.29,
+      "at": "18:34:33"
+    }
+  ]
+}

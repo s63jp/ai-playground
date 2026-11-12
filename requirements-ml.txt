@@ -1,0 +1,7 @@
+# Optional ML lab dependencies (neural networks / machine learning). The simulator runs without these.
+# Install (Intel Arc / XPU build of PyTorch, the default on this machine):
+#   uv pip install --python .venv/Scripts/python.exe -r requirements-ml.txt
+# The XPU index carries every dependency, so it is used on its own (mixing in PyPI pulls the CPU-only wheel).
+# NVIDIA: replace the URL with https://download.pytorch.org/whl/cu128 ; CPU only: .../whl/cpu
+--index-url https://download.pytorch.org/whl/xpu
+torch

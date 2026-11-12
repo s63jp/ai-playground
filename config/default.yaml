@@ -88,6 +88,9 @@ memory:
 agents:
   count: 13
   id_format: "agent_{:03d}"
+  # Personality/agency text for free exploration. free_agency_v2 = researcher prompt (Nov 2026, default);
+  # brief_v1 = original project-brief personality. Each session records the id + hash it used.
+  exploration_prompt: free_agency_v2
 
 database: experiments/playground.db
 
@@ -104,6 +107,13 @@ adapters:
     type: openai_compat
     base_url: http://127.0.0.1:1234/v1
     model: qwen/qwen3.5-9b
+    api_key_env: LM_API_KEY
+    temperature: 0.7
+  # The researcher's custom Unsloth Qwen 4B (Q8_0, qwen35 arch) on LM Studio. ~2 s per decision.
+  lmstudio_unsloth4b:
+    type: openai_compat
+    base_url: http://127.0.0.1:1234/v1
+    model: "unslothqen 4b"
     api_key_env: LM_API_KEY
     temperature: 0.7
   ollama_cloud:

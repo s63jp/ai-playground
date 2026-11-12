@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..agents.adapters import Adapter, AdapterError, ToolCall
-from ..agents.prompts import (BENCHMARK_SYSTEM, CONTINUE_NUDGE, EXPLORATION_SYSTEM, benchmark_opening,
-                              exploration_opening)
+from ..agents.prompts import (BENCHMARK_SYSTEM, CONTINUE_NUDGE, DEFAULT_PERSONALITY, benchmark_opening,
+                              exploration_opening, exploration_system, prompt_hash)
 from ..analysis.behaviour import store_classification
 from ..config import config_hash, resolve_path
 from ..interface.environment import Environment
@@ -95,6 +95,13 @@ def run_session(cfg: dict, db, agent_id: str, adapter: Adapter, mode: str = "exp
     """Run one complete session and return its summary."""
     if memory is None:
         memory = MemoryStore(memory_root(cfg), agent_id, cfg, db=db)
+    if resume_session_id is not None:
+        # A resumed session keeps the budget it was started with, whatever the current CLI flags say.
+        row0 = db.session(resume_session_id)
+        if row0 is not None and row0.get("budget_json"):
+            b = json.loads(row0["budget_json"])
+            cfg = {**cfg, "session": {**cfg["session"], "max_steps": b.get("max_steps"),
+                                      "duration_minutes": b.get("minutes", cfg["session"]["duration_minutes"])}}
     s_cfg = cfg["session"]
     tool_names = [n for n in SPECS if n not in (exclude_tools or [])]
     resumed = None
@@ -118,8 +125,10 @@ def run_session(cfg: dict, db, agent_id: str, adapter: Adapter, mode: str = "exp
         env = Environment(cfg, db, memory, agent_id, sid, number, mode=mode, allowed_tools=tool_names,
                           scene=scene, clock=clock)
     briefing = memory.briefing() if include_briefing else None
+    prompt_id = None
     if mode == "exploration":
-        system = EXPLORATION_SYSTEM
+        prompt_id = cfg.get("agents", {}).get("exploration_prompt") or DEFAULT_PERSONALITY
+        system = exploration_system(prompt_id)
         opening = exploration_opening(agent_id, number, briefing, float(s_cfg["duration_minutes"]),
                                       s_cfg.get("max_steps"))
     else:
@@ -132,7 +141,7 @@ def run_session(cfg: dict, db, agent_id: str, adapter: Adapter, mode: str = "exp
     env.note("session_started", mode=mode, session_number=number, adapter=adapter.describe(),
              memory_empty=memory.is_empty(), briefing_chars=len(briefing or ""),
              island_matches_original=env.initial_state_hash == canonical_initial_hash(cfg) if scene is None else None,
-             resumed=bool(resumed))
+             resumed=bool(resumed), prompt_id=prompt_id, system_prompt_hash=prompt_hash(system))
     env._flush_only()
     db.add_message(sid, 0, "system", system)
     db.add_message(sid, 0, "user", opening)

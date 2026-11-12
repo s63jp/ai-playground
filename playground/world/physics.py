@@ -912,7 +912,9 @@ class PhysicsWorld:
                     break
                 last_check_t, last_check_s = self.time, travelled
             if self.time - t0 > timeout:
-                blocked_by = list(self.side_contacts) or ["timeout"]
+                # Not an obstacle: the body was deflected (slid along something) and never closed the remaining
+                # distance along the requested heading. Say so precisely rather than blaming an obstacle.
+                blocked_by = list(self.side_contacts) or ["deflected_off_course"]
                 break
         if stop or blocked_by:
             self.target_vel[:] = 0.0
@@ -940,6 +942,12 @@ class PhysicsWorld:
             "velocity": self.agent_vel(), "objects_disturbed": disturbed,
         }
         if blocked_by:
+            if blocked_by == ["deflected_off_course"]:
+                off = float(abs((end[0] - start[0]) * -d2[1] + (end[1] - start[1]) * d2[0]))
+                raise ActionError("blocked", f"Movement did not finish: after {res['distance_travelled']:.2f} m the "
+                                  f"body had been pushed {off:.2f} m sideways off the requested line and could not "
+                                  f"close the remaining distance.", blocked_by=blocked_by,
+                                  sideways_offset=round(off, 3), **rnd(res))
             raise ActionError("blocked", f"Movement stopped after {res['distance_travelled']:.2f} m of "
                               f"{distance:.2f} m: blocked by {', '.join(blocked_by)}.",
                               blocked_by=blocked_by, **rnd(res))

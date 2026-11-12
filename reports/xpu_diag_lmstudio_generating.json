@@ -1,0 +1,596 @@
+{
+  "environment": {
+    "torch": "2.15.0+xpu",
+    "xpu_available": true,
+    "device": "Intel(R) Arc(TM) A770 Graphics",
+    "driver_version": "1.17.39894+4",
+    "total_memory_gb": 15.56
+  },
+  "repeats": 3,
+  "tests": {
+    "tensor_creation": {
+      "passed": 3,
+      "runs": [
+        {
+          "ok": true,
+          "stages": [
+            "randn on xpu",
+            "zeros on xpu",
+            "h2d copy",
+            "d2h copy"
+          ],
+          "seconds": 1.99,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "randn on xpu",
+            "zeros on xpu",
+            "h2d copy",
+            "d2h copy"
+          ],
+          "seconds": 1.99,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "randn on xpu",
+            "zeros on xpu",
+            "h2d copy",
+            "d2h copy"
+          ],
+          "seconds": 2.07,
+          "exit_code": 0
+        }
+      ]
+    },
+    "matmul": {
+      "passed": 3,
+      "runs": [
+        {
+          "ok": true,
+          "stages": [
+            "a",
+            "matmul 512",
+            "reduce"
+          ],
+          "seconds": 2.29,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "a",
+            "matmul 512",
+            "reduce"
+          ],
+          "seconds": 2.17,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "a",
+            "matmul 512",
+            "reduce"
+          ],
+          "seconds": 2.17,
+          "exit_code": 0
+        }
+      ]
+    },
+    "relu": {
+      "passed": 3,
+      "runs": [
+        {
+          "ok": true,
+          "stages": [
+            "a",
+            "relu",
+            "nn.ReLU module"
+          ],
+          "seconds": 2.08,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "a",
+            "relu",
+            "nn.ReLU module"
+          ],
+          "seconds": 2.03,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "a",
+            "relu",
+            "nn.ReLU module"
+          ],
+          "seconds": 1.97,
+          "exit_code": 0
+        }
+      ]
+    },
+    "forward": {
+      "passed": 3,
+      "runs": [
+        {
+          "ok": true,
+          "stages": [
+            "build+move net",
+            "create X on xpu",
+            "create Y on xpu",
+            "forward 980",
+            "forward slice 64"
+          ],
+          "seconds": 2.22,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "build+move net",
+            "create X on xpu",
+            "create Y on xpu",
+            "forward 980",
+            "forward slice 64"
+          ],
+          "seconds": 2.38,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "build+move net",
+            "create X on xpu",
+            "create Y on xpu",
+            "forward 980",
+            "forward slice 64"
+          ],
+          "seconds": 2.31,
+          "exit_code": 0
+        }
+      ]
+    },
+    "backward": {
+      "passed": 3,
+      "runs": [
+        {
+          "ok": true,
+          "stages": [
+            "build+move net",
+            "create X on xpu",
+            "create Y on xpu",
+            "forward+mse",
+            "backward",
+            "grads finite"
+          ],
+          "seconds": 2.67,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "build+move net",
+            "create X on xpu",
+            "create Y on xpu",
+            "forward+mse",
+            "backward",
+            "grads finite"
+          ],
+          "seconds": 2.66,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "build+move net",
+            "create X on xpu",
+            "create Y on xpu",
+            "forward+mse",
+            "backward",
+            "grads finite"
+          ],
+          "seconds": 2.69,
+          "exit_code": 0
+        }
+      ]
+    },
+    "optimizer_step": {
+      "passed": 3,
+      "runs": [
+        {
+          "ok": true,
+          "stages": [
+            "build+move net",
+            "create X on xpu",
+            "create Y on xpu",
+            "adam step 1",
+            "adam step 2",
+            "weights changed"
+          ],
+          "seconds": 4.02,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "build+move net",
+            "create X on xpu",
+            "create Y on xpu",
+            "adam step 1",
+            "adam step 2",
+            "weights changed"
+          ],
+          "seconds": 4.01,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "build+move net",
+            "create X on xpu",
+            "create Y on xpu",
+            "adam step 1",
+            "adam step 2",
+            "weights changed"
+          ],
+          "seconds": 3.93,
+          "exit_code": 0
+        }
+      ]
+    },
+    "randperm_on_xpu": {
+      "passed": 3,
+      "runs": [
+        {
+          "ok": true,
+          "stages": [
+            "torch.randperm(device=xpu)"
+          ],
+          "seconds": 2.17,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "torch.randperm(device=xpu)"
+          ],
+          "seconds": 2.09,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "torch.randperm(device=xpu)"
+          ],
+          "seconds": 2.01,
+          "exit_code": 0
+        }
+      ]
+    },
+    "randperm_cpu_then_move": {
+      "passed": 3,
+      "runs": [
+        {
+          "ok": true,
+          "stages": [
+            "randperm cpu",
+            "move perm to xpu"
+          ],
+          "seconds": 1.9,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "randperm cpu",
+            "move perm to xpu"
+          ],
+          "seconds": 1.93,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "randperm cpu",
+            "move perm to xpu"
+          ],
+          "seconds": 1.9,
+          "exit_code": 0
+        }
+      ]
+    },
+    "index_int64_on_xpu": {
+      "passed": 3,
+      "runs": [
+        {
+          "ok": true,
+          "stages": [
+            "create X on xpu",
+            "create Y on xpu",
+            "idx int64 on xpu",
+            "X[idx] (advanced indexing)"
+          ],
+          "seconds": 1.92,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "create X on xpu",
+            "create Y on xpu",
+            "idx int64 on xpu",
+            "X[idx] (advanced indexing)"
+          ],
+          "seconds": 1.9,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "create X on xpu",
+            "create Y on xpu",
+            "idx int64 on xpu",
+            "X[idx] (advanced indexing)"
+          ],
+          "seconds": 1.88,
+          "exit_code": 0
+        }
+      ]
+    },
+    "index_int32_on_xpu": {
+      "passed": 3,
+      "runs": [
+        {
+          "ok": true,
+          "stages": [
+            "create X on xpu",
+            "create Y on xpu",
+            "idx int32 on xpu",
+            "X[idx int32]"
+          ],
+          "seconds": 1.9,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "create X on xpu",
+            "create Y on xpu",
+            "idx int32 on xpu",
+            "X[idx int32]"
+          ],
+          "seconds": 2.04,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "create X on xpu",
+            "create Y on xpu",
+            "idx int32 on xpu",
+            "X[idx int32]"
+          ],
+          "seconds": 1.98,
+          "exit_code": 0
+        }
+      ]
+    },
+    "index_select_int64": {
+      "passed": 3,
+      "runs": [
+        {
+          "ok": true,
+          "stages": [
+            "create X on xpu",
+            "create Y on xpu",
+            "idx int64 on xpu",
+            "index_select"
+          ],
+          "seconds": 2.11,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "create X on xpu",
+            "create Y on xpu",
+            "idx int64 on xpu",
+            "index_select"
+          ],
+          "seconds": 2.17,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "create X on xpu",
+            "create Y on xpu",
+            "idx int64 on xpu",
+            "index_select"
+          ],
+          "seconds": 2.15,
+          "exit_code": 0
+        }
+      ]
+    },
+    "index_bool_mask": {
+      "passed": 3,
+      "runs": [
+        {
+          "ok": true,
+          "stages": [
+            "create X on xpu",
+            "create Y on xpu",
+            "mask",
+            "X[mask]"
+          ],
+          "seconds": 2.13,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "create X on xpu",
+            "create Y on xpu",
+            "mask",
+            "X[mask]"
+          ],
+          "seconds": 2.06,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "create X on xpu",
+            "create Y on xpu",
+            "mask",
+            "X[mask]"
+          ],
+          "seconds": 2.13,
+          "exit_code": 0
+        }
+      ]
+    },
+    "gather_rows_via_cpu": {
+      "passed": 3,
+      "runs": [
+        {
+          "ok": true,
+          "stages": [
+            "index on cpu, then move"
+          ],
+          "seconds": 1.91,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "index on cpu, then move"
+          ],
+          "seconds": 1.91,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "index on cpu, then move"
+          ],
+          "seconds": 1.93,
+          "exit_code": 0
+        }
+      ]
+    },
+    "slice_contiguous": {
+      "passed": 3,
+      "runs": [
+        {
+          "ok": true,
+          "stages": [
+            "create X on xpu",
+            "create Y on xpu",
+            "X[0:64]",
+            "X[64:128].contiguous()"
+          ],
+          "seconds": 1.93,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "create X on xpu",
+            "create Y on xpu",
+            "X[0:64]",
+            "X[64:128].contiguous()"
+          ],
+          "seconds": 1.95,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "create X on xpu",
+            "create Y on xpu",
+            "X[0:64]",
+            "X[64:128].contiguous()"
+          ],
+          "seconds": 1.94,
+          "exit_code": 0
+        }
+      ]
+    },
+    "index_then_relu_no_sync": {
+      "passed": 3,
+      "runs": [
+        {
+          "ok": true,
+          "stages": [
+            "create X on xpu",
+            "create Y on xpu",
+            "relu after unsynced index"
+          ],
+          "seconds": 1.98,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "create X on xpu",
+            "create Y on xpu",
+            "relu after unsynced index"
+          ],
+          "seconds": 1.98,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "create X on xpu",
+            "create Y on xpu",
+            "relu after unsynced index"
+          ],
+          "seconds": 2.08,
+          "exit_code": 0
+        }
+      ]
+    },
+    "train_epoch_current_code": {
+      "passed": 3,
+      "runs": [
+        {
+          "ok": true,
+          "stages": [
+            "train() 3 epochs on xpu",
+            "loss finite"
+          ],
+          "seconds": 4.01,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "train() 3 epochs on xpu",
+            "loss finite"
+          ],
+          "seconds": 3.95,
+          "exit_code": 0
+        },
+        {
+          "ok": true,
+          "stages": [
+            "train() 3 epochs on xpu",
+            "loss finite"
+          ],
+          "seconds": 4.03,
+          "exit_code": 0
+        }
+      ]
+    }
+  }
+}

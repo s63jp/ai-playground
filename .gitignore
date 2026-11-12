@@ -7,3 +7,4 @@ experiments/
 *.db-journal
 *.db-wal
 *.db-shm
+experiments_archive/

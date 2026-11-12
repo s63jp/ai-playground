@@ -174,7 +174,15 @@ class PhysicalTools:
             res = w.move(d / dist, dist, speed, stop=True)
         res["target"] = [x, y] + ([z] if z is not None else [])
         end = w.agent_pos()
-        res["arrived"] = bool(np.hypot(end[0] - x, end[1] - y) < 0.1)
+        short = float(np.hypot(end[0] - x, end[1] - y))
+        res["arrived"] = bool(short < 0.1)
+        if not res["arrived"]:
+            # Never leave "not arrived" open to interpretation: the walk has finished, here is how far off it is.
+            res["remaining_distance"] = round(short, 4)
+            res["note"] = (f"The walk has finished but ended {short:.2f} m from the target (the body was pushed "
+                           f"off the straight line). Nothing is still moving you: every action is complete when "
+                           f"its result is returned. Call walk_to again to cover the rest.")
+        res["still_moving"] = False
         if z is not None:
             res["feet_height"] = round(w.feet(), 4)
             res["height_matches_target"] = bool(abs(w.feet() - float(z)) < 0.1)
