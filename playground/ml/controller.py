@@ -19,6 +19,7 @@ import math
 import re
 
 from . import MLError
+from .features import predict_release_height
 from .nets import Predictor
 
 CLEAR_SPOT = (-9.5, 0.0)          # open ground on the west side, away from every structure
@@ -69,16 +70,23 @@ def make_controller_policy(model: dict, max_attempts: int = 4):
             body = inv.get("agent") or {}
             feet = float(body.get("feet_height", 0.0) or 0.0)
             mass = float(inv.get("carried_mass") or 5.0)
+            # Get agent body parameters for release height calculation
+            hh = float(body.get("half_height", 0.8) or 0.8)
+            hold_height = float(body.get("hold_height", 1.2) or 1.2)
+            br = float(inv.get("carried_bounding_radius", 0.43) or 0.43)
             # ---- the network decides: score every candidate (force, jump) and take the closest prediction
             cands = []
             d = _direction(ELEVATION)
             for jump, vz in ((False, 0.0), (True, 3.02)):
+                # Use the correct release height calculation based on throw direction
+                jump_feet = feet + 0.15 if jump else feet  # approximate feet height at takeoff
+                rh = predict_release_height(jump_feet, hold_height, hh, br, d[2])
                 for f in [20.0 + 2.0 * i for i in range(91)]:
                     cands.append({"force": f, "jump": jump, "row": {
                         "force": f, "dir_x": d[0], "dir_y": d[1], "dir_z": d[2], "elevation_deg": ELEVATION,
                         "agent_vx": 0.0, "agent_vy": 0.0, "agent_vz": vz, "object_mass": mass,
-                        "feet_height": feet, "on_ground": 0.0 if jump else 1.0,
-                        "release_height": feet + 1.2}})
+                        "feet_height": jump_feet, "on_ground": 0.0 if jump else 1.0,
+                        "release_height": rh}})
             preds = pred.predict_rows([c["row"] for c in cands])
             best = min(range(len(cands)), key=lambda i: abs(preds[i] - target))
             c = cands[best]

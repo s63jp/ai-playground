@@ -639,6 +639,27 @@ class Environment:
         return {"ended": True, "reason": a.get("reason"),
                 "note": "Your memory files are saved. The island will be reset before your next session."}
 
+    # ------------------------------------------------------------ learning tools (neural networks)
+    def _t_nn_list(self, a: dict, turn) -> dict:
+        from ..ml.agent_tools import nn_list
+        return nn_list(self)
+
+    def _t_nn_make_dataset(self, a: dict, turn) -> dict:
+        from ..ml.agent_tools import nn_make_dataset
+        return nn_make_dataset(self, a["name"], a.get("min_rows", 20))
+
+    def _t_nn_train(self, a: dict, turn) -> dict:
+        from ..ml.agent_tools import nn_train
+        return nn_train(self, a["dataset_name"], a["spec"], a.get("train_config"))
+
+    def _t_nn_predict(self, a: dict, turn) -> dict:
+        from ..ml.agent_tools import nn_predict
+        return nn_predict(self, a["model_name"], a["inputs"], a.get("version"))
+
+    def _t_nn_evaluate(self, a: dict, turn) -> dict:
+        from ..ml.agent_tools import nn_evaluate
+        return nn_evaluate(self, a["model_name"], a.get("version"))
+
     # ------------------------------------------------------------ researcher-side views
     def snapshot(self) -> dict:
         """Full current state for the dashboard and for the end-of-session record."""

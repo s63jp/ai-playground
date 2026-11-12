@@ -170,10 +170,34 @@ TOOLS: list[dict] = [
           {"type": STR, "params": {"type": "object"}, "description": STR}, ["type"], program_ok=False),
     _tool("end_session", "memory", "Finish for now. Your memory files are kept; the island is reset.",
           {"reason": STR}, program_ok=False),
+    # ---------------------------------------------------------------- learning (neural networks)
+    _tool("nn_list", "learning",
+          "List your trained models and datasets. Shows available input columns and prediction targets.",
+          program_ok=False),
+    _tool("nn_make_dataset", "learning",
+          "Build a dataset from your own engine-recorded throws. Only includes throws from your sessions.",
+          {"name": {**STR, "description": "1-40 chars: letters, digits, underscores, hyphens."},
+           "min_rows": {**INT, "description": "Minimum usable throw rows required. Default 20."}},
+          ["name"], program_ok=False),
+    _tool("nn_train", "learning",
+          "Train a neural network on one of your datasets. Training happens on CPU.",
+          {"dataset_name": STR,
+           "spec": {"type": "object", "description": "Model spec: {name, inputs: [...], target, hidden: [...]}"},
+           "train_config": {"type": "object", "description": "Optional: {epochs, lr, batch_size, patience}."}},
+          ["dataset_name", "spec"], program_ok=False),
+    _tool("nn_predict", "learning",
+          "Make predictions using one of your trained models. Results are flagged is_prediction=true.",
+          {"model_name": STR, "inputs": {"type": "array", "items": {"type": "object"}},
+           "version": {**INT, "description": "Model version. Default: latest."}},
+          ["model_name", "inputs"], program_ok=False),
+    _tool("nn_evaluate", "learning",
+          "Evaluate a model against fresh throws from this session.",
+          {"model_name": STR, "version": {**INT, "description": "Model version. Default: latest."}},
+          ["model_name"], program_ok=False),
 ]
 
 SPECS: dict[str, dict] = {t["name"]: t for t in TOOLS}
-CATEGORIES = ("observation", "movement", "object", "experiment", "world", "memory")
+CATEGORIES = ("observation", "movement", "object", "experiment", "world", "memory", "learning")
 
 
 class ToolError(Exception):

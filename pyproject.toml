@@ -24,3 +24,4 @@ playground = ["dashboard/static/*", "dashboard/static/vendor/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = ["xpu: needs an Intel XPU device"]

@@ -14,6 +14,7 @@ import json
 import re
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -309,6 +310,246 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
     def bench_tasks():
         return {"tasks": [{"id": t.id, "title": t.title, "prompt": t.prompt, "max_steps": t.max_steps}
                           for t in TASKS.values()]}
+
+    # ---------------------------------------------------------------- ML lab
+    ml_jobs: dict[str, dict] = {}
+    ml_lock = threading.Lock()
+    ml_running: dict[str, bool] = {"busy": False}  # single job at a time
+
+    def _all_models_fallback() -> list[dict]:
+        """Fallback when WP3's registry.all_models is not yet available."""
+        from ..ml.registry import Registry, NAME_RE
+        out = []
+        # Researcher models
+        reg = Registry(cfg)
+        for m in reg.list_models():
+            out.append({**m, "scope": "researcher", "agent_id": None})
+        # Agent models - scan memory_root/<agent_id>/nn/models/*/*/v*.json
+        mroot = memory_root(cfg)
+        if mroot.exists():
+            for agent_dir in mroot.iterdir():
+                if not agent_dir.is_dir():
+                    continue
+                nn_models = agent_dir / "nn" / "models"
+                if not nn_models.exists():
+                    continue
+                for p in sorted(nn_models.glob("*/*/v*.json")):
+                    try:
+                        b = json.loads(p.read_text(encoding="utf-8"))
+                        owner = p.parent.parent.name
+                        nm = p.parent.name
+                        m = b["metrics"]
+                        out.append({
+                            "owner": owner, "name": nm, "version": b["version"],
+                            "target": b["spec"]["target"], "inputs": b["spec"]["inputs"],
+                            "hidden": b["spec"]["hidden"], "parameters": b["parameters"],
+                            "test_rmse": m["test"]["rmse"], "test_r2": m["test"]["r2"],
+                            "linear_rmse": m["baseline_linear"]["rmse"],
+                            "beats_linear": m["beats_linear_baseline"],
+                            "dataset_rows": b["dataset"].get("rows"),
+                            "created_at": b.get("created_at"),
+                            "closed_loop": b.get("closed_loop"),
+                            "scope": "agent", "agent_id": agent_dir.name
+                        })
+                    except Exception:
+                        pass
+        return out
+
+    def _get_all_models() -> list[dict]:
+        """Try WP3's registry.all_models, fall back to scanning."""
+        try:
+            from ..ml.registry import all_models
+            return all_models(cfg)
+        except (ImportError, AttributeError):
+            return _all_models_fallback()
+
+    @app.get("/api/ml/status")
+    def ml_status():
+        from ..ml import torch_status
+        return torch_status()
+
+    @app.get("/api/ml/columns")
+    def ml_columns():
+        from ..ml.features import INPUT_COLUMNS, TARGET_COLUMNS
+        return {"inputs": INPUT_COLUMNS, "targets": TARGET_COLUMNS}
+
+    @app.get("/api/ml/datasets")
+    def ml_datasets():
+        from ..ml.registry import Registry
+        reg = Registry(cfg)
+        return {"datasets": reg.dataset_info()}
+
+    @app.get("/api/ml/models")
+    def ml_models():
+        models = _get_all_models()
+        # Never return state_dict
+        for m in models:
+            m.pop("state_dict", None)
+        return {"models": models}
+
+    @app.get("/api/ml/models/{scope}/{owner}/{name}")
+    def ml_model_detail(scope: str, owner: str, name: str, version: int | None = None):
+        from ..ml.registry import Registry
+        from ..ml import MLError
+        # Find the right registry based on scope
+        if scope == "researcher":
+            reg = Registry(cfg)
+        elif scope == "agent":
+            agent_nn_root = memory_root(cfg) / owner / "nn"
+            if not agent_nn_root.exists():
+                raise HTTPException(404, f"No agent registry for '{owner}'.")
+            reg = Registry(cfg, root=agent_nn_root)
+        else:
+            raise HTTPException(400, f"scope must be 'researcher' or 'agent', got '{scope}'.")
+        try:
+            model = reg.load_model(owner, name, version)
+        except MLError as e:
+            if e.code == "unknown_model":
+                raise HTTPException(404, e.message) from None
+            raise HTTPException(400, e.message) from None
+        # Never return state_dict
+        result = {k: v for k, v in model.items() if k != "state_dict"}
+        return result
+
+    @app.post("/api/ml/train")
+    def ml_train(body: dict = Body(...)):
+        from ..ml.registry import Registry, NAME_RE
+        from ..ml.nets import validate_spec, validate_train
+        from ..ml import MLError
+        # Check not busy
+        with ml_lock:
+            if ml_running["busy"]:
+                raise HTTPException(409, "A training or evaluation job is already running.")
+            ml_running["busy"] = True
+        try:
+            dataset_name = body.get("dataset")
+            spec = body.get("spec", {})
+            train_cfg = body.get("train", {})
+            # Force device to cpu if not specified or auto
+            if train_cfg.get("device") in (None, "auto"):
+                train_cfg["device"] = "cpu"
+            # Validate
+            try:
+                spec = validate_spec(spec)
+                train_cfg = validate_train(train_cfg)
+            except MLError as e:
+                with ml_lock:
+                    ml_running["busy"] = False
+                raise HTTPException(400, e.message) from None
+            # Load dataset
+            reg = Registry(cfg)
+            try:
+                ds = reg.load_dataset(dataset_name)
+            except MLError as e:
+                with ml_lock:
+                    ml_running["busy"] = False
+                raise HTTPException(400, e.message) from None
+            # Create job
+            job_id = str(uuid.uuid4())[:8]
+            ml_jobs[job_id] = {"status": "queued", "spec": spec, "dataset": dataset_name}
+
+            def run_training():
+                try:
+                    ml_jobs[job_id]["status"] = "running"
+                    from ..ml.nets import train, summarise
+                    result = train(spec, ds["rows"], train_cfg)
+                    saved = reg.save_model("researcher", result, ds)
+                    summary = summarise(result)
+                    summary["saved"] = saved
+                    ml_jobs[job_id]["status"] = "done"
+                    ml_jobs[job_id]["result_summary"] = summary
+                except Exception as e:
+                    ml_jobs[job_id]["status"] = "error"
+                    ml_jobs[job_id]["error"] = str(e)
+                finally:
+                    with ml_lock:
+                        ml_running["busy"] = False
+
+            t = threading.Thread(target=run_training, daemon=True)
+            t.start()
+            return {"job_id": job_id}
+        except HTTPException:
+            raise
+        except Exception as e:
+            with ml_lock:
+                ml_running["busy"] = False
+            raise HTTPException(500, str(e)) from None
+
+    @app.get("/api/ml/jobs/{job_id}")
+    def ml_job_status(job_id: str):
+        if job_id not in ml_jobs:
+            raise HTTPException(404, f"No job '{job_id}'.")
+        return ml_jobs[job_id]
+
+    @app.post("/api/ml/evaluate")
+    def ml_evaluate(body: dict = Body(...)):
+        from ..ml.registry import Registry
+        from ..ml import MLError
+        # Check not busy
+        with ml_lock:
+            if ml_running["busy"]:
+                raise HTTPException(409, "A training or evaluation job is already running.")
+            ml_running["busy"] = True
+        try:
+            owner = body.get("owner")
+            name = body.get("name")
+            version = body.get("version")
+            kind = body.get("kind", "fresh")
+            n = body.get("n", 100)
+            if kind not in ("fresh", "closed_loop"):
+                with ml_lock:
+                    ml_running["busy"] = False
+                raise HTTPException(400, "kind must be 'fresh' or 'closed_loop'.")
+            # Load model (researcher registry only for now)
+            reg = Registry(cfg)
+            try:
+                model = reg.load_model(owner, name, version)
+            except MLError as e:
+                with ml_lock:
+                    ml_running["busy"] = False
+                raise HTTPException(400, e.message) from None
+
+            job_id = str(uuid.uuid4())[:8]
+            ml_jobs[job_id] = {"status": "queued", "kind": kind, "model": f"{owner}/{name}"}
+
+            def run_eval():
+                try:
+                    ml_jobs[job_id]["status"] = "running"
+                    from ..ml.evaluate import fresh_engine_test, closed_loop_height
+                    if kind == "fresh":
+                        result = fresh_engine_test(cfg, model, n=n)
+                    else:
+                        # Get dataset rows for linear baseline
+                        try:
+                            ds = reg.load_dataset(body.get("dataset") or model["dataset"].get("source", ""))
+                            linear_rows = ds["rows"]
+                        except Exception:
+                            linear_rows = None
+                        result = closed_loop_height(cfg, model, linear_rows=linear_rows)
+                    # Attach result to model
+                    actual_version = version or model["version"]
+                    try:
+                        reg.attach(owner, name, actual_version, kind if kind == "closed_loop" else "fresh_check", result)
+                    except Exception:
+                        pass  # attachment is optional
+                    ml_jobs[job_id]["status"] = "done"
+                    ml_jobs[job_id]["result_summary"] = result
+                except Exception as e:
+                    ml_jobs[job_id]["status"] = "error"
+                    ml_jobs[job_id]["error"] = str(e)
+                finally:
+                    with ml_lock:
+                        ml_running["busy"] = False
+
+            t = threading.Thread(target=run_eval, daemon=True)
+            t.start()
+            return {"job_id": job_id}
+        except HTTPException:
+            raise
+        except Exception as e:
+            with ml_lock:
+                ml_running["busy"] = False
+            raise HTTPException(500, str(e)) from None
 
     # ---------------------------------------------------------------- dashboard
     app.mount("/static", StaticFiles(directory=STATIC), name="static")

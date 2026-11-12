@@ -44,6 +44,7 @@ Adapters are defined in `config/default.yaml` under `adapters:`. Secrets are nev
 | name | type | default model | needs |
 |---|---|---|---|
 | `lmstudio` | openai_compat | `qwen/qwen3.5-9b` at `http://127.0.0.1:1234/v1` | LM Studio server running with that model loaded |
+| `lmstudio_unsloth4b` | openai_compat | `unslothqen 4b` at `http://127.0.0.1:1234/v1` | researcher's custom Unsloth Qwen 4B Q8_0 |
 | `ollama_cloud` | openai_compat | `kimi-k3` | `OLLAMA_API_KEY` with credit |
 | `openai` | openai_compat | `gpt-5` | `OPENAI_API_KEY` |
 | `claude` | anthropic | `claude-sonnet-4-5` | `ANTHROPIC_API_KEY` |
@@ -99,7 +100,10 @@ $PY -m playground explore --agent agent_001 --adapter lmstudio
   shortens it. `--max-steps N` adds a cap on agent actions, which gives reproducible budgets across
   models of different speeds.
 * The agent receives the personality instruction verbatim, a description of its situation and tools, and
-  its own memory files read back from disk. There is no task, no score and no reward.
+  its own memory files read back from disk. There is no task, no score and no reward. The default
+  exploration prompt is `free_agency_v2` (researcher-supplied, Nov 2026); the original brief personality
+  `brief_v1` is selectable via `agents.exploration_prompt`. Every session records the `prompt_id` and
+  `system_prompt_hash` it ran with.
 * Five minutes before the end (or 8 actions before a step cap) the agent is told time is running out. When
   time is up, physical tools stop working and the agent gets 12 more calls to write to its memory.
 * The agent can stop at any time with `end_session`. A model that replies three times without acting is
@@ -242,21 +246,48 @@ $PY -m playground verify-log 12      # recompute session 12's hash chain
 ## 9. Tests
 
 ```bash
-bash run_tests.sh       # HVE suite + smoke tests + health check
+bash run_tests.sh           # ALL test files + health check
+bash run_tests.sh --fast    # skip GPU/XPU tests and long XPU checks in health_check
 ```
+
+The test suite runs:
+- `tests/test_hve.py` - Happy/Validate/Error physics and interface tests
+- `tests/test_smoke.py` - full system smoke tests (sessions, API, CLI)
+- `tests/test_regression_extra.py` - prompt recording, determinism, collision debouncing
+- `scripts/health_check.py` - environment and dependency verification
 
 ---
 
-## 10. Known limitations
+## 10. ML Lab
+
+The ML lab provides infrastructure for training neural controllers from recorded sessions.
+See [ML_LAB.md](ML_LAB.md) for the full researcher guide.
+
+Key commands:
+```bash
+$PY -m playground ml devices              # show available compute devices
+$PY -m playground ml generate --spec ...  # generate training data
+$PY -m playground ml train --spec ...     # train a model
+$PY -m playground ml list                 # list registered models
+```
+
+Intel XPU notes are in `reports/XPU_DIAGNOSIS.md`.
+
+---
+
+## 11. Known limitations
 
 * **The scripted agent is not an AI.** It exists to exercise and validate the laboratory. Its later-session
   improvement is real in the narrow sense that it is caused by the contents of its memory files (removing
   one entry changes its behaviour, shown in `playground demo`), but its strategies were written by hand.
   Conclusions about AI behaviour require real-model runs.
 * **No real-model study has been run yet.** Real-model connectivity was verified with LM Studio and
-  Qwen3.5-9B driving an exploration session through the tool interface. Ollama Cloud currently rejects
-  requests with HTTP 402 (no credits), and no OpenAI or Anthropic key was exercised here, although both
-  adapters are tested against protocol-faithful fake endpoints.
+  Qwen3.5-9B driving an exploration session through the tool interface. The `lmstudio_unsloth4b` adapter
+  (researcher's Unsloth Qwen 4B) was explored but recorded no experiments during evaluation. Ollama Cloud
+  currently rejects requests with HTTP 402 (no credits), and no OpenAI or Anthropic key was exercised here,
+  although both adapters are tested against protocol-faithful fake endpoints.
+* **Learning-from-memory not yet demonstrated.** While the ML lab infrastructure supports agent-driven
+  training, no LLM-controlled agent has successfully completed the train→deploy→verify loop.
 * **Body model.** The body is a non-rotating box without limbs. "Climb" is a mantle onto ledges up to
   1.05 m above the feet. It cannot balance, fall over or be injured. The held object is attached rigidly.
 * **Behaviour classification** is rule-based on recorded actions plus a few keyword cues. It measures

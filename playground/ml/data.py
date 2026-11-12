@@ -188,3 +188,41 @@ def load_dataset(path: str | Path) -> dict:
     if ds["manifest"].get("rows_sha256") and hashlib.sha256(blob).hexdigest() != ds["manifest"]["rows_sha256"]:
         raise MLError("dataset_tampered", f"Dataset {p.name} does not match its manifest hash.")
     return ds
+
+
+def dataset_from_session_events(events: list[dict], cfg: dict) -> dict:
+    """Build a dataset from raw throw_release/flight_end events.
+
+    This is a simplified version of recorded_throw_dataset for use by agent tools,
+    where events are already extracted from the database.
+
+    Args:
+        events: List of event dicts with 'type' and 'data' keys.
+        cfg: Configuration dict (for physics config hash).
+
+    Returns:
+        Dataset dict with 'manifest' and 'rows' keys.
+    """
+    from .features import throw_row
+    from ..config import config_hash
+
+    releases = {e["data"]["flight_id"]: e["data"] for e in events if e["type"] == "throw_release"}
+    rows = []
+    for e in events:
+        if e["type"] == "flight_end" and e["data"].get("kind") == "throw":
+            rel = releases.get(e["data"].get("flight_id"))
+            if rel:
+                row = throw_row(rel, e["data"])
+                if row is not None and row.get("flight_time") is not None:
+                    rows.append(row)
+
+    return {
+        "manifest": {
+            "source": "session_events",
+            "rows": len(rows),
+            "rows_sha256": hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest(),
+            "physics_config_hash": config_hash(cfg),
+            "created_at": time.time(),
+        },
+        "rows": rows,
+    }

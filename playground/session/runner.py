@@ -201,6 +201,23 @@ def finish_session(cfg: dict, db, env: Environment, adapter: Adapter, turns: int
     """Save everything, snapshot the memory files and discard the world (the reset)."""
     sid = env.sid
     resumable = end_reason in ("adapter_error", "interrupted", "runner_error")
+    
+    # Auto-capture agent's last words when session ends without memory being written
+    # This ensures agents that only produce text (no tool calls) still have their thoughts preserved
+    if end_reason == "agent_stopped" and env.mode == "exploration" and not resumable:
+        # Get the last assistant messages (their final thoughts before stopping)
+        all_msgs = db.messages(sid)
+        assistant_msgs = [m["content"] for m in all_msgs if m["role"] == "assistant"]
+        last_messages = assistant_msgs[-3:] if len(assistant_msgs) >= 3 else assistant_msgs
+        if last_messages:
+            combined = " ".join(m.strip() for m in last_messages if m and m.strip())
+            if combined and len(combined) > 20:  # Only capture if there's meaningful content
+                # Truncate if too long
+                if len(combined) > 500:
+                    combined = combined[:497] + "..."
+                auto_text = f"[auto-captured] Session ended ({end_reason}). Final thoughts: {combined}"
+                env.memory.add_diary(env.session_number, env.world.time, auto_text)
+    
     env.note("session_finished", end_reason=end_reason, error=error)
     env._flush_only()
     env.checkpoint()

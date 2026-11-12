@@ -99,8 +99,11 @@ class PhysicalTools:
     def get_inventory(self) -> dict:
         w = self.w
         held = w.object_state(w.held) if w.held else None
+        br = w.bounding_radius(w.held) if w.held else None
         return {"holding": w.held, "held_object": held, "hands_free": w.held is None,
-                "carried_mass": round(w.total_mass() - w.base_mass, 3), "agent": w.agent_state()}
+                "carried_mass": round(w.total_mass() - w.base_mass, 3),
+                "carried_bounding_radius": round(br, 4) if br else None,
+                "agent": w.agent_state()}
 
     def get_world_boundaries(self) -> dict:
         return self.w.boundaries()

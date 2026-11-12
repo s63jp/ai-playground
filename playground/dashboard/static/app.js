@@ -17,7 +17,7 @@ function showTab(name) {
   document.querySelectorAll('#tabs button').forEach((x) => x.classList.toggle('active', x === b));
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${name}`));
   if (location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);   // deep link to a view
-  ({ memory: loadMemory, analytics: loadAnalytics, compare: loadCompare, bench: loadBench }[name] || (() => {}))();
+  ({ memory: loadMemory, analytics: loadAnalytics, compare: loadCompare, bench: loadBench, nn: loadNn }[name] || (() => {}))();
   if (name === 'watch') resize();
 }
 document.querySelectorAll('#tabs button').forEach((b) => b.onclick = () => showTab(b.dataset.tab));
@@ -325,6 +325,224 @@ async function loadBench() {
         <td>${x.map((y) => (y.memory_use.relevant_handbook_entries_at_start || []).join(',') || '–').join(' ')}</td>`; }).join('')}</tr>`).join('')}</table></div>`;
   }).join('') || '<span class="muted">no benchmark runs yet</span>';
 }
+
+// ------------------------------------------------------------------ neural networks tab
+let nnColumns = null, nnJobPoll = null;
+
+async function loadNn() {
+  // Status
+  try {
+    const st = await api('/api/ml/status');
+    const parts = [];
+    if (st.available) {
+      parts.push(`PyTorch ${esc(st.version)}`);
+      if (st.xpu) parts.push(`XPU: ${esc(st.xpu_device)}`);
+      else if (st.cuda) parts.push(`CUDA: ${esc(st.cuda_device)}`);
+      else parts.push('CPU only');
+    } else {
+      parts.push(`<span class="warn">${esc(st.reason)}</span>`);
+    }
+    $('#nn-status').innerHTML = parts.join(' · ');
+  } catch (e) {
+    $('#nn-status').textContent = String(e);
+  }
+  // Columns (for form)
+  if (!nnColumns) {
+    try {
+      nnColumns = await api('/api/ml/columns');
+      const inputsDiv = $('#nn-inputs');
+      inputsDiv.innerHTML = Object.entries(nnColumns.inputs).map(([k, v]) =>
+        `<label title="${esc(v)}"><input type="checkbox" name="input" value="${esc(k)}">${esc(k)}</label>`
+      ).join('');
+      const targetSel = $('#nn-target');
+      targetSel.innerHTML = Object.entries(nnColumns.targets).map(([k, v]) =>
+        `<option value="${esc(k)}" title="${esc(v)}">${esc(k)}</option>`
+      ).join('');
+    } catch (e) { console.error(e); }
+  }
+  // Datasets
+  try {
+    const ds = (await api('/api/ml/datasets')).datasets;
+    $('#nn-datasets').innerHTML = ds.length ? `<table><tr><th>name</th><th>rows</th><th>source</th><th>created</th></tr>
+      ${ds.map((d) => `<tr><td>${esc(d.name)}</td><td>${d.rows}</td><td>${esc(d.source)}</td>
+        <td>${d.created_at ? new Date(d.created_at * 1000).toLocaleDateString() : '–'}</td></tr>`).join('')}</table>` : '<span class="muted">no datasets</span>';
+    const dsSel = $('#nn-ds-select');
+    dsSel.innerHTML = ds.map((d) => `<option value="${esc(d.name)}">${esc(d.name)} (${d.rows} rows)</option>`).join('');
+  } catch (e) {
+    $('#nn-datasets').innerHTML = `<span class="bad">${esc(String(e))}</span>`;
+  }
+  // Models
+  try {
+    const models = (await api('/api/ml/models')).models;
+    if (!models.length) {
+      $('#nn-models').innerHTML = '<span class="muted">no models</span>';
+    } else {
+      $('#nn-models').innerHTML = `<table><tr><th>scope</th><th>owner</th><th>name</th><th>v</th><th>target</th><th>inputs</th><th>params</th><th>test RMSE</th><th>linear RMSE</th><th>beats linear</th><th>closed loop</th></tr>
+        ${models.map((m) => `<tr class="model-row" data-scope="${esc(m.scope || 'researcher')}" data-owner="${esc(m.owner)}" data-name="${esc(m.name)}" data-version="${m.version}">
+          <td class="pill">${esc(m.scope || 'researcher')}</td><td>${esc(m.owner)}</td><td>${esc(m.name)}</td><td>${m.version}</td>
+          <td>${esc(m.target)}</td><td class="small">${(m.inputs || []).map(esc).join(', ')}</td>
+          <td>${m.parameters}</td><td>${fmt(m.test_rmse, 4)}</td><td>${fmt(m.linear_rmse, 4)}</td>
+          <td class="${m.beats_linear ? 'ok' : 'bad'}">${m.beats_linear ? 'yes' : 'no'}</td>
+          <td>${m.closed_loop ? `${m.closed_loop.controllers?.network?.hit_rate * 100 || '–'}%` : '–'}</td></tr>`).join('')}</table>`;
+      document.querySelectorAll('.model-row').forEach((row) => {
+        row.onclick = () => loadModelDetail(row.dataset.scope, row.dataset.owner, row.dataset.name, +row.dataset.version);
+      });
+    }
+  } catch (e) {
+    $('#nn-models').innerHTML = `<span class="bad">${esc(String(e))}</span>`;
+  }
+}
+
+async function loadModelDetail(scope, owner, name, version) {
+  try {
+    const m = await api(`/api/ml/models/${scope}/${owner}/${name}?version=${version}`);
+    $('#nn-detail-card').style.display = 'block';
+    // Loss curve SVG
+    const hist = m.history || [];
+    const maxLoss = Math.max(...hist.map((h) => Math.max(h.train_loss, h.val_loss))) || 1;
+    const w = 400, h = 150, pad = 30;
+    const xScale = (i) => pad + (i / (hist.length - 1 || 1)) * (w - 2 * pad);
+    const yScale = (v) => h - pad - (v / maxLoss) * (h - 2 * pad);
+    const trainLine = hist.map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(i)},${yScale(p.train_loss)}`).join(' ');
+    const valLine = hist.map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(i)},${yScale(p.val_loss)}`).join(' ');
+    const lossCurveSvg = `<svg viewBox="0 0 ${w} ${h}" class="loss-curve">
+      <line x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}" stroke="#3a3a3a"/>
+      <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${h - pad}" stroke="#3a3a3a"/>
+      <path d="${trainLine}" fill="none" stroke="#5aa9ff" stroke-width="1.5"/>
+      <path d="${valLine}" fill="none" stroke="#e8b04b" stroke-width="1.5"/>
+      <text x="${w - pad}" y="${h - 5}" fill="#8b93a1" font-size="9" text-anchor="end">epoch ${hist.length}</text>
+      <text x="${pad}" y="${pad - 5}" fill="#8b93a1" font-size="9">loss ${fmt(maxLoss, 3)}</text>
+      <text x="${w - 80}" y="15" fill="#5aa9ff" font-size="9">train</text>
+      <text x="${w - 40}" y="15" fill="#e8b04b" font-size="9">val</text>
+    </svg>`;
+    // Metrics
+    const mt = m.metrics || {};
+    const metricsHtml = `<div class="metrics-grid">
+      <div class="metric-box"><div class="label">Test RMSE</div><div class="value">${fmt(mt.test?.rmse, 4)}</div></div>
+      <div class="metric-box"><div class="label">Test R²</div><div class="value">${fmt(mt.test?.r2, 4)}</div></div>
+      <div class="metric-box"><div class="label">Test MAE</div><div class="value">${fmt(mt.test?.mae, 4)}</div></div>
+      <div class="metric-box"><div class="label">Linear RMSE</div><div class="value">${fmt(mt.baseline_linear?.rmse, 4)}</div></div>
+      <div class="metric-box"><div class="label">Mean RMSE</div><div class="value">${fmt(mt.baseline_mean?.rmse, 4)}</div></div>
+      <div class="metric-box"><div class="label">Beats linear</div><div class="value ${mt.beats_linear_baseline ? 'ok' : 'bad'}">${mt.beats_linear_baseline ? 'Yes' : 'No'}</div></div>
+    </div>`;
+    // Checks
+    const ch = m.checks || {};
+    const checksHtml = `<div class="small muted">
+      gradients finite: <b class="${ch.gradients_finite ? 'ok' : 'bad'}">${ch.gradients_finite}</b> ·
+      weight change: ${fmt(ch.weight_change_l2, 4)} · first train loss: ${fmt(ch.first_train_loss, 4)} · best val loss: ${fmt(ch.best_val_loss, 4)}
+    </div>`;
+    // Test examples
+    const exHtml = (m.test_examples || []).length ? `<table class="small"><tr><th>inputs</th><th>actual</th><th>predicted</th><th>error</th></tr>
+      ${m.test_examples.map((e) => `<tr><td>${Object.entries(e.inputs).map(([k, v]) => `${k}=${fmt(v, 2)}`).join(', ')}</td>
+        <td>${fmt(e.actual, 3)}</td><td>${fmt(e.predicted, 3)}</td><td>${fmt(Math.abs(e.actual - e.predicted), 3)}</td></tr>`).join('')}</table>` : '';
+    // Closed-loop
+    let clHtml = '';
+    if (m.closed_loop) {
+      const cl = m.closed_loop;
+      const ctrl = cl.controllers || {};
+      clHtml = `<h4>Closed-loop evaluation</h4>
+        <div class="small muted">elevation ${cl.elevation_deg}° · tolerance ${cl.tolerance} m · ${cl.targets?.length || 0} targets</div>
+        <table class="small"><tr><th>controller</th><th>hits</th><th>hit rate</th><th>mean error</th></tr>
+        ${Object.entries(ctrl).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.hits}/${v.trials}</td><td>${fmt(v.hit_rate * 100, 1)}%</td><td>${fmt(v.mean_abs_error, 3)}</td></tr>`).join('')}</table>`;
+    }
+    // Evaluate buttons
+    const evalHtml = `<div style="margin-top:10px;">
+      <button class="btn" id="nn-eval-fresh">Fresh engine test</button>
+      <button class="btn" id="nn-eval-cl">Closed-loop test</button>
+    </div>`;
+
+    $('#nn-detail').innerHTML = `
+      <div class="small muted">v${m.version} · ${esc(m.spec?.name)} → ${esc(m.spec?.target)} · ${m.parameters} params · ${m.epochs_run} epochs · ${fmt(m.seconds, 1)}s on ${esc(m.device)}</div>
+      <div class="small">inputs: ${(m.spec?.inputs || []).map(esc).join(', ')} · hidden: [${(m.spec?.hidden || []).join(', ')}]</div>
+      ${lossCurveSvg}
+      ${metricsHtml}
+      ${checksHtml}
+      ${exHtml ? '<h4>Test examples</h4>' + exHtml : ''}
+      ${clHtml}
+      ${evalHtml}
+    `;
+    // Eval button handlers
+    $('#nn-eval-fresh').onclick = async () => {
+      try {
+        const r = await api('/api/ml/evaluate', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ owner, name, version, kind: 'fresh', n: 100 })
+        });
+        pollJob(r.job_id);
+      } catch (e) { alert(String(e)); }
+    };
+    $('#nn-eval-cl').onclick = async () => {
+      try {
+        const r = await api('/api/ml/evaluate', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ owner, name, version, kind: 'closed_loop' })
+        });
+        pollJob(r.job_id);
+      } catch (e) { alert(String(e)); }
+    };
+  } catch (e) {
+    $('#nn-detail-card').style.display = 'block';
+    $('#nn-detail').innerHTML = `<span class="bad">${esc(String(e))}</span>`;
+  }
+}
+
+function pollJob(jobId) {
+  $('#nn-job-card').style.display = 'block';
+  $('#nn-job').innerHTML = `<span class="muted">Job ${esc(jobId)}: polling...</span>`;
+  if (nnJobPoll) clearInterval(nnJobPoll);
+  nnJobPoll = setInterval(async () => {
+    try {
+      const j = await api(`/api/ml/jobs/${jobId}`);
+      if (j.status === 'done') {
+        clearInterval(nnJobPoll);
+        nnJobPoll = null;
+        $('#nn-job').innerHTML = `<span class="ok">Job ${esc(jobId)}: done</span><pre class="small">${esc(JSON.stringify(j.result_summary, null, 2))}</pre>`;
+        loadNn();  // refresh models
+      } else if (j.status === 'error') {
+        clearInterval(nnJobPoll);
+        nnJobPoll = null;
+        $('#nn-job').innerHTML = `<span class="bad">Job ${esc(jobId)}: error</span><pre class="small">${esc(j.error)}</pre>`;
+      } else {
+        $('#nn-job').innerHTML = `<span class="muted">Job ${esc(jobId)}: ${esc(j.status)}</span>`;
+      }
+    } catch (e) {
+      clearInterval(nnJobPoll);
+      nnJobPoll = null;
+      $('#nn-job').innerHTML = `<span class="bad">${esc(String(e))}</span>`;
+    }
+  }, 1000);
+}
+
+// Train form handler
+document.getElementById('nn-train-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = $('#nn-name').value.trim();
+  const dataset = $('#nn-ds-select').value;
+  const target = $('#nn-target').value;
+  const inputs = [...document.querySelectorAll('#nn-inputs input:checked')].map((i) => i.value);
+  const hidden = $('#nn-hidden').value.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => n > 0);
+  const epochs = parseInt($('#nn-epochs').value, 10) || 300;
+  const device = $('#nn-device').value;
+  if (!name || !inputs.length) {
+    $('#nn-train-status').innerHTML = '<span class="bad">Name and at least one input required</span>';
+    return;
+  }
+  try {
+    $('#nn-train-status').textContent = 'Submitting...';
+    const r = await api('/api/ml/train', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        dataset,
+        spec: { name, inputs, target, hidden },
+        train: { epochs, device }
+      })
+    });
+    $('#nn-train-status').textContent = `Job ${r.job_id} started`;
+    pollJob(r.job_id);
+  } catch (err) {
+    $('#nn-train-status').innerHTML = `<span class="bad">${esc(String(err))}</span>`;
+  }
+});
 
 // ------------------------------------------------------------------ boot
 const h = await api('/api/health');

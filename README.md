@@ -52,7 +52,7 @@ provider. Claude, GPT models, Qwen, Hermes, local LM Studio/Ollama models, fine-
 Phase 1 found Unreal Engine 5.8, Godot 4.7.2 and Blender 5.2.1 on this machine, plus an Intel Arc A770 with no
 CUDA. The deciding requirements were deterministic physics, headless operation for many agents, exact
 replay and session recovery. MuJoCo 4.0.1 (one `pip install`, no GPU needed) was measured in
-`scripts/spike_mujoco.py`:
+`scripts/engine_probe.py`:
 
 | check | measured |
 |---|---|
@@ -76,6 +76,9 @@ the browser with three.js, from recorded frames.
 * **Nothing about the physics is told to the agent.** Tool descriptions say what a tool does, never what
   will happen. The exploration prompt is the personality text from the brief verbatim plus how the tools
   and memory work (`agents/prompts.py`). A test checks the prompt for leaks.
+* **Prompt versioning:** The default exploration prompt is `free_agency_v2` (researcher-supplied, Nov 2026).
+  The original brief personality `brief_v1` is selectable via `agents.exploration_prompt` in config. Every
+  session records `prompt_id` and `system_prompt_hash` so results from different prompts are never mixed.
 * **Discoverable mechanics** that emerge from the physics: velocity at release adds to a throw (jump-throws
   go higher, running throws go further), carried mass lowers jumps, throws recoil the body, stacked blocks
   act as steps, the terrace needs a step to reach, objects can be caught in flight. One deliberately hidden
@@ -113,10 +116,11 @@ ai-playground/
     dashboard/static/          dashboard (three.js vendored, works offline)
     demo.py                    the end-to-end demonstration
     cli.py                     `playground …` commands
-  tests/                       conftest.py, test_hve.py (Happy/Validate/Error), test_smoke.py
-  scripts/                     health_check.py, spikes and probes used during development
-  experiments/                 created at run time: playground.db, agents/agent_001 … agent_013
-  docs/                        OPERATING.md, RESEARCHER_NOTES.md, TOOLS.md
+  tests/                       conftest.py, test_hve.py (Happy/Validate/Error), test_smoke.py,
+                               test_regression_extra.py (prompt recording, determinism, etc.)
+  scripts/                     health_check.py, engine_probe.py, trace_session.py, audit_agents.py
+  experiments/                 created at run time: playground.db, agents/agent_001 … agent_013, ml/
+  docs/                        OPERATING.md, RESEARCHER_NOTES.md, TOOLS.md, ML_LAB.md, ML_INTERFACE.md
   run_tests.sh
 ```
 
@@ -154,6 +158,7 @@ $PY -m playground explore --agent agent_001 --adapter lmstudio          # LM Stu
 $PY -m playground explore --agent agent_001 --adapter claude            # needs ANTHROPIC_API_KEY
 $PY -m playground explore --agent agent_001 --adapter openai --model gpt-5   # needs OPENAI_API_KEY
 $PY -m playground explore --agent agent_001 --adapter ollama_cloud --model kimi-k3   # needs OLLAMA_API_KEY
+$PY -m playground explore --agent agent_001 --adapter lmstudio_unsloth4b  # researcher's Unsloth Qwen 4B
 
 # All 13 agents, 3 sessions each, 4 at a time
 $PY -m playground run-agents --sessions 3 --concurrency 4 --adapter lmstudio
@@ -168,7 +173,8 @@ $PY -m playground ablate agent_001 --remove D-001 --tasks spire_landing,throw_he
 ```
 
 `docs/OPERATING.md` covers every command, the HTTP API for external agents, configuration, recovery,
-and how to read the results.
+and how to read the results. `docs/ML_LAB.md` documents the machine learning infrastructure for
+neural controllers. Intel XPU notes are in `reports/XPU_DIAGNOSIS.md`.
 
 ---
 
@@ -181,7 +187,10 @@ See **Known limitations** in `docs/OPERATING.md`. In short:
   behaviour depends on what its memory files contain. Its *curiosity* is authored, though, so it says
   nothing about AI behaviour. Research conclusions need runs with real models.
 * Real-model runs need a reachable endpoint. During development, LM Studio with Qwen3.5-9B was verified driving
-  sessions end to end. Ollama Cloud returned HTTP 402 (no credits) and was reported as an adapter error, not
-  a fake success.
+  sessions end to end. The **lmstudio_unsloth4b** adapter (researcher's custom Unsloth Qwen 4B) was explored
+  but recorded no experiments during the evaluation period. Ollama Cloud returned HTTP 402 (no credits) and
+  was reported as an adapter error, not a fake success.
+* **Learning-from-memory not yet demonstrated:** While the ML lab infrastructure supports agent-driven training,
+  no LLM-controlled agent has successfully completed the train→deploy→verify loop.
 * A full 13-agent × 60-minute study with a real model is an operational run you start; it is not
   pre-recorded here.

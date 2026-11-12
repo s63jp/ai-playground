@@ -285,6 +285,39 @@ class ExternalAdapter(Adapter):
         raise AdapterError("external agents drive the session through the HTTP API")
 
 
+def _make_neural_adapter(cfg: dict, spec: dict) -> "PolicyAdapter":
+    """Build a neural controller adapter from a stored model.
+
+    Spec keys:
+        owner: 'researcher' or an agent id
+        name: model name
+        version: optional, defaults to latest
+    """
+    from ..ml.registry import Registry, AgentRegistry, ml_root
+    from ..ml.controller import make_controller_adapter
+    from ..config import resolve_path
+
+    owner = spec.get("owner", "researcher")
+    name = spec.get("name")
+    version = spec.get("version")
+
+    if not name:
+        raise AdapterError("neural adapter requires 'name' (model name)")
+
+    # Load from researcher or agent registry
+    if owner == "researcher":
+        reg = Registry(cfg)
+        model = reg.load_model(owner, name, version)
+    else:
+        # Agent registry is under memory_root / agent_id / models
+        db_path = resolve_path(cfg, cfg["database"])
+        memory_root = db_path.parent / "agents"
+        reg = AgentRegistry(owner, memory_root)
+        model = reg.load_model(name, version)
+
+    return make_controller_adapter(model, label=f"neural:{owner}/{name}")
+
+
 def make_adapter(cfg: dict, name: str, model: str | None = None, **overrides: Any) -> Adapter:
     """Build an adapter from the `adapters` section of the config."""
     table = cfg.get("adapters", {})
@@ -309,4 +342,6 @@ def make_adapter(cfg: dict, name: str, model: str | None = None, **overrides: An
         return RandomAdapter(seed=int(spec.get("seed", 0)), actions=int(spec.get("actions", 40)))
     if kind == "external":
         return ExternalAdapter()
+    if kind == "neural":
+        return _make_neural_adapter(cfg, spec)
     raise AdapterError(f"adapter '{name}' has unknown type '{kind}'")

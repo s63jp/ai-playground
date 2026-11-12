@@ -45,6 +45,32 @@ def _f(v: Any) -> float | None:
     return x if math.isfinite(x) else None
 
 
+def predict_release_height(feet_height: float, hold_height: float, half_height: float,
+                           bounding_radius: float, dir_z: float) -> float:
+    """Estimate the release height for a throw given agent and throw parameters.
+
+    This implements the same logic the physics engine uses to determine where an object
+    is released based on the throw direction. For high-elevation throws (nearly vertical,
+    dir_z > 0.95), the object is released above the head; otherwise at hold_height.
+
+    Args:
+        feet_height: Height of the agent's feet at the moment of release (from jump takeoff or ground).
+        hold_height: The agent's configured hold height (typically 1.2 m).
+        half_height: Half the agent body height (hh).
+        bounding_radius: The bounding sphere radius of the held object.
+        dir_z: The z-component of the throw direction (sin of the elevation angle).
+
+    Returns:
+        The estimated release height in metres.
+    """
+    if dir_z > 0.95:
+        # High-elevation throw: object released above the head
+        return feet_height + 2 * half_height + bounding_radius + 0.05
+    else:
+        # Normal throw: object released at hold height
+        return feet_height + hold_height
+
+
 def throw_row(release: dict, flight: dict | None = None) -> dict | None:
     """Build one row from a throw's release record and its flight record.
 

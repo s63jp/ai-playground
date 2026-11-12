@@ -157,6 +157,118 @@ def cmd_demo(args):
     return run_demo(cfg, args.out, adapter=args.adapter, model=args.model)
 
 
+def cmd_ml(args):
+    """Neural network subcommand handler."""
+    cfg = _cfg(args)
+
+    if args.op == "status":
+        from .ml import torch_status
+        print(json.dumps(torch_status(), indent=2))
+        return 0
+
+    if args.op == "generate":
+        from .ml.data import generate_throw_dataset, save_dataset
+        from .ml.registry import Registry
+        if not args.name:
+            print("--name required", file=sys.stderr)
+            return 1
+        print(f"Generating {args.n} throws (seed={args.seed})...", file=sys.stderr)
+        ds = generate_throw_dataset(cfg, args.n, seed=args.seed)
+        reg = Registry(cfg)
+        info = reg.save_dataset(args.name, ds)
+        print(json.dumps(info, indent=2))
+        return 0
+
+    if args.op == "train":
+        from .ml.registry import Registry
+        from .ml.nets import train, validate_spec, validate_train
+        if not args.dataset or not args.name:
+            print("--dataset and --name required", file=sys.stderr)
+            return 1
+        reg = Registry(cfg)
+        ds = reg.load_dataset(args.dataset)
+        inputs = args.inputs.split(",") if args.inputs else [
+            "force", "dir_x", "dir_y", "dir_z", "elevation_deg",
+            "agent_vx", "agent_vy", "agent_vz", "object_mass",
+            "feet_height", "on_ground", "release_height"
+        ]
+        hidden = [int(h) for h in args.hidden.split(",")]
+        spec = validate_spec({"name": args.name, "inputs": inputs, "target": args.target, "hidden": hidden})
+        tc = validate_train({"epochs": args.epochs, "device": args.device})
+        print(f"Training on {ds['manifest']['rows']} rows...", file=sys.stderr)
+        result = train(spec, ds["rows"], tc)
+        info = reg.save_model("researcher", result, ds)
+        print(json.dumps({
+            **info,
+            "epochs_run": result["epochs_run"],
+            "best_epoch": result["best_epoch"],
+            "test_rmse": result["metrics"]["test"]["rmse"],
+            "test_r2": result["metrics"]["test"]["r2"],
+            "parameters": result["parameters"],
+        }, indent=2))
+        return 0
+
+    if args.op == "list":
+        from .ml.registry import Registry, all_models
+        from .config import resolve_path
+        owner = args.owner if args.owner != "researcher" else None
+        db_path = resolve_path(cfg, cfg["database"])
+        memory_root = db_path.parent / "agents"
+        models = all_models(cfg, memory_root if memory_root.exists() else None)
+        if owner:
+            models = [m for m in models if m["owner"] == owner]
+        print(json.dumps(models, indent=2))
+        return 0
+
+    if args.op == "evaluate":
+        from .ml.registry import Registry
+        from .ml.evaluate import fresh_engine_test, closed_loop_height
+        if not args.name:
+            print("--name required", file=sys.stderr)
+            return 1
+        reg = Registry(cfg)
+        model = reg.load_model(args.owner, args.name, args.version)
+        result = {"owner": args.owner, "name": args.name, "version": model["version"]}
+        print(f"Fresh engine test ({args.fresh} throws)...", file=sys.stderr)
+        result["fresh"] = fresh_engine_test(cfg, model, args.fresh)
+        if args.closed_loop:
+            print("Closed-loop test...", file=sys.stderr)
+            result["closed_loop"] = closed_loop_height(cfg, model, linear_rows=reg.load_dataset(
+                model["dataset"]["source"].split("/")[-1] if "/" in model["dataset"].get("source", "") else
+                reg.list_datasets()[0] if reg.list_datasets() else None
+            )["rows"] if reg.list_datasets() else None)
+        print(json.dumps(result, indent=2))
+        return 0
+
+    if args.op == "controller":
+        from .ml.registry import Registry
+        from .ml.controller import make_controller_adapter
+        from .session.benchmark import run_task
+        from .storage import Database
+        if not args.name:
+            print("--name required", file=sys.stderr)
+            return 1
+        reg = Registry(cfg)
+        model = reg.load_model(args.owner, args.name, args.version)
+        adapter = make_controller_adapter(model)
+        db = Database(resolve_path(cfg, cfg["database"]))
+        print(f"Running throw_height benchmark with neural controller...", file=sys.stderr)
+        result = run_task(cfg, db, lambda c, n, m=None: adapter, "neural_test", "throw_height")
+        print(json.dumps({
+            "model": f"{args.owner}/{args.name}/v{model['version']}",
+            "task": "throw_height",
+            "completed": result["completed"],
+            "verified": result.get("verified", False),
+            "score": result["score"],
+            "actions": result["actions"],
+            "failed_actions": result["failed_actions"],
+        }, indent=2))
+        return 0
+
+    print(f"Unknown operation: {args.op}", file=sys.stderr)
+    return 1
+
+
 def cmd_init(args):
     from .session import ensure_agents
     cfg = _cfg(args)
@@ -225,6 +337,24 @@ def main(argv=None) -> int:
     s.add_argument("--adapter", default="scripted")
     s.add_argument("--model", default=None)
     s.set_defaults(fn=cmd_demo)
+    # ---- ml subcommand
+    s = sub.add_parser("ml", help="neural network operations")
+    s.add_argument("op", choices=["status", "generate", "train", "list", "evaluate", "controller"])
+    s.add_argument("--name", help="dataset or model name")
+    s.add_argument("--dataset", help="dataset to train on")
+    s.add_argument("--n", type=int, default=1500, help="throws to generate (default 1500)")
+    s.add_argument("--seed", type=int, default=7, help="random seed (default 7)")
+    s.add_argument("--inputs", help="comma-separated input columns")
+    s.add_argument("--target", default="max_height", help="target column (default max_height)")
+    s.add_argument("--hidden", default="64,64", help="hidden layer sizes (default 64,64)")
+    s.add_argument("--epochs", type=int, default=400, help="training epochs (default 400)")
+    s.add_argument("--device", default="cpu", choices=["cpu", "xpu", "auto"],
+                   help="device for training (default cpu)")
+    s.add_argument("--owner", default="researcher", help="model owner (default researcher)")
+    s.add_argument("--version", type=int, default=None, help="model version (default latest)")
+    s.add_argument("--fresh", type=int, default=200, help="throws for fresh evaluation (default 200)")
+    s.add_argument("--closed-loop", action="store_true", help="run closed-loop evaluation")
+    s.set_defaults(fn=cmd_ml)
     args = p.parse_args(argv)
     t = time.time()
     rc = args.fn(args) or 0

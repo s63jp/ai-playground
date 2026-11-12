@@ -125,7 +125,44 @@ class MemoryStore:
     def is_empty(self) -> bool:
         s = self.state
         return not (self.discoveries["items"] or self.experiments["items"] or s["diary"] or s["mistakes"]
-                    or s["goals"] or s["notes"] or self.list_programs())
+                    or s["goals"] or s["notes"] or self.list_programs() or self.list_networks())
+
+    # ------------------------------------------------------------ nn/ integration
+    def _nn_models_dir(self) -> Path:
+        """Return the nn/models/<agent_id>/ directory path."""
+        return self.dir / "nn" / "models" / self.agent_id
+
+    def list_networks(self) -> list[dict]:
+        """List all neural networks this agent has trained (reads JSON, no torch import)."""
+        models_dir = self._nn_models_dir()
+        if not models_dir.exists():
+            return []
+        out = []
+        for model_dir in sorted(models_dir.iterdir()):
+            if not model_dir.is_dir():
+                continue
+            versions = sorted(model_dir.glob("v*.json"), key=lambda p: int(p.stem[1:]))
+            if not versions:
+                continue
+            try:
+                latest = json.loads(versions[-1].read_text(encoding="utf-8"))
+                spec = latest.get("spec", {})
+                metrics = latest.get("metrics", {})
+                out.append({
+                    "name": model_dir.name,
+                    "version": latest.get("version", int(versions[-1].stem[1:])),
+                    "target": spec.get("target"),
+                    "inputs": spec.get("inputs", []),
+                    "hidden": spec.get("hidden", []),
+                    "test_rmse": metrics.get("test", {}).get("rmse"),
+                    "linear_rmse": metrics.get("baseline_linear", {}).get("rmse"),
+                    "beats_linear": latest.get("beats_linear_baseline", False),
+                    "created_at": latest.get("created_at"),
+                })
+            except (json.JSONDecodeError, KeyError):
+                # Skip malformed model files
+                continue
+        return out
 
     def _next(self, prefix: str) -> str:
         n = self.state["next"][prefix]
@@ -223,6 +260,21 @@ class MemoryStore:
                 lines.append(f"- {e['id']} (session {e['session']}): {e.get('hypothesis') or e.get('question')} -> "
                              f"{e.get('actual_result')} [evidence check: {v.get('verdict', 'n/a')}]")
             parts.append("----- experiments.json (most recent) -----\n" + "\n".join(lines))
+        # Include nn/ networks if any exist
+        networks = self.list_networks()
+        if networks:
+            lines = []
+            for n in networks:
+                inputs = ", ".join(n.get("inputs", [])[:3])
+                if len(n.get("inputs", [])) > 3:
+                    inputs += ", ..."
+                test_rmse = n.get("test_rmse")
+                linear_rmse = n.get("linear_rmse")
+                rmse_str = f"test RMSE={test_rmse:.3f}" if test_rmse else "no metrics"
+                if linear_rmse:
+                    rmse_str += f" (linear: {linear_rmse:.3f})"
+                lines.append(f"- {n['name']} v{n['version']}: {n.get('target')} <- [{inputs}] ({rmse_str})")
+            parts.append("----- nn/ (networks you trained; run nn_list / nn_predict) -----\n" + "\n".join(lines))
         return "\n\n".join(parts)
 
     # ------------------------------------------------------------ agent-side writes
@@ -377,6 +429,10 @@ class MemoryStore:
                      "experiments.json", "state.json"):
             shutil.copy2(self.dir / name, dest / name)
         shutil.copytree(self.dir / "programs", dest / "programs")
+        # Copy nn/ directory if it exists (model JSONs only, not weights)
+        nn_dir = self.dir / "nn"
+        if nn_dir.exists():
+            shutil.copytree(nn_dir, dest / "nn")
         _write_atomic(dest / "final_world_state.json", json.dumps(final_world_state, indent=2))
         _write_atomic(dest / "summary.json", json.dumps(summary, indent=2, default=str))
         return dest
@@ -398,6 +454,11 @@ class MemoryStore:
         for p in self.list_programs():
             out.append({"id": f"P-{p['name']}", "kind": "program", "status": None,
                         "text": p.get("description") or p["name"], "session": p["created_session"]})
+        # Include neural networks
+        for n in self.list_networks():
+            out.append({"id": f"NN-{n['name']}", "kind": "network", "status": None,
+                        "text": f"{n.get('target')} from {', '.join(n.get('inputs', [])[:3])}",
+                        "session": None, "version": n.get("version")})
         return out
 
     def remove_item(self, item_id: str, reason: str | None = None, actor: str = "researcher") -> dict:
@@ -409,6 +470,20 @@ class MemoryStore:
             if p.exists():
                 removed = json.loads(p.read_text(encoding="utf-8"))
                 p.unlink()
+        elif prefix == "NN":
+            # Remove neural network folder
+            name = item_id[3:]  # Strip 'NN-' prefix
+            model_dir = self._nn_models_dir() / name
+            if model_dir.exists():
+                # Read the latest version for audit before removing
+                versions = sorted(model_dir.glob("v*.json"), key=lambda p: int(p.stem[1:]))
+                if versions:
+                    try:
+                        removed = json.loads(versions[-1].read_text(encoding="utf-8"))
+                        removed["_name"] = name
+                    except json.JSONDecodeError:
+                        removed = {"_name": name, "_error": "could not read model JSON"}
+                shutil.rmtree(model_dir)
         else:
             coll = {"D": self.discoveries["items"], "E": self.experiments["items"], "M": self.state["mistakes"],
                     "G": self.state["goals"], "Y": self.state["diary"], "N": self.state["notes"]}.get(prefix)
@@ -485,4 +560,5 @@ class MemoryStore:
                 "mistakes": len(self.state["mistakes"]), "diary_entries": len(self.state["diary"]),
                 "goals_open": sum(1 for g in self.state["goals"] if g["status"] in GOAL_OPEN),
                 "goals_total": len(self.state["goals"]), "programs": len(self.list_programs()),
-                "challenged": sum(1 for d in self.discoveries["items"] if d.get("flags", {}).get("challenged"))}
+                "challenged": sum(1 for d in self.discoveries["items"] if d.get("flags", {}).get("challenged")),
+                "networks": len(self.list_networks())}

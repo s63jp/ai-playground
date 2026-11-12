@@ -16,6 +16,7 @@
     <button data-tab="analytics">Analytics</button>
     <button data-tab="compare">Compare agents</button>
     <button data-tab="bench">Benchmarks</button>
+    <button data-tab="nn">Neural networks</button>
   </nav>
   <span id="health"></span>
 </header>
@@ -80,6 +81,57 @@
 
 <section id="tab-bench" class="tab">
   <div class="card"><h3>Benchmark and ablation runs</h3><div id="b-runs"></div></div>
+</section>
+
+<section id="tab-nn" class="tab">
+  <div class="bar">
+    <span id="nn-status" class="muted small"></span>
+  </div>
+  <div class="cols2">
+    <div>
+      <div class="card">
+        <h3>Datasets</h3>
+        <div id="nn-datasets"></div>
+      </div>
+      <div class="card">
+        <h3>Models</h3>
+        <div id="nn-models" class="scroll tall"></div>
+      </div>
+    </div>
+    <div>
+      <div class="card" id="nn-detail-card" style="display:none">
+        <h3>Model detail</h3>
+        <div id="nn-detail"></div>
+      </div>
+      <div class="card">
+        <h3>Train new model</h3>
+        <form id="nn-train-form">
+          <div class="form-row">
+            <label>Dataset <select id="nn-ds-select"></select></label>
+            <label>Model name <input type="text" id="nn-name" placeholder="my_model" maxlength="40"></label>
+          </div>
+          <div class="form-row">
+            <label>Target <select id="nn-target"></select></label>
+          </div>
+          <div class="form-row">
+            <label>Input features</label>
+            <div id="nn-inputs" class="checkbox-grid"></div>
+          </div>
+          <div class="form-row">
+            <label>Hidden layers <input type="text" id="nn-hidden" placeholder="64,64" value="64,64"></label>
+            <label>Epochs <input type="number" id="nn-epochs" value="300" min="1" max="5000"></label>
+            <label>Device <select id="nn-device"><option value="cpu">CPU</option><option value="auto">Auto</option><option value="xpu">XPU</option></select></label>
+          </div>
+          <button type="submit" class="btn">Train</button>
+          <span id="nn-train-status" class="muted small"></span>
+        </form>
+      </div>
+      <div class="card" id="nn-job-card" style="display:none">
+        <h3>Job status</h3>
+        <div id="nn-job"></div>
+      </div>
+    </div>
+  </div>
 </section>
 
 <script type="module" src="/static/app.js"></script>
