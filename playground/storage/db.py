@@ -73,6 +73,11 @@ CREATE TABLE IF NOT EXISTS memory_audit(
   id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, ts REAL, actor TEXT, op TEXT,
   item_id TEXT, before_json TEXT, after_json TEXT, reason TEXT);
 
+-- Model-gateway: providers added at runtime (beyond those derived from config adapters).
+CREATE TABLE IF NOT EXISTS providers(
+  name TEXT PRIMARY KEY, kind TEXT NOT NULL, base_url TEXT, api_key_env TEXT,
+  default_model TEXT, enabled INTEGER DEFAULT 1, created_at REAL, config_json TEXT);
+
 CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
   BEGIN SELECT RAISE(ABORT, 'events are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
@@ -313,6 +318,29 @@ class Database:
                " VALUES(?,?,?,?,?,?,?,?)",
                (agent_id, time.time(), actor, op, item_id, _j(before) if before is not None else None,
                 _j(after) if after is not None else None, reason))
+
+    # ------------------------------------------------------------ gateway: providers
+    def list_providers(self) -> list[dict]:
+        rows = self.q("SELECT * FROM providers ORDER BY name")
+        for r in rows:
+            r["config"] = json.loads(r.pop("config_json")) if r.get("config_json") else None
+        return rows
+
+    def upsert_provider(self, name: str, kind: str, base_url: str | None = None,
+                        api_key_env: str | None = None, default_model: str | None = None,
+                        enabled: bool = True, config: dict | None = None) -> None:
+        self.x("INSERT INTO providers(name,kind,base_url,api_key_env,default_model,enabled,created_at,config_json)"
+               " VALUES(?,?,?,?,?,?,?,?)"
+               " ON CONFLICT(name) DO UPDATE SET kind=excluded.kind, base_url=excluded.base_url,"
+               " api_key_env=excluded.api_key_env, default_model=excluded.default_model,"
+               " enabled=excluded.enabled, config_json=excluded.config_json",
+               (name, kind, base_url, api_key_env, default_model, 1 if enabled else 0,
+                time.time(), _j(config) if config is not None else None))
+
+    def delete_provider(self, name: str) -> int:
+        with self.lock:
+            cur = self.conn.execute("DELETE FROM providers WHERE name=?", (name,))
+            return cur.rowcount
 
 
 class _Tx:

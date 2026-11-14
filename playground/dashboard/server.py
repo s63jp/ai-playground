@@ -47,6 +47,12 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
     live: dict[int, dict] = {}          # external sessions driven through this server
     lock = threading.RLock()
 
+    # Model-gateway surface (provider discovery, resource monitoring, and — later stages —
+    # the OpenAI-compatible /v1/chat/completions passthrough + request monitor + queue).
+    # Mounted on THIS app so there is no second process or extra proxy.
+    from ..gateway.api import register_gateway_routes
+    register_gateway_routes(app, cfg, db)
+
     def mem(agent_id: str) -> MemoryStore:
         known = set(agent_ids(cfg)) | {p.name for p in memory_root(cfg).iterdir() if p.is_dir()}
         if agent_id not in known:
