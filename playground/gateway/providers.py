@@ -281,14 +281,12 @@ class ProviderRegistry:
                     out.append(m)
         return out
 
-    def provider_for_model(self, model_id: str, prefer_loaded: bool = True) -> Provider | None:
-        """Choose which provider should serve `model_id`.
+    def providers_for_model(self, model_id: str, prefer_loaded: bool = True) -> list[Provider]:
+        """Providers that can serve `model_id`, best first (for routing + failover).
 
-        Routing policy (used by the gateway in stage B): among providers that offer the
-        model, prefer one that has it LOADED (ready, no load latency) and reachable;
-        then any reachable provider that lists it; then a provider that names it as a
-        configured default even if discovery is unavailable. Returns None if no enabled
-        provider offers the model.
+        Ranking: a provider with the model LOADED and reachable (ready, no load latency)
+        outranks one that merely lists it, which outranks one that only names it as a
+        configured default (discovery unavailable). Returns [] if none offer the model.
         """
         offering: list[tuple[int, Provider]] = []
         for p in self.list(enabled_only=True):
@@ -305,7 +303,10 @@ class ProviderRegistry:
                 score = 1
             if score:
                 offering.append((score, p))
-        if not offering:
-            return None
         offering.sort(key=lambda sp: sp[0], reverse=True)
-        return offering[0][1]
+        return [p for _, p in offering]
+
+    def provider_for_model(self, model_id: str, prefer_loaded: bool = True) -> Provider | None:
+        """The single best provider for `model_id` (see providers_for_model), or None."""
+        ranked = self.providers_for_model(model_id, prefer_loaded=prefer_loaded)
+        return ranked[0] if ranked else None

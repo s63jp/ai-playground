@@ -76,4 +76,8 @@ def register_gateway_routes(app, cfg: dict, db: Any) -> dict:
         return {"ok": True, "providers": len(provs), "providers_reachable": reachable,
                 "uptime_seconds": round(time.time() - state["started_at"], 1)}
 
+    # Stage B: the OpenAI-compatible passthrough (/v1/chat/completions) + request monitor.
+    from .gateway import register_chat_routes
+    register_chat_routes(app, cfg, db, state)
+
     return state

@@ -78,6 +78,19 @@ CREATE TABLE IF NOT EXISTS providers(
   name TEXT PRIMARY KEY, kind TEXT NOT NULL, base_url TEXT, api_key_env TEXT,
   default_model TEXT, enabled INTEGER DEFAULT 1, created_at REAL, config_json TEXT);
 
+-- Model-gateway: one row per request routed through /v1/*, for the API monitor.
+-- Bodies stored here are REDACTED/truncated; no credentials are ever written.
+CREATE TABLE IF NOT EXISTS gateway_requests(
+  request_id TEXT PRIMARY KEY, correlation_id TEXT, app TEXT, agent TEXT, provider TEXT,
+  model TEXT, endpoint TEXT, idempotency_key TEXT, stream INTEGER DEFAULT 0,
+  created_at REAL, started_at REAL, ended_at REAL, latency_ms REAL,
+  status TEXT, http_status INTEGER, cancelled INTEGER DEFAULT 0,
+  prompt_tokens INTEGER, completion_tokens INTEGER, total_tokens INTEGER, token_source TEXT,
+  error TEXT, request_json TEXT, response_json TEXT);
+CREATE INDEX IF NOT EXISTS ix_gwreq_created ON gateway_requests(created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_gwreq_status ON gateway_requests(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_gwreq_facets ON gateway_requests(provider, model, agent);
+
 CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
   BEGIN SELECT RAISE(ABORT, 'events are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
@@ -341,6 +354,63 @@ class Database:
         with self.lock:
             cur = self.conn.execute("DELETE FROM providers WHERE name=?", (name,))
             return cur.rowcount
+
+    # ------------------------------------------------------------ gateway: request log
+    def gateway_request_create(self, **f) -> None:
+        for k in ("request_json", "response_json"):
+            if k in f and not isinstance(f[k], (str, type(None))):
+                f[k] = _j(f[k])
+        f.setdefault("created_at", time.time())
+        cols = ",".join(f)
+        self.x(f"INSERT INTO gateway_requests({cols}) VALUES({','.join('?' * len(f))})", list(f.values()))
+
+    def gateway_request_update(self, request_id: str, **f) -> None:
+        for k in ("request_json", "response_json"):
+            if k in f and not isinstance(f[k], (str, type(None))):
+                f[k] = _j(f[k])
+        if not f:
+            return
+        sets = ",".join(f"{k}=?" for k in f)
+        self.x(f"UPDATE gateway_requests SET {sets} WHERE request_id=?", [*f.values(), request_id])
+
+    def gateway_request(self, request_id: str) -> dict | None:
+        r = self.one("SELECT * FROM gateway_requests WHERE request_id=?", (request_id,))
+        if r:
+            for k in ("request_json", "response_json"):
+                r[k[:-5]] = json.loads(r.pop(k)) if r.get(k) else None
+        return r
+
+    def gateway_requests(self, provider: str | None = None, model: str | None = None,
+                         agent: str | None = None, app: str | None = None, status: str | None = None,
+                         failed: bool = False, since: float | None = None, limit: int = 200) -> list[dict]:
+        sql, p = "SELECT * FROM gateway_requests WHERE 1=1", []
+        for col, val in (("provider", provider), ("model", model), ("agent", agent),
+                         ("app", app), ("status", status)):
+            if val is not None:
+                sql += f" AND {col}=?"
+                p.append(val)
+        if failed:
+            sql += " AND status IN ('error','cancelled')"
+        if since is not None:
+            sql += " AND created_at>=?"
+            p.append(since)
+        rows = self.q(sql + " ORDER BY created_at DESC LIMIT ?", [*p, limit])
+        # The list view omits bodies (kept for the per-request inspector) to stay light.
+        for r in rows:
+            r.pop("request_json", None)
+            r.pop("response_json", None)
+        return rows
+
+    def gateway_stats(self, since: float | None = None) -> dict:
+        where, p = ("WHERE created_at>=?", [since]) if since is not None else ("", [])
+        agg = self.one(
+            f"SELECT COUNT(*) total, "
+            f"SUM(CASE WHEN status='running' THEN 1 ELSE 0 END) running, "
+            f"SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) errors, "
+            f"SUM(CASE WHEN status='cancelled' THEN 1 ELSE 0 END) cancelled, "
+            f"SUM(COALESCE(total_tokens,0)) tokens, AVG(latency_ms) avg_latency_ms "
+            f"FROM gateway_requests {where}", p) or {}
+        return {k: agg.get(k) for k in ("total", "running", "errors", "cancelled", "tokens", "avg_latency_ms")}
 
 
 class _Tx:

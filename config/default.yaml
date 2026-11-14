@@ -114,6 +114,14 @@ server:
   host: 127.0.0.1
   port: 8765
 
+# Model gateway (playground/gateway). The gateway is mounted on the dashboard app; these
+# settings tune the OpenAI-compatible /v1 passthrough and (stage C) its resource manager.
+gateway:
+  request_timeout: 300          # seconds for an outbound provider request
+  # Concurrency limits are added in stage C:
+  #   max_concurrent: global cap; per_provider / per_model / per_agent: {name: limit}
+  #   queue_max: 0 disables queueing (reject when full)
+
 # Agent "brains". The simulator is provider neutral; pick one with --adapter.
 # Secrets are never stored here: api_key_env names an environment variable.
 #
