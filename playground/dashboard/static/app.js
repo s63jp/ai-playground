@@ -17,7 +17,7 @@ function showTab(name) {
   document.querySelectorAll('#tabs button').forEach((x) => x.classList.toggle('active', x === b));
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${name}`));
   if (location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);   // deep link to a view
-  ({ memory: loadMemory, analytics: loadAnalytics, compare: loadCompare, bench: loadBench, nn: loadNn }[name] || (() => {}))();
+  ({ memory: loadMemory, analytics: loadAnalytics, compare: loadCompare, bench: loadBench, nn: loadNn, lab: loadLab }[name] || (() => {}))();
   if (name === 'watch') resize();
 }
 document.querySelectorAll('#tabs button').forEach((b) => b.onclick = () => showTab(b.dataset.tab));
@@ -218,8 +218,22 @@ async function refresh(first = false) {
   const recs = await api(`/api/sessions/${sid}/records?kind=goal`);
   const goals = {};
   for (const g of recs.records) goals[g.key] = { ...(goals[g.key] || {}), ...g.data };
-  $('#w-goals').innerHTML = Object.entries(goals).map(([k, g]) => `<div class="row"><b>${k}</b> ${esc(g.title)} <span class="pill">${g.status}</span>
-    ${g.independently_verified === true ? '<span class="ok small">verified by physics</span>' : g.independently_verified === false ? '<span class="bad small">claim NOT verified</span>' : ''}</div>`).join('') || '<span class="muted">none set</span>';
+  let sessionHtml = Object.entries(goals).map(([k, g]) => `<div class="row"><b>${esc(k)}</b> ${esc(g.title)} <span class="pill">${esc(g.status)}</span>
+    ${g.kind && g.kind !== 'objective' ? `<span class="pill small">${esc(g.kind)}</span>` : ''}
+    ${g.independently_verified === true ? '<span class="ok small">verified by physics</span>' : g.independently_verified === false ? '<span class="bad small">claim NOT verified</span>' : ''}</div>`).join('');
+  // Also show the agent's STANDING open goals from memory, so a fresh session isn't shown as "none set"
+  // when the agent carries unfinished objectives across sessions (audit 2026-11-13).
+  let openHtml = '';
+  try {
+    const ag = $('#w-agent').value;
+    if (ag) {
+      const g = await api(`/api/agents/${encodeURIComponent(ag)}/goals`);
+      openHtml = g.open_goals.map((x) => `<div class="row muted"><b>${esc(x.id)}</b> ${esc(x.title)} <span class="pill small">${esc(x.kind || 'objective')}</span>
+        ${x.next_step ? `<br><span class="small">next: ${esc(x.next_step)}</span>` : ''}</div>`).join('');
+      if (openHtml) openHtml = '<div class="small muted">standing objectives (from memory):</div>' + openHtml;
+    }
+  } catch (e) { /* non-fatal */ }
+  $('#w-goals').innerHTML = (sessionHtml + openHtml) || '<span class="muted">none set</span>';
   const integ = await api(`/api/sessions/${sid}/integrity`);
   const iv = integ.what_was_independently_verified, ic = integ.what_the_agent_claims;
   $('#w-integ').innerHTML = `<table>
@@ -329,7 +343,39 @@ async function loadBench() {
 // ------------------------------------------------------------------ neural networks tab
 let nnColumns = null, nnJobPoll = null;
 
+// Which registry the NN tab is pointed at. 'researcher' is the shared lab; 'agent' + an agent id is
+// that agent's own networks (per-agent selection, audit 2026-11-13 NN lab stage).
+const nnSel = { scope: 'researcher', owner: 'researcher' };
+
+function nnQuery() {
+  return `scope=${encodeURIComponent(nnSel.scope)}&owner=${encodeURIComponent(nnSel.owner)}`;
+}
+
+// Populate the owner dropdown once, and wire the scope/owner selectors to reload the tab.
+(function wireNnScope() {
+  const ownerSel = $('#nn-owner');
+  if (ownerSel && !ownerSel.options.length) {
+    ownerSel.innerHTML = agents.map((a) => `<option value="${esc(a)}">${esc(a)}</option>`).join('');
+  }
+  const scopeSel = $('#nn-scope');
+  const wrap = $('#nn-owner-wrap');
+  function sync() {
+    nnSel.scope = scopeSel.value;
+    if (nnSel.scope === 'agent') {
+      wrap.style.display = '';
+      nnSel.owner = ownerSel.value || agents[0] || 'researcher';
+    } else {
+      wrap.style.display = 'none';
+      nnSel.owner = 'researcher';
+    }
+    loadNn();
+  }
+  scopeSel?.addEventListener('change', sync);
+  ownerSel?.addEventListener('change', sync);
+})();
+
 async function loadNn() {
+  loadBehaviourKinds();
   // Status
   try {
     const st = await api('/api/ml/status');
@@ -360,9 +406,9 @@ async function loadNn() {
       ).join('');
     } catch (e) { console.error(e); }
   }
-  // Datasets
+  // Datasets (scoped to the selected registry)
   try {
-    const ds = (await api('/api/ml/datasets')).datasets;
+    const ds = (await api(`/api/ml/datasets?${nnQuery()}`)).datasets;
     $('#nn-datasets').innerHTML = ds.length ? `<table><tr><th>name</th><th>rows</th><th>source</th><th>created</th></tr>
       ${ds.map((d) => `<tr><td>${esc(d.name)}</td><td>${d.rows}</td><td>${esc(d.source)}</td>
         <td>${d.created_at ? new Date(d.created_at * 1000).toLocaleDateString() : '–'}</td></tr>`).join('')}</table>` : '<span class="muted">no datasets</span>';
@@ -371,11 +417,13 @@ async function loadNn() {
   } catch (e) {
     $('#nn-datasets').innerHTML = `<span class="bad">${esc(String(e))}</span>`;
   }
-  // Models
+  // Models (the /api/ml/models scan returns every scope; filter to the selected registry)
   try {
-    const models = (await api('/api/ml/models')).models;
+    let models = (await api('/api/ml/models')).models;
+    if (nnSel.scope === 'agent') models = models.filter((m) => m.owner === nnSel.owner);
+    else models = models.filter((m) => (m.scope || 'researcher') === 'researcher');
     if (!models.length) {
-      $('#nn-models').innerHTML = '<span class="muted">no models</span>';
+      $('#nn-models').innerHTML = '<span class="muted">no models in this registry</span>';
     } else {
       $('#nn-models').innerHTML = `<table><tr><th>scope</th><th>owner</th><th>name</th><th>v</th><th>target</th><th>inputs</th><th>params</th><th>test RMSE</th><th>linear RMSE</th><th>beats linear</th><th>closed loop</th></tr>
         ${models.map((m) => `<tr class="model-row" data-scope="${esc(m.scope || 'researcher')}" data-owner="${esc(m.owner)}" data-name="${esc(m.name)}" data-version="${m.version}">
@@ -445,10 +493,13 @@ async function loadModelDetail(scope, owner, name, version) {
         <table class="small"><tr><th>controller</th><th>hits</th><th>hit rate</th><th>mean error</th></tr>
         ${Object.entries(ctrl).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.hits}/${v.trials}</td><td>${fmt(v.hit_rate * 100, 1)}%</td><td>${fmt(v.mean_abs_error, 3)}</td></tr>`).join('')}</table>`;
     }
-    // Evaluate buttons
+    // Evaluate buttons. 'Run as controller' puts the network in the body and runs a benchmark task,
+    // judged by the task's own verifier (the 'test my network in the world' button, audit 2026-11-13).
     const evalHtml = `<div style="margin-top:10px;">
       <button class="btn" id="nn-eval-fresh">Fresh engine test</button>
       <button class="btn" id="nn-eval-cl">Closed-loop test</button>
+      <button class="btn" id="nn-run-ctrl">Run as controller</button>
+      <select id="nn-ctrl-task" title="benchmark task"><option value="throw_height">throw_height</option></select>
     </div>`;
 
     $('#nn-detail').innerHTML = `
@@ -476,6 +527,16 @@ async function loadModelDetail(scope, owner, name, version) {
         const r = await api('/api/ml/evaluate', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ owner, name, version, kind: 'closed_loop' })
+        });
+        pollJob(r.job_id);
+      } catch (e) { alert(String(e)); }
+    };
+    $('#nn-run-ctrl').onclick = async () => {
+      try {
+        const task_id = $('#nn-ctrl-task').value;
+        const r = await api('/api/ml/controller', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ owner, name, version, task_id })
         });
         pollJob(r.job_id);
       } catch (e) { alert(String(e)); }
@@ -534,7 +595,9 @@ document.getElementById('nn-train-form')?.addEventListener('submit', async (e) =
       body: JSON.stringify({
         dataset,
         spec: { name, inputs, target, hidden },
-        train: { epochs, device }
+        train: { epochs, device },
+        scope: nnSel.scope,
+        owner: nnSel.owner
       })
     });
     $('#nn-train-status').textContent = `Job ${r.job_id} started`;
@@ -542,6 +605,190 @@ document.getElementById('nn-train-form')?.addEventListener('submit', async (e) =
   } catch (err) {
     $('#nn-train-status').innerHTML = `<span class="bad">${esc(String(err))}</span>`;
   }
+});
+
+// Generate-dataset form handler: builds training data by running the real world, into the selected registry.
+document.getElementById('nn-gen-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = $('#nn-gen-name').value.trim();
+  const n = parseInt($('#nn-gen-n').value, 10) || 1500;
+  const seed = parseInt($('#nn-gen-seed').value, 10) || 7;
+  if (!name) {
+    $('#nn-gen-status').innerHTML = '<span class="bad">Name required</span>';
+    return;
+  }
+  try {
+    $('#nn-gen-status').textContent = 'Submitting...';
+    const r = await api('/api/ml/generate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, n, seed, scope: nnSel.scope, owner: nnSel.owner })
+    });
+    $('#nn-gen-status').textContent = `Job ${r.job_id} started`;
+    pollJob(r.job_id);
+  } catch (err) {
+    $('#nn-gen-status').innerHTML = `<span class="bad">${esc(String(err))}</span>`;
+  }
+});
+
+// ------------------------------------------------------------------ Lab: run, models, compare, ML switch, provenance
+let labInit = false;
+async function loadLab() {
+  if (!labInit) {
+    labInit = true;
+    // provider + agent dropdowns
+    try {
+      const [ad, ags] = await Promise.all([api('/api/adapters'), api('/api/agents')]);
+      const oc = ad.adapters.filter((a) => a.type === 'openai_compat');
+      $('#lab-adapter').innerHTML = oc.map((a) => `<option value="${esc(a.name)}">${esc(a.name)}</option>`).join('');
+      const agOpts = ags.agents.map((a) => `<option value="${esc(a.agent_id)}">${esc(a.agent_id)}</option>`).join('');
+      $('#lab-run-agent').innerHTML = agOpts;
+    } catch (e) { /* non-fatal */ }
+  }
+  loadMlConfig();
+}
+
+async function loadMlConfig() {
+  try {
+    const c = await api('/api/ml/config');
+    $('#lab-ml-global').checked = c.enabled;
+    $('#lab-ml-status').textContent = c.enabled ? 'nn_* tools offered to agents' : 'nn_* tools hidden';
+    $('#lab-ml-agents').innerHTML = Object.entries(c.resolved).map(([a, on]) =>
+      `<label class="row small"><input type="checkbox" class="lab-ml-agent" data-agent="${esc(a)}" ${on ? 'checked' : ''}> ${esc(a)}</label>`).join('');
+    document.querySelectorAll('.lab-ml-agent').forEach((cb) => cb.onchange = async () => {
+      await api('/api/ml/config', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent: cb.dataset.agent, agent_enabled: cb.checked }) });
+      loadMlConfig();
+    });
+  } catch (e) { $('#lab-ml-status').innerHTML = `<span class="bad">${esc(String(e))}</span>`; }
+}
+$('#lab-ml-global')?.addEventListener('change', async (e) => {
+  await api('/api/ml/config', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: e.target.checked }) });
+  loadMlConfig();
+});
+
+$('#lab-list-models')?.addEventListener('click', async () => {
+  const adapter = $('#lab-adapter').value;
+  $('#lab-models-status').textContent = 'Querying…';
+  try {
+    const r = await api(`/api/models?adapter=${encodeURIComponent(adapter)}`);
+    $('#lab-models-status').textContent = `${r.models.length} model(s) at ${esc(r.base_url)}`;
+    $('#lab-models').innerHTML = r.models.length
+      ? `<table><tr><th>id</th><th>state</th><th>ctx</th><th></th></tr>${r.models.map((m) =>
+          `<tr><td class="mono small">${esc(m.id)}</td><td>${esc(m.state || '')}</td><td>${m.context ?? '–'}</td>` +
+          `<td><button class="btn small lab-pick" data-id="${esc(m.id)}">use</button></td></tr>`).join('')}</table>`
+      : '<span class="muted">No models (server offline, no model loaded, or auth needed).</span>';
+    document.querySelectorAll('.lab-pick').forEach((b) => b.onclick = () => {
+      $('#lab-run-model').value = b.dataset.id;
+      if (!$('#lab-cmp-models').value.includes(b.dataset.id)) {
+        $('#lab-cmp-models').value = ($('#lab-cmp-models').value ? $('#lab-cmp-models').value + ', ' : '') + b.dataset.id;
+      }
+    });
+  } catch (e) { $('#lab-models-status').innerHTML = `<span class="bad">${esc(String(e))}</span>`; }
+});
+
+async function pollRunJob(jobId, statusEl, onDone) {
+  const tick = async () => {
+    try {
+      const j = await api(`/api/run/jobs/${jobId}`);
+      const prog = (j.progress || []).length;
+      statusEl.textContent = `Job ${jobId}: ${j.status} · ${prog} session(s) so far`;
+      if (j.status === 'done') { onDone(j); return; }
+      if (j.status === 'error') { statusEl.innerHTML = `<span class="bad">${esc(j.error || 'error')}</span>`; return; }
+      setTimeout(tick, 2000);
+    } catch (e) { statusEl.innerHTML = `<span class="bad">${esc(String(e))}</span>`; }
+  };
+  tick();
+}
+
+$('#lab-run-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = { agent_id: $('#lab-run-agent').value, adapter: $('#lab-adapter').value,
+    model: $('#lab-run-model').value.trim() || null,
+    sessions: parseInt($('#lab-run-sessions').value, 10) || 1,
+    max_continuations: parseInt($('#lab-run-cont').value, 10) || 0 };
+  const el = $('#lab-run-status');
+  el.textContent = 'Launching…';
+  try {
+    const r = await api('/api/run/explore', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body) });
+    pollRunJob(r.job_id, el, (j) => {
+      el.innerHTML = `<span class="ok">Done.</span> ` + (j.progress || []).map((p) =>
+        `s${p.session_id}: ${p.actions} acts, ${esc(p.end_reason)}${p.continue_requested ? ' · asked to continue' : ''}`).join(' · ');
+      loadSessions();
+    });
+  } catch (err) { el.innerHTML = `<span class="bad">${esc(String(err))}</span>`; }
+});
+
+$('#lab-cmp-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const models = $('#lab-cmp-models').value.split(',').map((s) => s.trim()).filter(Boolean);
+  if (!models.length) { $('#lab-cmp-status').innerHTML = '<span class="bad">Enter at least one model id</span>'; return; }
+  const ctx = parseInt($('#lab-cmp-ctx').value, 10);
+  const body = { models, adapter: $('#lab-adapter').value,
+    agents: parseInt($('#lab-cmp-agents').value, 10) || 2,
+    max_steps: parseInt($('#lab-cmp-steps').value, 10) || 60,
+    context_tokens: Number.isFinite(ctx) ? ctx : null };
+  const el = $('#lab-cmp-status');
+  el.textContent = 'Launching comparison…';
+  try {
+    const r = await api('/api/run/compare', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body) });
+    pollRunJob(r.job_id, el, (j) => {
+      el.innerHTML = '<span class="ok">Comparison done.</span>';
+      const bm = j.result || {};
+      const keys = ['sessions', 'actions_mean', 'distinct_tools_mean', 'throw_share_mean',
+        'observation_share_mean', 'goals_set_mean', 'experiments_mean', 'budget_used_mean'];
+      $('#lab-cmp-results').innerHTML = `<table><tr><th>model</th>${keys.map((k) => `<th>${k.replace(/_mean$/, '').replace(/_/g, ' ')}</th>`).join('')}</tr>` +
+        Object.entries(bm).map(([m, a]) => `<tr><td class="mono small">${esc(m)}</td>${keys.map((k) => `<td>${a[k] ?? '–'}</td>`).join('')}</tr>`).join('') + '</table>';
+    });
+  } catch (err) { el.innerHTML = `<span class="bad">${esc(String(err))}</span>`; }
+});
+
+$('#lab-prov-run')?.addEventListener('click', async () => {
+  const el = $('#lab-prov');
+  el.textContent = 'Checking…';
+  try {
+    const r = await api('/api/audit/provenance');
+    if (r.available === false) { el.innerHTML = `<span class="muted">${esc(r.error || r.note || 'unavailable')}</span>`; return; }
+    const m = r.mismatches || [];
+    el.innerHTML = m.length
+      ? m.map((s) => `<div class="row"><b>session ${s.session_id}</b> (${esc(s.agent_id)}): row says '${esc(s.row_adapter)}', actually ran ${esc((s.ran || []).join(', '))}` +
+          (s.items ? `<br><span class="small muted">affected: ${esc(JSON.stringify(s.items))}</span>` : '') + '</div>').join('')
+      : '<span class="ok">No provenance mismatches: every session ran under a single matching adapter.</span>';
+  } catch (e) { el.innerHTML = `<span class="bad">${esc(String(e))}</span>`; }
+});
+
+// Behaviour-dataset form: build climb/jump/locomotion/manipulation/placement/affordance datasets from
+// the recorded log, into the selected registry (audit 2026-11-13). Not just throws.
+let behKinds = null;
+async function loadBehaviourKinds() {
+  if (behKinds) return;
+  try {
+    const r = await api('/api/ml/dataset-kinds');
+    behKinds = r.kinds.filter((k) => k.name !== 'throw');  // throws have their own generate form
+    const sel = $('#nn-beh-kind');
+    if (sel) {
+      sel.innerHTML = behKinds.map((k) => `<option value="${esc(k.name)}">${esc(k.name)}</option>`).join('');
+      const showDesc = () => { const k = behKinds.find((x) => x.name === sel.value); $('#nn-beh-desc').textContent = k ? k.description : ''; };
+      sel.onchange = showDesc; showDesc();
+    }
+  } catch (e) { /* non-fatal */ }
+}
+document.getElementById('nn-beh-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const kind = $('#nn-beh-kind').value;
+  const name = $('#nn-beh-name').value.trim();
+  if (!name) { $('#nn-beh-status').innerHTML = '<span class="bad">Name required</span>'; return; }
+  try {
+    $('#nn-beh-status').textContent = 'Building…';
+    const r = await api('/api/ml/build-behaviour', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, kind, scope: nnSel.scope, owner: nnSel.owner })
+    });
+    $('#nn-beh-status').textContent = `Job ${r.job_id} started`;
+    pollJob(r.job_id);
+  } catch (err) { $('#nn-beh-status').innerHTML = `<span class="bad">${esc(String(err))}</span>`; }
 });
 
 // ------------------------------------------------------------------ boot

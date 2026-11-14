@@ -1,0 +1,28 @@
+== Context composition (estimated tokens; chars scaled by that request's measured chars/token) ==
+Only requests the server processed WITHOUT truncation are used (chars/token 2.3-4.5).
+
+-- qwen/qwen3.5-9b: 60 untruncated requests
+   first request prompt_tokens=  8703 ctx=None | system=537(6%) tools=5983(69%) opening=101(1%) assistant_text=50(1%) assistant_tool_calls=143(2%) tool_results=1890(22%)
+   median-size   prompt_tokens= 10625 ctx=None | system=526(5%) tools=5866(55%) opening=152(1%) assistant_tool_calls=393(4%) tool_results=3687(35%)
+   largest       prompt_tokens= 16515 ctx=None | system=840(5%) tools=5893(36%) opening=668(4%) assistant_text=63(0%) assistant_tool_calls=1253(8%) tool_results=7797(47%)
+
+-- unslothqen 4b: 961 untruncated requests
+   first request prompt_tokens=  4998 ctx=119040 | system=641(13%) tools=4284(86%) opening=73(1%)
+   median-size   prompt_tokens= 22702 ctx=77056 | system=795(4%) tools=5579(25%) opening=4782(21%) assistant_text=1061(5%) assistant_tool_calls=2608(11%) tool_results=7842(35%) nudges=34(0%)
+   largest       prompt_tokens= 69139 ctx=77056 | system=897(1%) tools=6295(9%) opening=7978(12%) assistant_text=2701(4%) assistant_tool_calls=11217(16%) tool_results=39934(58%) nudges=76(0%) trim_marker=41(0%)
+
+-- lowkeyqwen3.52b: 100 untruncated requests
+   first request prompt_tokens=  5960 ctx=12544 | system=677(11%) tools=4745(80%) opening=538(9%)
+   median-size   prompt_tokens= 10638 ctx=12544 | system=751(7%) tools=5265(49%) opening=597(6%) assistant_tool_calls=380(4%) tool_results=3645(34%)
+   largest       prompt_tokens= 14584 ctx=14592 | system=766(5%) tools=5376(37%) opening=842(6%) assistant_tool_calls=1228(8%) tool_results=6307(43%) nudges=65(0%)
+
+== end_session calls: reason given and budget left ==
+  sid   1 unslothqen 4b                idx    3 wall      38s of 3600s | reason: ''
+  sid   4 nn:researcher/throw_peak/v1  idx    8 wall       1s of 3600s | reason: 'neural controller finished'
+  sid   5 nn:researcher/throw_peak/v1  idx    8 wall       1s of 3600s | reason: 'neural controller finished'
+  sid  19 unslothqen 4b                idx   71 wall      21s of 3600s | reason: 'Finished what I set out to do for now.'
+  sid  29 unslothqen 4b                idx    4 wall     197s of 3600s | reason: ''
+  sid  33 unslothqen 4b                idx  101 wall    1172s of 3600s | reason: 'Wasted ~220s making small moves back and forth. Final picture of the world is clear:\n\n**Verified (evidence-cited):**\n- D-002 [jump_throw] — throw-at-t'
+  sid  34 unslothqen 4b                idx   45 wall     414s of 3600s | reason: 'Session complete — full island survey delivered: all three platforms measured live (low deck eastern edge 0.5m high, mid deck south 1.0m, high deck we'
+  sid  35 unslothqen 4b                idx    5 wall      92s of 3600s | reason: 'Survey work complete and fully documented: D-002 [jump_throw] confirmed (~7.24m vs ~4.50m standing throw), D-003 [ring_generation] confirmed (laying a'
+  sid  37 unslothqen 4b                idx   28 wall     216s of 3600s | reason: 'Perimeter survey complete — island is a perfect 24m square with plain ground at all four corners. Platform layout confirmed. THE SPIRE verified as a f'

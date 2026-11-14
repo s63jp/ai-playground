@@ -87,12 +87,18 @@ class Environment:
         self.phase = "active"
         self.wrapup_left = WRAPUP_CALLS
         self.end_reason: str | None = None
+        self.continue_requested = False
         self.duration_s = float(cfg["session"]["duration_minutes"]) * 60.0
         self.max_steps = cfg["session"].get("max_steps")
         self._wall_prior = float(wall_used)
         self._t0 = self.clock()
         self.counters = {"failed_actions": 0, "physical_actions": 0, "memory_reads": 0,
                          "prior_programs_run": 0, "sandbox_tests": 0}
+        # Repeat-observation detection (audit 2026-11-13): map an observation's (tool, args, world-state)
+        # signature to the action index that first produced it this session. A 2B model once made 126
+        # identical observations in a row because nothing ever told it the answer had not changed.
+        self._obs_seen: dict[tuple, int] = {}
+        self._repeat_obs_streak = 0
         self.world = PhysicsWorld(cfg, event_sink=self._on_event, frame_sink=self._on_frame)
         if scene is not None:
             scene(self.world)
@@ -235,6 +241,28 @@ class Environment:
                                         "flight_id": ev["data"].get("flight_id")},
                                        session_id=self.sid, action_idx=idx, t=w.time)
         state_hash = w.state_hash()
+        # Repeat-observation feedback. A read-only observation that returns the same answer about an
+        # unchanged world as an earlier call adds no information; tell the agent so, rather than letting
+        # it loop. Only annotates (never blocks) - autonomy is preserved. Audit 2026-11-13.
+        if result["success"] and source == "agent" and category == "observation":
+            sig = (tool, _sha(clean or {}), state_hash)
+            first = self._obs_seen.get(sig)
+            if first is not None:
+                self._repeat_obs_streak += 1
+                result["repeat_of_action"] = first
+                result["repeat_notice"] = (
+                    f"This is the same observation as action {first}, and the world has not changed since "
+                    f"(repeated {self._repeat_obs_streak}x). Observing again will keep returning this. To "
+                    f"learn something new, act on it: move somewhere, pick up or move an object, run an "
+                    f"experiment, or record what you have found and decide what to investigate next.")
+            else:
+                self._obs_seen[sig] = idx
+                self._repeat_obs_streak = 0
+        elif category in ("movement", "object") and result["success"]:
+            # A physical action changes the world, so old observation signatures are stale: let the agent
+            # re-observe freely without being told it is repeating.
+            self._obs_seen.clear()
+            self._repeat_obs_streak = 0
         self._ev_buf.append({"source": "interface", "t": round(w.time, 4), "step": w.steps, "type": "action",
                              "action_idx": idx, "hidden": None,
                              "data": {"idx": idx, "tool": tool[:60], "success": result["success"],
@@ -549,12 +577,14 @@ class Environment:
     def _t_set_goal(self, a: dict, turn) -> dict:
         if not a["title"].strip():
             raise ToolError("invalid_argument", "The goal needs a title.")
-        g = self.memory.add_goal(self.session_number, self.world.time, a["title"], a.get("description"))
+        g = self.memory.add_goal(self.session_number, self.world.time, a["title"], a.get("description"),
+                                 kind=a.get("kind"), next_step=a.get("next_step"))
         self.db.add_record(self.agent_id, "goal", {"id": g["id"], "title": g["title"], "status": "active",
-                                                   "description": g["description"], "event": "set"},
+                                                   "description": g["description"], "kind": g["kind"],
+                                                   "next_step": g["next_step"], "event": "set"},
                            session_id=self.sid, key=g["id"], action_idx=self._cur_idx, t=self.world.time)
-        self.note("goal_set", id=g["id"], title=g["title"])
-        return {"goal_id": g["id"], "status": "active", "saved": True}
+        self.note("goal_set", id=g["id"], title=g["title"], kind=g["kind"])
+        return {"goal_id": g["id"], "status": "active", "kind": g["kind"], "saved": True}
 
     def _check_claim(self, ctype: str, params: dict, description: str | None, goal_id: str | None = None) -> dict:
         if ctype not in VERIFIERS:
@@ -635,9 +665,15 @@ class Environment:
     def _t_end_session(self, a: dict, turn) -> dict:
         self.phase = "closed"
         self.end_reason = "agent_ended"
-        self.note("session_end_requested", reason=a.get("reason"))
-        return {"ended": True, "reason": a.get("reason"),
-                "note": "Your memory files are saved. The island will be reset before your next session."}
+        wants_more = bool(a.get("continue_next_session"))
+        self.continue_requested = wants_more
+        self.note("session_end_requested", reason=a.get("reason"), continue_next_session=wants_more)
+        note = "Your memory files are saved. The island will be reset before your next session."
+        if wants_more:
+            note += (" You asked to continue: if the researcher is running multiple sessions, another one "
+                     "will start with this same memory. Make sure any unfinished goal or open question is "
+                     "recorded so you can resume it.")
+        return {"ended": True, "reason": a.get("reason"), "continue_next_session": wants_more, "note": note}
 
     # ------------------------------------------------------------ learning tools (neural networks)
     def _t_nn_list(self, a: dict, turn) -> dict:
@@ -646,7 +682,7 @@ class Environment:
 
     def _t_nn_make_dataset(self, a: dict, turn) -> dict:
         from ..ml.agent_tools import nn_make_dataset
-        return nn_make_dataset(self, a["name"], a.get("min_rows", 20))
+        return nn_make_dataset(self, a["name"], a.get("min_rows", 20), kind=a.get("kind", "throw"))
 
     def _t_nn_train(self, a: dict, turn) -> dict:
         from ..ml.agent_tools import nn_train

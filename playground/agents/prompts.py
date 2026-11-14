@@ -104,15 +104,66 @@ BENCHMARK_SYSTEM = (
     "Say briefly what you are thinking before you act."
 )
 
-CONTINUE_NUDGE = ("(No action was taken. You can carry on with any tool, or call end_session if you would like "
-                  "to stop here.)")
+CONTINUE_NUDGE = ("(No tool was called, so nothing happened in the world. Thinking out loud is fine, but "
+                  "only tools change anything or reveal anything new. Take an action now — move, inspect, "
+                  "experiment, or record a finding — or call end_session if you genuinely want to stop.)")
+
+
+def _budget_phrase(minutes: float, max_steps: int | None) -> str:
+    phrase = f"about {minutes:g} minutes"
+    if max_steps:
+        phrase += f" (at most {max_steps} actions)"
+    return phrase
 
 
 def exploration_opening(agent_id: str, session_number: int, briefing: str, minutes: float,
                         max_steps: int | None) -> str:
-    limit = f"about {minutes:g} minutes" + (f" (at most {max_steps} actions)" if max_steps else "")
-    return (f"You are {agent_id}. This is session {session_number}. It lasts {limit}.\n\n"
-            f"{briefing}\n\nThe island is in its original configuration. What you do is up to you.")
+    limit = _budget_phrase(minutes, max_steps)
+    # The memory block is reference material, shown first and clearly fenced. The *instruction* comes
+    # last so the model acts on the world instead of summarising its own files back - audit 2026-11-13
+    # found sessions that read the briefing as "summarise these notes", wrote a recap, and stopped at a
+    # few percent of the budget without exploring at all.
+    header = (f"You are {agent_id}. This is session {session_number} and it lasts {limit}.")
+    if briefing and "no memory files yet" not in briefing:
+        body = ("Here are your own notes from earlier sessions, for reference. You do NOT need to "
+                "summarise or repeat them — they are already saved.\n\n"
+                f"=== your saved memory (reference only) ===\n{briefing}\n=== end of saved memory ===")
+    else:
+        body = briefing or ""
+    instruction = (
+        "The island has been reset to its original configuration, so re-observe before relying on where "
+        "things are. This is a fresh exploration session with plenty of time: your job now is to DO "
+        "something in the world, not to write a report. Decide what you are curious about, then act on "
+        "it — take a look around, try an interaction, test an idea. If you are not sure where to start, "
+        "pick one concrete question about this island and run an experiment that could answer it. Keep "
+        "going until you have actually learned or built something; only call end_session when you have "
+        "run out of things worth trying, not after a single summary.")
+    return "\n\n".join(p for p in (header, body, instruction) if p)
+
+
+def continue_nudge(remaining: dict | None = None) -> str:
+    """The nudge shown when a turn produced no tool call, with how much budget is left so the agent
+    knows it has not run out of time (audit 2026-11-13: agents stopped at 1-51% of budget)."""
+    base = CONTINUE_NUDGE
+    if remaining:
+        steps = remaining.get("steps")
+        secs = remaining.get("seconds")
+        bits = []
+        if steps is not None:
+            bits.append(f"{steps} actions")
+        if secs is not None:
+            bits.append(f"about {secs / 60:.0f} more minutes")
+        if bits:
+            base += f"\n(You still have {' and '.join(bits)} available this session.)"
+    return base
+
+
+REVIEW_BEFORE_STOP = (
+    "You have gone several turns without acting and are about to end the session. Before you do, review "
+    "honestly: What were you trying to find out? Is any experiment unfinished or any question still open? "
+    "Is there one more thing worth trying with the time left? If something is genuinely worth continuing, "
+    "take that action now (and record any unfinished goal or open question with set_goal so a future "
+    "session can pick it up). If you truly have nothing left to explore, call end_session.")
 
 
 def benchmark_opening(task_prompt: str, briefing: str | None, minutes: float, max_steps: int | None) -> str:

@@ -51,6 +51,7 @@ agent_body:
   max_carry: 25.0
   throw_force_max: 200.0
   throw_stroke: 0.6          # metres over which the throwing force acts
+  push_stroke: 0.25          # metres over which a contact impulse (push/pull/slide/roll/kick/nudge) acts
   hold_height: 1.2           # held objects ride this far above the feet
 
 rules:
@@ -84,6 +85,11 @@ memory:
   diary_entries_in_briefing: 12
   confirm_min_experiments: 2     # verified supporting experiments needed for "confirmed"
   probable_min_experiments: 1
+  # Cap on the start-of-session memory briefing (audit 2026-11-13). A 2B/4B context window is ~12-16k
+  # tokens and the tool schema alone is ~5k; an unbounded briefing (one grew to 22k chars) would crowd
+  # out the conversation. The handbook, open goals and mistakes are kept; older diary/experiment detail
+  # is summarised to fit. 0 disables the cap.
+  briefing_char_budget: 6000
 
 agents:
   count: 13
@@ -94,21 +100,39 @@ agents:
 
 database: experiments/playground.db
 
+# Neural-network (learning) tools. Added switches, audit 2026-11-13.
+#   enabled: offer nn_* tools to agents at all (default true). Set false to run a pure-exploration
+#            study with no learning tools in the interface.
+#   agents.<id>.enabled: per-agent override of the above.
+# Assigning a pre-trained network as an agent's whole brain is separate: use --adapter neural with a
+# model spec (see docs/ML_LAB.md), not this block.
+ml:
+  enabled: true
+  agents: {}
+
 server:
   host: 127.0.0.1
   port: 8765
 
 # Agent "brains". The simulator is provider neutral; pick one with --adapter.
 # Secrets are never stored here: api_key_env names an environment variable.
+#
+# openai_compat adapters accept two optional context-budget keys (audit 2026-11-13):
+#   context_tokens: the model's loaded context window. 'auto' (or omitted) probes LM Studio's
+#                   /api/v0/models at startup; a number pins it; leave off for non-LM-Studio servers.
+#                   The adapter then keeps the WHOLE request (system + tool schemas + history + reply
+#                   room) inside this window instead of letting the server silently truncate the middle.
+#   reply_reserve_tokens: tokens kept free for the model's reply (default 1024).
 adapters:
   scripted: {type: scripted}
   random:   {type: random}
   lmstudio:
     type: openai_compat
     base_url: http://127.0.0.1:1234/v1
-    model: qwen/qwen3.5-9b
+    model: lowkeyqwen3.52b
     api_key_env: LM_API_KEY
     temperature: 0.7
+    context_tokens: auto
   # The researcher's custom Unsloth Qwen 4B (Q8_0, qwen35 arch) on LM Studio. ~2 s per decision.
   lmstudio_unsloth4b:
     type: openai_compat
@@ -116,6 +140,72 @@ adapters:
     model: "unslothqen 4b"
     api_key_env: LM_API_KEY
     temperature: 0.7
+    context_tokens: auto
+  lmstudio_hauhaucs4b:
+    type: openai_compat
+    base_url: http://127.0.0.1:1234/v1
+    model: qwen3.5-4b-uncensored-hauhaucs-aggressive
+    api_key_env: LM_API_KEY
+    temperature: 0.7
+  lmstudio_newest4b:
+    type: openai_compat
+    base_url: http://127.0.0.1:1234/v1
+    model: newest4b
+    api_key_env: LM_API_KEY
+    temperature: 0.7
+  lmstudio_hauhaucs9b:
+    type: openai_compat
+    base_url: http://127.0.0.1:1234/v1
+    model: qwen3.5-9b-uncensored-hauhaucs-aggressive
+    api_key_env: LM_API_KEY
+    temperature: 0.7
+  lmstudio_qwen9b:
+    type: openai_compat
+    base_url: http://127.0.0.1:1234/v1
+    model: qwen/qwen3.5-9b
+    api_key_env: LM_API_KEY
+    temperature: 0.7
+  lmstudio_claude_distilled9b:
+    type: openai_compat
+    base_url: http://127.0.0.1:1234/v1
+    model: qwen3.5-9b-claude-4.6-opus-reasoning-distilled-v2
+    api_key_env: LM_API_KEY
+    temperature: 0.7
+  lmstudio_gpt_oss20b:
+    type: openai_compat
+    base_url: http://127.0.0.1:1234/v1
+    model: openai/gpt-oss-20b
+    api_key_env: LM_API_KEY
+    temperature: 0.7
+  lmstudio_nemotron4b:
+    type: openai_compat
+    base_url: http://127.0.0.1:1234/v1
+    model: nvidia/nemotron-3-nano-4b
+    api_key_env: LM_API_KEY
+    temperature: 0.7
+  lmstudio_ministral14b:
+    type: openai_compat
+    base_url: http://127.0.0.1:1234/v1
+    model: mistralai/ministral-3-14b-reasoning
+    api_key_env: LM_API_KEY
+    temperature: 0.7
+  lmstudio_lfm24b:
+    type: openai_compat
+    base_url: http://127.0.0.1:1234/v1
+    model: liquid/lfm2-24b-a2b
+    api_key_env: LM_API_KEY
+    temperature: 0.7
+  # Unsloth's local inference server (OpenAI-compatible; audit 2026-11-13). Unsloth serves
+  # /v1/chat/completions on the port it started on (typically 8000 or 8888) with an sk-unsloth-… key.
+  # Set UNSLOTH_STUDIO_AUTH_TOKEN and the right port. `model: default` uses whatever Unsloth loaded;
+  # `playground models unsloth` lists the ids. context_tokens: auto probes the server's own window.
+  unsloth:
+    type: openai_compat
+    base_url: http://127.0.0.1:8888/v1
+    model: default
+    api_key_env: UNSLOTH_STUDIO_AUTH_TOKEN
+    temperature: 0.7
+    context_tokens: auto
   ollama_cloud:
     type: openai_compat
     base_url: https://ollama.com/v1

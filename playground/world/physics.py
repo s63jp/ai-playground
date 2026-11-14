@@ -1294,6 +1294,104 @@ class PhysicsWorld:
             res.update({"outcome": "still_moving", "note": f"The object had not come to rest after {max_wait} s."})
         return rnd(res)
 
+    # ------------------------------------------------------------------ contact manipulation
+    # One primitive for every "apply a force to an object you are NOT holding" verb (push, pull,
+    # slide, roll, kick, nudge). The verbs differ only in their force range, default direction and
+    # a couple of preconditions — the PHYSICS is identical and contains no task knowledge, so an
+    # agent discovers technique rather than having it hardcoded (action-space expansion 2026-11-13).
+    # The object must be in reach and resting (not held, not in flight). An impulse is applied along
+    # a horizontal direction; the engine then simulates freely and records the outcome the same way
+    # a throw is recorded (a "slide" flight), so verifiers and NN datasets pick these up automatically.
+    CONTACT_VERBS = {
+        #            min_N  max_N  up_bias  needs_contact_dir
+        "push":     (5.0,  120.0, 0.0),
+        "pull":     (5.0,   60.0, 0.0),
+        "slide":    (2.0,   80.0, 0.0),
+        "nudge":    (1.0,   15.0, 0.0),
+        "kick":     (20.0, 160.0, 0.12),
+        "roll":     (5.0,  120.0, 0.0),
+    }
+
+    def impulse_object(self, oid: str, direction: np.ndarray, force: float, verb: str = "push",
+                       wait: str = "rest", max_wait: float = 20.0) -> dict:
+        """Apply a contact impulse to an unheld, resting object in reach. Shared by push/pull/slide/roll/kick/nudge."""
+        self._require_free()
+        if self.held == oid:
+            raise ActionError("holding_object", f"'{oid}' is being held; put it down before you {verb} it.")
+        s = self._movable(oid)
+        if verb not in self.CONTACT_VERBS:
+            raise ActionError("invalid_argument", f"unknown contact verb '{verb}'.")
+        fmin, fmax, up_bias = self.CONTACT_VERBS[verb]
+        if not (isinstance(force, (int, float)) and math.isfinite(force) and fmin <= force <= fmax):
+            raise ActionError("invalid_argument", f"force for {verb} must be between {fmin} and {fmax} N.",
+                              min_force=fmin, max_force=fmax)
+        if wait not in ("rest", "impact", "none"):
+            raise ActionError("invalid_argument", "wait must be one of: rest, impact, none.")
+        p = self.obj_pos(oid)
+        ap = self.agent_pos()
+        if not self._in_reach(p):
+            dist = float(np.hypot(p[0] - ap[0], p[1] - ap[1]))
+            raise ActionError("out_of_reach", f"'{oid}' is {dist:.2f} m away; reach is {float(self.ac['reach']):.2f} m.",
+                              horizontal_distance=round(dist, 4), object_position=rnd(p))
+        if self.obj_speed(oid) > float(self.ac["catch_max_speed"]):
+            raise ActionError("moving_too_fast", f"'{oid}' is already moving too fast to {verb}.")
+        if oid in self.support:
+            raise ActionError("standing_on_object", f"Cannot {verb} '{oid}' while standing on it.")
+        dvec = np.array(direction, dtype=float)
+        horiz = math.hypot(dvec[0], dvec[1])
+        if horiz < 1e-6:
+            raise ActionError("invalid_argument", f"{verb} needs a horizontal direction.")
+        # Normalise to a horizontal unit vector, then add any small upward bias (kick lofts slightly).
+        h = np.array([dvec[0] / horiz, dvec[1] / horiz, 0.0])
+        d3 = h.copy()
+        d3[2] = up_bias
+        d3 = d3 / (np.linalg.norm(d3) or 1.0)
+        self.facing = heading_deg(h)
+        # Same impulse model as throw: v = dir * sqrt(2 * F * stroke / m). A shorter contact stroke
+        # than a throw (the hands are not winding up), so the same force imparts less speed.
+        stroke = float(self.ac.get("push_stroke", 0.25))
+        v_mag = math.sqrt(2.0 * float(force) * stroke / s.mass)
+        v_world = d3 * v_mag
+        # Apply to the object's free joint; the body keeps its own velocity (feet braced).
+        vadr = self.dadr[oid]
+        self.d.qvel[vadr:vadr + 3] = self.obj_vel(oid) + v_world
+        mujoco.mj_forward(self.m, self.d)
+        fl = self._begin_flight(oid, "slide", v_world, {"verb": verb, "force": float(force),
+                                                        "agent_position": ap.copy()})
+        launch = {"object": oid, "verb": verb, "force": float(force), "direction": rnd(d3),
+                  "contact_position": rnd(p), "launch_velocity": rnd(v_world),
+                  "launch_speed": round(float(v_mag), 4), "object_mass": s.mass,
+                  "agent_position": rnd(ap)}
+        self.emit("object_impulse", flight_id=fl["flight_id"], **launch)
+        res: dict[str, Any] = dict(launch)
+        res["flight_id"] = fl["flight_id"]
+        res["waited_for"] = wait
+        if wait == "none":
+            res["note"] = f"Returned immediately; '{oid}' is still moving."
+            return rnd(res)
+        rec, ok = self._wait_flight(oid, fl["flight_id"], wait, max_wait)
+        start = np.array(p, dtype=float)
+        if rec:
+            fp = np.array(rec.get("final_position", p), dtype=float)
+            res.update({k: rec[k] for k in ("outcome", "flight_time", "first_impact_position",
+                                            "first_impact_with", "impact_speed", "horizontal_range",
+                                            "impacts", "final_position", "total_time", "resting_on")
+                        if k in rec})
+            res["distance_moved"] = round(float(np.hypot(fp[0] - start[0], fp[1] - start[1])), 4)
+            res["toppled"] = bool(rec.get("impacts", 0) >= 1 and s.shape == "box"
+                                  and self._tipped(oid))
+        else:
+            res["outcome"] = "still_moving"
+            res["note"] = f"'{oid}' had not come to rest after {max_wait} s."
+        return rnd(res)
+
+    def _tipped(self, oid: str) -> bool:
+        """True if a box object is now resting on a face other than the one it started upright on."""
+        if self.specs[oid].shape != "box":
+            return False
+        up = quat_to_mat(self.obj_quat(oid))[:, 2]
+        return bool(abs(up[2]) < 0.8)   # local +z no longer points up => it tipped over
+
     def place(self, oid: str | None, position, wait: bool = True) -> dict:
         self._require_free()
         oid = self._held(oid)

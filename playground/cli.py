@@ -35,7 +35,12 @@ def _cfg(args):
 
 def _adapter_factory(cfg, args):
     from .agents import make_adapter
-    return lambda agent_id: make_adapter(cfg, args.adapter, model=args.model)
+    return lambda agent_id: make_adapter(cfg, args.adapter or "scripted", model=args.model)
+
+
+def _make_adapter(cfg, adapter_name, model):
+    from .agents import make_adapter
+    return make_adapter(cfg, adapter_name, model=model)
 
 
 def _print_summary(s: dict) -> None:
@@ -64,13 +69,21 @@ def cmd_serve(args):
 
 def cmd_explore(args):
     from .session import run_session
+    from .session.runner import resolve_resume_adapter
     cfg = _cfg(args)
     db = _db(cfg)
+    # On --resume, default to the adapter/model the session was started with (not the CLI default,
+    # which is 'scripted' — the reference policy, not an AI). Audit 2026-11-13.
+    adapter_name, model = args.adapter, args.model
+    if args.resume is not None:
+        adapter_name, model = resolve_resume_adapter(db, args.resume, args.adapter, args.model)
     for _ in range(args.sessions):
-        s = run_session(cfg, db, args.agent, _adapter_factory(cfg, args)(args.agent), label=args.label,
+        factory = lambda agent_id: _make_adapter(cfg, adapter_name or "scripted", model)
+        s = run_session(cfg, db, args.agent, factory(args.agent), label=args.label,
                         resume_session_id=args.resume)
         _print_summary(s)
         args.resume = None
+        adapter_name, model = args.adapter, args.model
         if s["end_reason"] in ("adapter_error", "runner_error", "interrupted"):
             print(f"  session {s['session_id']} can be resumed: playground explore --agent {args.agent} "
                   f"--resume {s['session_id']}")
@@ -84,10 +97,11 @@ def cmd_run_agents(args):
     db = _db(cfg)
     ids = args.agents.split(",") if args.agents else agent_ids(cfg)
     print(f"Running {len(ids)} agents x {args.sessions} session(s), concurrency {args.concurrency}, "
-          f"adapter {args.adapter}")
+          f"adapter {args.adapter or 'scripted'}")
     res = run_agents(cfg, db, _adapter_factory(cfg, args), ids, args.sessions, args.concurrency, args.label,
-                     progress=_print_summary)
-    print(json.dumps({k: res[k] for k in ("sessions_run", "completed", "wall_seconds", "errors")}, indent=2))
+                     progress=_print_summary, max_continuations=args.max_continuations)
+    print(json.dumps({k: res[k] for k in ("sessions_run", "completed", "continuations_granted",
+                                          "wall_seconds", "errors")}, indent=2))
     return 0 if not res["errors"] else 1
 
 
@@ -151,10 +165,88 @@ def cmd_verify_log(args):
     return 0 if r["ok"] else 2
 
 
+def cmd_models(args):
+    """List the models an openai_compat adapter's server is offering (e.g. every model loaded in LM
+    Studio), so the researcher can pick any of them instead of only the ones named in the config."""
+    from .agents.adapters import list_openai_models
+    cfg = _cfg(args)
+    table = cfg.get("adapters", {})
+    spec = table.get(args.adapter_name)
+    if not spec or spec.get("type") != "openai_compat":
+        print(f"'{args.adapter_name}' is not an openai_compat adapter. Available: "
+              f"{sorted(a for a, s in table.items() if s.get('type') == 'openai_compat')}")
+        return 1
+    models = list_openai_models(spec["base_url"], spec.get("api_key_env"))
+    if not models:
+        print(f"No models returned by {spec['base_url']} (is the server running?).")
+        return 1
+    print(f"{len(models)} model(s) at {spec['base_url']}:")
+    for m in models:
+        ctx = m.get("loaded_context_length") or m.get("max_context_length")
+        state = m.get("state", "")
+        extra = f"  [{state}]" if state else ""
+        ctx_s = f"  ctx={ctx}" if ctx else ""
+        print(f"  {m.get('id')}{ctx_s}{extra}")
+    print(f"\nUse any id with:  playground explore --adapter {args.adapter_name} --model '<id>'")
+    return 0
+
+
 def cmd_demo(args):
     from .demo import run_demo
     cfg = _cfg(args)
     return run_demo(cfg, args.out, adapter=args.adapter, model=args.model)
+
+
+def cmd_compare_models(args):
+    """Run several models under identical conditions (fresh agents, same action cap, same context window)
+    and report a per-model behavioural profile. A faster model is not assumed to be a better explorer."""
+    from .agents import make_adapter
+    from .session.model_compare import compare_models
+    cfg = _cfg(args)
+    db = _db(cfg)
+    models = [m.strip() for m in args.models.split(",") if m.strip()]
+    if not models:
+        print("Give --models as a comma-separated list of model ids (see: playground models).")
+        return 1
+    adapter_name = args.adapter or "lmstudio"
+
+    def adapter_for(model, agent_id):
+        return make_adapter(cfg, adapter_name, model=model)
+
+    print(f"Comparing {len(models)} model(s) via adapter '{adapter_name}': {models}")
+    print(f"Conditions: {args.agents} fresh agent(s)/model x {args.sessions} session(s), "
+          f"max_steps={args.max_steps}, context_tokens={args.context_tokens}")
+    res = compare_models(cfg, db, adapter_for, models, agents_per_model=args.agents,
+                         sessions=args.sessions, context_tokens=args.context_tokens,
+                         max_steps=args.max_steps,
+                         progress=lambda p: print(f"  [{p['model']}] {p['agent_id']} s{p['session_id']}: "
+                                                  f"{p['actions']} acts, {p['distinct_tools']} tools, "
+                                                  f"obs={p['observation_share']}, goals={p['goals_set']}, "
+                                                  f"exp={p['experiments']}, end={p['end_reason']}"))
+    print("\n=== Per-model profile (equal conditions) ===")
+    for model, agg in res["by_model"].items():
+        print(f"\n{model}:")
+        for k in ("sessions", "actions_mean", "distinct_tools_mean", "throw_share_mean",
+                  "observation_share_mean", "physical_share_mean", "failed_share_mean", "goals_set_mean",
+                  "experiments_mean", "confirmed_discoveries_mean", "budget_used_mean", "continued", "errored"):
+            if k in agg:
+                print(f"  {k} = {agg[k]}")
+    import json as _json
+    out = resolve_path(cfg, "experiments") / "model_comparison.json"
+    out.write_text(_json.dumps(res, indent=2, default=str), encoding="utf-8")
+    print(f"\nFull profiles written to {out}")
+    return 0
+
+
+def cmd_datasets(args):
+    """List the behaviour datasets the ML lab can build (not just throws)."""
+    from .ml.datasets import available_datasets
+    print("Behaviour datasets (build via dashboard, or an agent's nn_make_dataset kind=…):")
+    print(f"  {'throw':13s} throw outcomes: force/angle -> height/range")
+    for d in available_datasets():
+        print(f"  {d['name']:13s} {d['description']}")
+        print(f"  {'':13s} inputs {d['inputs']} · targets {d['targets']}")
+    return 0
 
 
 def cmd_ml(args):
@@ -167,25 +259,25 @@ def cmd_ml(args):
         return 0
 
     if args.op == "generate":
-        from .ml.data import generate_throw_dataset, save_dataset
-        from .ml.registry import Registry
+        from .ml.data import generate_throw_dataset
+        from .ml.registry import registry_for
         if not args.name:
             print("--name required", file=sys.stderr)
             return 1
         print(f"Generating {args.n} throws (seed={args.seed})...", file=sys.stderr)
         ds = generate_throw_dataset(cfg, args.n, seed=args.seed)
-        reg = Registry(cfg)
+        reg = registry_for(cfg, args.scope, args.owner)
         info = reg.save_dataset(args.name, ds)
-        print(json.dumps(info, indent=2))
+        print(json.dumps({**info, "scope": args.scope, "owner": args.owner}, indent=2))
         return 0
 
     if args.op == "train":
-        from .ml.registry import Registry
+        from .ml.registry import registry_for
         from .ml.nets import train, validate_spec, validate_train
         if not args.dataset or not args.name:
             print("--dataset and --name required", file=sys.stderr)
             return 1
-        reg = Registry(cfg)
+        reg = registry_for(cfg, args.scope, args.owner)
         ds = reg.load_dataset(args.dataset)
         inputs = args.inputs.split(",") if args.inputs else [
             "force", "dir_x", "dir_y", "dir_z", "elevation_deg",
@@ -195,11 +287,11 @@ def cmd_ml(args):
         hidden = [int(h) for h in args.hidden.split(",")]
         spec = validate_spec({"name": args.name, "inputs": inputs, "target": args.target, "hidden": hidden})
         tc = validate_train({"epochs": args.epochs, "device": args.device})
-        print(f"Training on {ds['manifest']['rows']} rows...", file=sys.stderr)
+        print(f"Training on {ds['manifest']['rows']} rows (owner={args.owner})...", file=sys.stderr)
         result = train(spec, ds["rows"], tc)
-        info = reg.save_model("researcher", result, ds)
+        info = reg.save_model(args.owner, result, ds)
         print(json.dumps({
-            **info,
+            **info, "scope": args.scope, "owner": args.owner,
             "epochs_run": result["epochs_run"],
             "best_epoch": result["best_epoch"],
             "test_rmse": result["metrics"]["test"]["rmse"],
@@ -209,60 +301,53 @@ def cmd_ml(args):
         return 0
 
     if args.op == "list":
-        from .ml.registry import Registry, all_models
-        from .config import resolve_path
+        from .ml.registry import all_models
         owner = args.owner if args.owner != "researcher" else None
-        db_path = resolve_path(cfg, cfg["database"])
-        memory_root = db_path.parent / "agents"
-        models = all_models(cfg, memory_root if memory_root.exists() else None)
+        mroot = resolve_path(cfg, cfg["memory"]["root"])
+        models = all_models(cfg, mroot if mroot.exists() else None)
         if owner:
             models = [m for m in models if m["owner"] == owner]
+        for m in models:
+            m.pop("state_dict", None)
         print(json.dumps(models, indent=2))
         return 0
 
     if args.op == "evaluate":
-        from .ml.registry import Registry
+        from .ml.registry import registry_for
         from .ml.evaluate import fresh_engine_test, closed_loop_height
         if not args.name:
             print("--name required", file=sys.stderr)
             return 1
-        reg = Registry(cfg)
+        reg = registry_for(cfg, args.scope, args.owner)
         model = reg.load_model(args.owner, args.name, args.version)
         result = {"owner": args.owner, "name": args.name, "version": model["version"]}
         print(f"Fresh engine test ({args.fresh} throws)...", file=sys.stderr)
         result["fresh"] = fresh_engine_test(cfg, model, args.fresh)
         if args.closed_loop:
             print("Closed-loop test...", file=sys.stderr)
-            result["closed_loop"] = closed_loop_height(cfg, model, linear_rows=reg.load_dataset(
-                model["dataset"]["source"].split("/")[-1] if "/" in model["dataset"].get("source", "") else
-                reg.list_datasets()[0] if reg.list_datasets() else None
-            )["rows"] if reg.list_datasets() else None)
+            dsets = reg.list_datasets()
+            linear_rows = reg.load_dataset(dsets[0])["rows"] if dsets else None
+            result["closed_loop"] = closed_loop_height(cfg, model, linear_rows=linear_rows)
         print(json.dumps(result, indent=2))
         return 0
 
     if args.op == "controller":
-        from .ml.registry import Registry
-        from .ml.controller import make_controller_adapter
-        from .session.benchmark import run_task
+        from .ml.registry import registry_for
+        from .agents.adapters import make_neural_adapter
+        from .session.benchmark import run_controller_benchmark
         from .storage import Database
         if not args.name:
             print("--name required", file=sys.stderr)
             return 1
-        reg = Registry(cfg)
-        model = reg.load_model(args.owner, args.name, args.version)
-        adapter = make_controller_adapter(model)
+        reg = registry_for(cfg, args.scope, args.owner)
+        model = reg.load_model(args.owner, args.name, args.version)   # fail fast if missing
+        adapter = make_neural_adapter(cfg, owner=args.owner, name=args.name, version=args.version)
         db = Database(resolve_path(cfg, cfg["database"]))
-        print(f"Running throw_height benchmark with neural controller...", file=sys.stderr)
-        result = run_task(cfg, db, lambda c, n, m=None: adapter, "neural_test", "throw_height")
-        print(json.dumps({
-            "model": f"{args.owner}/{args.name}/v{model['version']}",
-            "task": "throw_height",
-            "completed": result["completed"],
-            "verified": result.get("verified", False),
-            "score": result["score"],
-            "actions": result["actions"],
-            "failed_actions": result["failed_actions"],
-        }, indent=2))
+        task_id = getattr(args, "task", None) or "throw_height"
+        print(f"Running {task_id} benchmark with neural controller "
+              f"{args.owner}/{args.name}/v{model['version']}...", file=sys.stderr)
+        result = run_controller_benchmark(cfg, db, adapter, task_id=task_id)
+        print(json.dumps(result, indent=2))
         return 0
 
     print(f"Unknown operation: {args.op}", file=sys.stderr)
@@ -284,7 +369,8 @@ def main(argv=None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def adapter_args(sp):
-        sp.add_argument("--adapter", default="scripted", help="name from the adapters section of the config")
+        sp.add_argument("--adapter", default=None, help="name from the adapters section of the config "
+                                                        "(default: scripted, or the resumed session's own adapter)")
         sp.add_argument("--model", default=None, help="override the adapter's model")
         sp.add_argument("--minutes", type=float, default=None, help="session length (default from config: 60)")
         sp.add_argument("--max-steps", type=int, default=None, help="cap on agent tool calls per session")
@@ -306,6 +392,8 @@ def main(argv=None) -> int:
     s.add_argument("--agents", default=None, help="comma-separated ids (default: all configured)")
     s.add_argument("--sessions", type=int, default=1)
     s.add_argument("--concurrency", type=int, default=1)
+    s.add_argument("--max-continuations", type=int, default=0,
+                   help="extra sessions an agent may earn by asking to continue (default 0; keeps it bounded)")
     adapter_args(s)
     s.set_defaults(fn=cmd_run_agents)
     s = sub.add_parser("memory", help="inspect or edit an agent's memory")
@@ -332,6 +420,21 @@ def main(argv=None) -> int:
     s = sub.add_parser("verify-log", help="check a session's event hash chain")
     s.add_argument("session", type=int)
     s.set_defaults(fn=cmd_verify_log)
+    s = sub.add_parser("models", help="list models an openai_compat server (e.g. LM Studio) is offering")
+    s.add_argument("adapter_name", nargs="?", default="lmstudio",
+                   help="which configured openai_compat adapter's server to query (default: lmstudio)")
+    s.set_defaults(fn=cmd_models)
+    s = sub.add_parser("datasets", help="list the behaviour datasets the ML lab can build (not just throws)")
+    s.set_defaults(fn=cmd_datasets)
+    s = sub.add_parser("compare-models", help="run several models under identical conditions and profile them")
+    s.add_argument("--models", required=True, help="comma-separated model ids (see: playground models)")
+    s.add_argument("--adapter", default=None, help="openai_compat adapter whose server hosts them (default: lmstudio)")
+    s.add_argument("--agents", type=int, default=3, help="fresh agents per model (default 3)")
+    s.add_argument("--sessions", type=int, default=1, help="sessions per agent (default 1)")
+    s.add_argument("--max-steps", type=int, default=60, help="action cap per session, kept equal (default 60)")
+    s.add_argument("--context-tokens", type=int, default=None,
+                   help="pin the same context window for every model (default: each adapter's own)")
+    s.set_defaults(fn=cmd_compare_models)
     s = sub.add_parser("demo", help="end-to-end demonstration in a separate workspace")
     s.add_argument("--out", default="experiments/demo")
     s.add_argument("--adapter", default="scripted")
@@ -350,7 +453,11 @@ def main(argv=None) -> int:
     s.add_argument("--epochs", type=int, default=400, help="training epochs (default 400)")
     s.add_argument("--device", default="cpu", choices=["cpu", "xpu", "auto"],
                    help="device for training (default cpu)")
-    s.add_argument("--owner", default="researcher", help="model owner (default researcher)")
+    s.add_argument("--owner", default="researcher", help="model owner: 'researcher' or an agent id (default researcher)")
+    s.add_argument("--scope", default="researcher", choices=["researcher", "agent"],
+                   help="registry scope: 'researcher' (shared) or 'agent' (per-agent, under memory root). "
+                        "Use --scope agent --owner <agent_id> for a per-agent network (default researcher)")
+    s.add_argument("--task", default="throw_height", help="benchmark task for 'controller' (default throw_height)")
     s.add_argument("--version", type=int, default=None, help="model version (default latest)")
     s.add_argument("--fresh", type=int, default=200, help="throws for fresh evaluation (default 200)")
     s.add_argument("--closed-loop", action="store_true", help="run closed-loop evaluation")

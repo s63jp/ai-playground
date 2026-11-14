@@ -12,8 +12,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..agents.adapters import Adapter, AdapterError, ToolCall
-from ..agents.prompts import (BENCHMARK_SYSTEM, CONTINUE_NUDGE, DEFAULT_PERSONALITY, benchmark_opening,
-                              exploration_opening, exploration_system, prompt_hash)
+from ..agents.prompts import (BENCHMARK_SYSTEM, DEFAULT_PERSONALITY, REVIEW_BEFORE_STOP,
+                              benchmark_opening, continue_nudge, exploration_opening, exploration_system,
+                              prompt_hash)
 from ..analysis.behaviour import store_classification
 from ..config import config_hash, resolve_path
 from ..interface.environment import Environment
@@ -34,6 +35,58 @@ def canonical_initial_hash(cfg: dict) -> str:
 
 def memory_root(cfg: dict) -> Path:
     return resolve_path(cfg, cfg["memory"]["root"])
+
+
+class ResumeAdapterMismatch(ValueError):
+    """A session may only be resumed by the same brain that started it."""
+
+
+def check_resume_adapter(row: dict, adapter: Adapter) -> None:
+    """Refuse to resume a session with a different adapter or model than the one that started it.
+
+    Audit 2026-11-13: session 19 (agent_003) was started by `lmstudio_unsloth4b`, hit an adapter error and
+    was resumed with the CLI's default adapter (`scripted`). 70 of its 71 actions - and every throwing
+    'discovery' in agent_003's memory - were therefore written by the scripted reference policy while the
+    session row still named the language model. Resuming must keep the brain, or the record lies.
+    """
+    want_a, want_m = row.get("adapter"), row.get("model")
+    got_a, got_m = getattr(adapter, "name", None), getattr(adapter, "model", None)
+    if want_a and got_a and want_a != got_a:
+        raise ResumeAdapterMismatch(
+            f"session {row['id']} was started with adapter '{want_a}' (model '{want_m}'); it cannot be resumed "
+            f"with adapter '{got_a}'. Pass --adapter {want_a}, or start a new session.")
+    if want_m and got_m and want_m != got_m:
+        raise ResumeAdapterMismatch(
+            f"session {row['id']} was started with model '{want_m}'; it cannot be resumed with model '{got_m}'.")
+
+
+def resolve_resume_adapter(db, resume_session_id: int, adapter_name: str | None,
+                           model: str | None) -> tuple[str | None, str | None]:
+    """Decide which adapter/model to resume a session with.
+
+    If the caller passed --adapter explicitly, use that (check_resume_adapter will then refuse a true
+    mismatch). Otherwise default to the adapter/model the session was originally started with, so a bare
+    `--resume` never silently swaps an AI for the scripted reference policy (audit 2026-11-13).
+    """
+    row = db.session(resume_session_id)
+    if adapter_name is not None:
+        return adapter_name, model
+    if row is None:
+        return adapter_name, model
+    return row.get("adapter"), (model if model is not None else row.get("model"))
+
+
+def ml_enabled_for(cfg: dict, agent_id: str) -> bool:
+    """Whether neural-network (learning) tools are offered to this agent.
+
+    `ml.enabled` switches them off for everyone; `ml.agents.<id>.enabled` overrides per agent.
+    Default: on (backwards compatible).
+    """
+    ml = cfg.get("ml") or {}
+    per = ((ml.get("agents") or {}).get(agent_id) or {})
+    if "enabled" in per:
+        return bool(per["enabled"])
+    return bool(ml.get("enabled", True))
 
 
 def integrity_report(db, session_id: int) -> dict:
@@ -74,6 +127,7 @@ def _summarise(env: Environment, db, sid: int, end_reason: str, adapter: Adapter
     return {"session_id": sid, "agent_id": env.agent_id, "mode": env.mode, "session_number": env.session_number,
             "end_reason": end_reason, "error": error, "adapter": adapter.describe(), "turns": turns,
             "agent_calls": env.agent_calls, "actions_logged": env._idx, "sim_time": round(env.world.time, 3),
+            "continue_requested": bool(getattr(env, "continue_requested", False)),
             "wall_seconds": round(env.elapsed(), 2), "counters": dict(env.counters), "token_usage": usage,
             "initial_state_hash": env.initial_state_hash, "final_state_hash": env.world.state_hash(),
             "integrity": {k: integ[k] for k in ("event_chain", "what_the_agent_did", "what_the_agent_claims",
@@ -104,11 +158,15 @@ def run_session(cfg: dict, db, agent_id: str, adapter: Adapter, mode: str = "exp
                                       "duration_minutes": b.get("minutes", cfg["session"]["duration_minutes"])}}
     s_cfg = cfg["session"]
     tool_names = [n for n in SPECS if n not in (exclude_tools or [])]
+    if not ml_enabled_for(cfg, agent_id):
+        # The researcher has switched neural-network tools off (globally or for this agent).
+        tool_names = [n for n in tool_names if SPECS[n]["category"] != "learning"]
     resumed = None
     if resume_session_id is not None:
         row = db.session(resume_session_id)
         if row is None or row["status"] == "completed":
             raise ValueError(f"session {resume_session_id} cannot be resumed (status: {row and row['status']})")
+        check_resume_adapter(row, adapter)
         sid, number = resume_session_id, row["session_number"]
         env = Environment(cfg, db, memory, agent_id, sid, number, mode=row["mode"], allowed_tools=tool_names,
                           scene=scene, clock=clock, wall_used=float(row["wall_seconds"] or 0.0))
@@ -125,6 +183,8 @@ def run_session(cfg: dict, db, agent_id: str, adapter: Adapter, mode: str = "exp
         env = Environment(cfg, db, memory, agent_id, sid, number, mode=mode, allowed_tools=tool_names,
                           scene=scene, clock=clock)
     briefing = memory.briefing() if include_briefing else None
+    # Stamp every memory item written this session with the brain that actually produced it.
+    memory.author = {"adapter": adapter.name, "model": adapter.model, "source": "agent"}
     prompt_id = None
     if mode == "exploration":
         prompt_id = cfg.get("agents", {}).get("exploration_prompt") or DEFAULT_PERSONALITY
@@ -149,6 +209,7 @@ def run_session(cfg: dict, db, agent_id: str, adapter: Adapter, mode: str = "exp
         on_event("session_started", {"session_id": sid, "agent_id": agent_id})
 
     turns, idle, usage, error = 0, 0, {}, None
+    reviewed = False
     end_reason = None
     if adapter.driven_externally:
         return {"session_id": sid, "environment": env, "system": system, "opening": opening,
@@ -176,7 +237,14 @@ def run_session(cfg: dict, db, agent_id: str, adapter: Adapter, mode: str = "exp
                     break
                 if env.phase == "closed":
                     break
-                user_text = CONTINUE_NUDGE
+                # One turn before the idle limit would end the session, give exploration agents a single
+                # review-and-continue prompt: a last chance to resume unfinished work instead of drifting
+                # to a stop. After that, the normal budget-aware nudge. Audit 2026-11-13.
+                if (env.mode == "exploration" and idle == int(s_cfg["idle_turn_limit"]) - 1
+                        and not reviewed and env.phase == "active"):
+                    user_text, reviewed = REVIEW_BEFORE_STOP, True
+                else:
+                    user_text = continue_nudge(env.remaining() if env.phase == "active" else None)
                 db.add_message(sid, turns, "user", user_text)
                 continue
             idle = 0

@@ -1,0 +1,95 @@
+<mujoco model="humanoid">
+  <compiler angle="degree" meshdir="<home>/Projects/<other-project>/assets/meshes/" />
+  
+  <!-- Asset definitions -->
+  <asset>
+    <texture type="skybox" builtin="gradient" width="512" height="3072" rgb1=".4 .6 .8" rgb2=".9 .9 .9"/>
+    <material name="GroundMat" reflectance="0.4" rgba="0.2 0.2 0.2 1"/>
+    <material name="SkinMat" rgba="0.7 0.65 0.6 1"/>
+    <material name="ClothingMat" rgba="0.3 0.25 0.2 1"/>
+  </asset>
+
+  <!-- World body with ground -->
+  <worldbody>
+    <geom name="ground" type="plane" size="10 10" material="GroundMat" friction="1.0"/>
+    
+    <!-- Torso (main body) -->
+    <body name="torso" pos="0 -0.5 0">
+      <inertial mass="7.0" pos="0 0 0" diaginertia="0.8 0.6 0.4"/>
+      <geom type="box" size="0.3 0.4 0.25" material="ClothingMat"/>
+      
+      <!-- Spine chain for upper body flexibility -->
+      <body name="spine_L2" pos="0 -0.15 0">
+        <joint type="hinge" axis="0 1 0"/>
+        <geom type="box" size="0.28 0.3 0.24" material="ClothingMat"/>
+        
+        <!-- Left arm chain -->
+        <body name="left_shoulder" pos="0.25 -0.38 0">
+          <joint type="hinge" axis="0 1 0"/>
+          <geom type="capsule" size="0.04" fromto="0 0 0 0 -0.38 0" material="ClothingMat"/>
+          
+          <body name="left_elbow" pos="0 -0.25 0">
+            <joint type="hinge" axis="0 1 0" range="-90 90"/>
+            <geom type="capsule" size="0.035" fromto="0 0 0 0 -0.28 0" material="ClothingMat"/>
+          </body>
+          
+          <!-- Right arm -->
+          <body name="right_shoulder" pos="-0.25 -0.15 0">
+            <joint type="hinge" axis="0 1 0" range="-90 90"/>
+            <geom type="capsule" size="0.04" fromto="0 0 0 0 -0.38 0" material="ClothingMat"/>
+            
+            <body name="right_elbow" pos="0 -0.25 0">
+              <joint type="hinge" axis="0 1 0" range="-90 90"/>
+              <geom type="capsule" size="0.035" fromto="0 0 0 0 -0.28 0" material="ClothingMat"/>
+            </body>
+          </body>
+        </body>
+        
+        <!-- Right leg -->
+        <body name="right_hip" pos="-0.22 -0.35 0">
+          <joint type="hinge" axis="0 1 0" range="-90 90"/>
+          <geom type="capsule" size="0.05" fromto="0 0 0 0 -0.28 0" material="ClothingMat"/>
+          
+          <body name="right_knee" pos="0 -0.35 0">
+            <joint type="hinge" axis="0 1 0" range="-90 90"/>
+            <geom type="capsule" size="0.04" fromto="0 0 0 0 -0.28 0" material="ClothingMat"/>
+          </body>
+        </body>
+        
+        <!-- Left leg -->
+        <body name="left_hip" pos="0.22 -0.35 0">
+          <joint type="hinge" axis="0 1 0" range="-90 90"/>
+          <geom type="capsule" size="0.05" fromto="0 0 0 0 -0.28 0" material="ClothingMat"/>
+          
+          <body name="left_knee" pos="0 -0.35 0">
+            <joint type="hinge" axis="0 1 0" range="-90 90"/>
+            <geom type="capsule" size="0.04" fromto="0 0 0 0 -0.28 0" material="ClothingMat"/>
+          </body>
+        </body>
+        
+        <!-- Head -->
+        <body name="head" pos="0 -0.15 0">
+          <joint type="ball" range="-90 90 -90 90 -90 90"/>
+          <geom type="sphere" size="0.18" material="SkinMat"/>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <!-- Default controls for AI playground -->
+  <actuator>
+    <motor name="spine_L2" joint="torso/spine_L2" ctrlrange="-30.0 30.0"/>
+    <motor name="left_shoulder" joint="torso/left_shoulder" ctrlrange="-90.0 90.0"/>
+    <motor name="left_elbow" joint="torso/left_elbow" ctrlrange="-90.0 90.0"/>
+    <motor name="right_shoulder" joint="torso/right_shoulder" ctrlrange="-90.0 90.0"/>
+    <motor name="right_elbow" joint="torso/right_elbow" ctrlrange="-90.0 90.0"/>
+    <motor name="left_hip" joint="torso/left_hip" ctrlrange="-90.0 90.0"/>
+    <motor name="left_knee" joint="torso/left_knee" ctrlrange="-90.0 90.0"/>
+    <motor name="right_hip" joint="torso/right_hip" ctrlrange="-90.0 90.0"/>
+    <motor name="right_knee" joint="torso/right_knee" ctrlrange="-90.0 90.0"/>
+    <motor name="head_pitch" joint="torso/head" ctrlrange="-90.0 90.0"/>
+    <motor name="head_yaw" joint="torso/head" ctrlrange="-90.0 90.0"/>
+    <motor name="head_roll" joint="torso/head" ctrlrange="-90.0 90.0"/>
+  </actuator>
+
+</mujoco>

@@ -78,42 +78,133 @@ def _result_text(result: dict, limit: int = 6000) -> str:
     return s
 
 
+def list_openai_models(base_url: str, api_key_env: str | None = None, timeout: float = 4.0) -> list[dict]:
+    """List models an OpenAI-compatible server (LM Studio, Ollama) is offering.
+
+    Prefers LM Studio's richer /api/v0/models (reports per-model state and context length) and falls back
+    to the standard /v1/models. Returns [] if the server is unreachable - callers must tolerate that.
+    Added for the researcher to pick any loaded model instead of being limited to the two in config.
+    """
+    import os
+    headers = {}
+    key = os.environ.get(api_key_env) if api_key_env else None
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    root = base_url.rstrip("/")
+    # LM Studio's native endpoint lives at the host root (…:1234/api/v0/models), not under /v1.
+    host = root[:-3] if root.endswith("/v1") else root
+    for url in (f"{host}/api/v0/models", f"{root}/models"):
+        try:
+            r = httpx.get(url, headers=headers, timeout=timeout)
+            if r.status_code != 200:
+                continue
+            data = r.json().get("data") or []
+            if data:
+                return data
+        except (httpx.HTTPError, ValueError):
+            continue
+    return []
+
+
+def probe_context_tokens(base_url: str, model: str, api_key_env: str | None = None) -> int | None:
+    """Best-effort: the context length a model is loaded with, via LM Studio's /api/v0/models.
+
+    Returns the loaded context length if known, else the model's max, else None (unknown → caller keeps
+    its char-based default). Never raises: an offline server just yields None. Audit 2026-11-13.
+    """
+    for m in list_openai_models(base_url, api_key_env):
+        if m.get("id") == model:
+            ctx = m.get("loaded_context_length") or m.get("max_context_length")
+            try:
+                return int(ctx) if ctx else None
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 class OpenAICompatAdapter(Adapter):
     """Any endpoint that implements POST {base_url}/chat/completions with tool calling."""
     name = "openai_compat"
 
     def __init__(self, base_url: str, model: str, api_key: str | None = None, temperature: float | None = 0.7,
                  max_tokens: int | None = None, timeout: float = 300.0, max_history_chars: int = 120_000,
-                 extra_body: dict | None = None, label: str | None = None):
+                 extra_body: dict | None = None, label: str | None = None,
+                 context_tokens: int | None = None, reply_reserve_tokens: int = 1024,
+                 chars_per_token: float = 3.2):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.max_history_chars = max_history_chars
+        # When the model's loaded context window is known, the history budget is derived from it: the
+        # ENTIRE request (system + tool schemas + opening + history + room to reply) must fit, not just
+        # the history. Audit 2026-11-13: tool schemas alone are ~5k tokens, so a 15k-token window leaves
+        # far less for history than max_history_chars (120k chars ~ 37k tokens) ever assumed, and LM
+        # Studio silently dropped the middle of the prompt instead.
+        self.context_tokens = context_tokens
+        self.reply_reserve_tokens = reply_reserve_tokens
+        self.chars_per_token = chars_per_token
         self.extra_body = extra_body or {}
         self.name = label or "openai_compat"
         self.client = httpx.Client(timeout=timeout)
         self.messages: list[dict] = []
         self.tools: list[dict] = []
+        self.last_trim: dict | None = None
 
     def begin(self, system: str, tool_names: list[str]) -> None:
         self.messages = [{"role": "system", "content": system}]
         self.tools = openai_tools(tool_names)
 
+    def _fixed_chars(self) -> int:
+        """Characters that every request must carry no matter how much history is trimmed:
+        the system prompt (messages[0]), the opening user turn (messages[1]) and the full tool schema."""
+        head = self.messages[:2]
+        return sum(len(json.dumps(m)) for m in head) + len(json.dumps(self.tools))
+
+    def _history_budget_chars(self) -> int:
+        """How many characters the trimmable middle (messages[2:]) may occupy."""
+        if self.context_tokens:
+            total = int(self.context_tokens * self.chars_per_token)
+            avail = total - self._fixed_chars() - int(self.reply_reserve_tokens * self.chars_per_token)
+            # Always leave a floor so a single huge fixed part can't drive the budget negative.
+            return max(2000, min(self.max_history_chars, avail))
+        return self.max_history_chars
+
     def _trim(self) -> None:
-        """Keep the system prompt and the first user message; drop the oldest complete exchanges."""
-        def size() -> int:
-            return sum(len(json.dumps(m)) for m in self.messages)
-        while size() > self.max_history_chars and len(self.messages) > 8:
-            i = 2
+        """Keep the system prompt and the first user turn; drop whole oldest exchanges until the request
+        fits the history budget. A single marker records that earlier turns were removed.
+
+        Audit 2026-11-13: the previous version deleted and re-inserted its own marker each call and never
+        actually shrank the history; combined with a char budget far above the model's token window, LM
+        Studio silently truncated the middle of the prompt instead.
+        """
+        budget = self._history_budget_chars()
+        removed = 0
+
+        def body_size() -> int:
+            return sum(len(json.dumps(m)) for m in self.messages[2:]) + self._fixed_chars()
+
+        has_marker = (len(self.messages) > 2 and self.messages[2].get("role") == "user"
+                      and "[Earlier turns" in str(self.messages[2].get("content")))
+        start = 3 if has_marker else 2
+        # Drop oldest complete exchanges (an assistant turn and the tool/user turns answering it) from the
+        # middle, never touching messages[0] (system) or messages[1] (opening).
+        while body_size() > budget and len(self.messages) - start > 4:
+            i = start
+            removed += 1
             del self.messages[i]
-            while i < len(self.messages) and self.messages[i]["role"] == "tool":
+            while i < len(self.messages) and self.messages[i]["role"] in ("tool", "user"):
                 del self.messages[i]
-            if self.messages[2]["role"] != "user" or "[Earlier turns" not in str(self.messages[2].get("content")):
-                self.messages.insert(2, {"role": "user", "content": "[Earlier turns of this session were removed "
-                                         "to save space. Your memory files and the world itself are unchanged.]"})
-                break
+        if removed and not has_marker:
+            self.messages.insert(2, {"role": "user", "content": "[Earlier turns of this session were removed "
+                                     "to save space. Your memory files and the world itself are unchanged.]"})
+        self.last_trim = {"removed_exchanges": removed, "budget_chars": budget,
+                          "request_chars": body_size()} if removed else None
+
+    def describe(self) -> dict:
+        return {"adapter": self.name, "model": self.model, "context_tokens": self.context_tokens,
+                "history_budget_chars": self._history_budget_chars()}
 
     def step(self, user_text: str | None, tool_results: list[tuple[ToolCall, dict]]) -> Turn:
         for call, result in tool_results:
@@ -293,9 +384,8 @@ def _make_neural_adapter(cfg: dict, spec: dict) -> "PolicyAdapter":
         name: model name
         version: optional, defaults to latest
     """
-    from ..ml.registry import Registry, AgentRegistry, ml_root
+    from ..ml.registry import registry_for
     from ..ml.controller import make_controller_adapter
-    from ..config import resolve_path
 
     owner = spec.get("owner", "researcher")
     name = spec.get("name")
@@ -304,18 +394,21 @@ def _make_neural_adapter(cfg: dict, spec: dict) -> "PolicyAdapter":
     if not name:
         raise AdapterError("neural adapter requires 'name' (model name)")
 
-    # Load from researcher or agent registry
-    if owner == "researcher":
-        reg = Registry(cfg)
-        model = reg.load_model(owner, name, version)
-    else:
-        # Agent registry is under memory_root / agent_id / models
-        db_path = resolve_path(cfg, cfg["database"])
-        memory_root = db_path.parent / "agents"
-        reg = AgentRegistry(owner, memory_root)
-        model = reg.load_model(name, version)
+    # One accessor for researcher and agent registries so a per-agent network loads the same way it was
+    # saved (audit 2026-11-13). The agent registry is rooted under cfg['memory']['root'], not a guessed
+    # db-sibling 'agents' dir, so a non-default memory.root still resolves.
+    scope = "researcher" if owner == "researcher" else "agent"
+    reg = registry_for(cfg, scope, owner)
+    model = reg.load_model(owner, name, version)
 
     return make_controller_adapter(model, label=f"neural:{owner}/{name}")
+
+
+def make_neural_adapter(cfg: dict, owner: str = "researcher", name: str | None = None,
+                        version: int | None = None) -> "PolicyAdapter":
+    """Public helper: build a neural-controller adapter from owner/name/version without needing a
+    config `adapters` entry (the server and CLI call this directly). Added 2026-11-13 (NN lab)."""
+    return _make_neural_adapter(cfg, {"owner": owner, "name": name, "version": version})
 
 
 def make_adapter(cfg: dict, name: str, model: str | None = None, **overrides: Any) -> Adapter:
@@ -327,10 +420,15 @@ def make_adapter(cfg: dict, name: str, model: str | None = None, **overrides: An
     kind = spec.get("type")
     key = os.environ.get(spec["api_key_env"]) if spec.get("api_key_env") else None
     if kind == "openai_compat":
+        ctx = spec.get("context_tokens")
+        if ctx in (None, "auto"):
+            ctx = probe_context_tokens(spec["base_url"], model or spec["model"], spec.get("api_key_env"))
         return OpenAICompatAdapter(spec["base_url"], model or spec["model"], api_key=key,
                                    temperature=spec.get("temperature"), max_tokens=spec.get("max_tokens"),
                                    timeout=float(spec.get("timeout", 300)), extra_body=spec.get("extra_body"),
-                                   max_history_chars=int(spec.get("max_history_chars", 120_000)), label=name)
+                                   max_history_chars=int(spec.get("max_history_chars", 120_000)), label=name,
+                                   context_tokens=int(ctx) if ctx else None,
+                                   reply_reserve_tokens=int(spec.get("reply_reserve_tokens", 1024)))
     if kind == "anthropic":
         return AnthropicAdapter(model or spec["model"], key, max_tokens=int(spec.get("max_tokens", 2048)),
                                 temperature=spec.get("temperature"),

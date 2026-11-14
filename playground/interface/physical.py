@@ -15,8 +15,9 @@ from ..world.mathutil import compass, heading_deg, parse_direction, rnd
 from ..world.physics import ActionError, PhysicsWorld
 from .schema import ToolError
 
-AGENT_EVENT_TYPES = ("throw_release", "flight_end", "collision", "agent_landing", "jump_takeoff", "pickup",
-                     "catch", "release", "climb", "rotate", "object_appeared", "object_lost")
+AGENT_EVENT_TYPES = ("throw_release", "object_impulse", "flight_end", "collision", "agent_landing",
+                     "jump_takeoff", "pickup", "catch", "release", "climb", "rotate", "object_appeared",
+                     "object_lost")
 
 
 def visible_event(ev: dict) -> dict:
@@ -218,6 +219,99 @@ class PhysicalTools:
 
     def catch(self, object_id: str, max_wait: float = 5.0) -> dict:
         return self.w.catch(object_id, float(max_wait))
+
+    # ------------------------------------------------------------ contact manipulation
+    def _away_dir(self, object_id: str):
+        """A horizontal unit vector pointing from the body towards the object (default push/kick direction)."""
+        if object_id not in self.w.specs:
+            raise ToolError("unknown_object", f"There is no object with id '{object_id}'.")
+        if self.w.held == object_id:
+            raise ToolError("holding_object", f"'{object_id}' is being held; put it down first.")
+        p = self.w.obj_pos(object_id)
+        ap = self.w.agent_pos()
+        d = np.array([p[0] - ap[0], p[1] - ap[1], 0.0])
+        n = float(np.hypot(d[0], d[1]))
+        if n < 1e-6:
+            raise ToolError("invalid_argument", "The object is directly beneath you; give a direction.")
+        return d / n
+
+    def push(self, object_id: str, direction=None, force: float = 40.0, wait: str = "rest") -> dict:
+        d = self._away_dir(object_id) if direction is None else self._direction(direction)
+        return self.w.impulse_object(object_id, d, float(force), verb="push", wait=wait)
+
+    def pull(self, object_id: str, force: float = 25.0, wait: str = "rest") -> dict:
+        d = -self._away_dir(object_id)   # towards the body
+        return self.w.impulse_object(object_id, d, float(force), verb="pull", wait=wait)
+
+    def slide(self, object_id: str, direction, force: float = 30.0, wait: str = "rest") -> dict:
+        return self.w.impulse_object(object_id, self._direction(direction), float(force), verb="slide", wait=wait)
+
+    def nudge(self, object_id: str, direction=None, force: float = 6.0, wait: str = "rest") -> dict:
+        d = self._away_dir(object_id) if direction is None else self._direction(direction)
+        return self.w.impulse_object(object_id, d, float(force), verb="nudge", wait=wait)
+
+    def kick(self, object_id: str, direction=None, force: float = 80.0, wait: str = "rest") -> dict:
+        d = self._away_dir(object_id) if direction is None else self._direction(direction)
+        return self.w.impulse_object(object_id, d, float(force), verb="kick", wait=wait)
+
+    def roll(self, object_id: str, direction, force: float = 40.0, wait: str = "rest") -> dict:
+        return self.w.impulse_object(object_id, self._direction(direction), float(force), verb="roll", wait=wait)
+
+    # ------------------------------------------------------------ construction convenience
+    def stack_on(self, target_id: str, object_id: str | None = None) -> dict:
+        """Place the held object centred on top of target_id. No strategy — just the release-point arithmetic."""
+        w = self.w
+        held = object_id or w.held
+        if not held:
+            raise ToolError("not_holding", "You are not holding anything to stack.")
+        if target_id not in w.specs:
+            raise ToolError("unknown_object", f"There is no object with id '{target_id}'.")
+        tp = w.obj_pos(target_id)
+        top = tp[2] + w.half_extent_z(target_id)
+        hz = w.half_extent_z(held, w.held_quat)
+        res = w.place(held, [float(tp[0]), float(tp[1]), float(top + hz + 0.005)])
+        res["stacked_on"] = target_id
+        return res
+
+    def build_row(self, beside_id: str, object_id: str | None = None, direction=None) -> dict:
+        """Place the held object on the ground next to beside_id, forming/extending a row."""
+        w = self.w
+        held = object_id or w.held
+        if not held:
+            raise ToolError("not_holding", "You are not holding anything to place.")
+        if beside_id not in w.specs:
+            raise ToolError("unknown_object", f"There is no object with id '{beside_id}'.")
+        bp = w.obj_pos(beside_id)
+        try:
+            bw = float(w.specs[beside_id].dimensions.get("x", 0.5)) / 2
+        except Exception:
+            bw = 0.3
+        try:
+            hw = float(w.specs[held].dimensions.get("x", 0.5)) / 2
+        except Exception:
+            hw = 0.3
+        step = bw + hw + 0.12
+        # Try the requested side first (or away-from-body by default), then fall back to other sides
+        # if that space is occupied — same spirit as put_down, so a row still forms near a wall/platform.
+        if direction is None:
+            base = self._away_dir(beside_id)
+        else:
+            base = self._direction(direction)
+        import math as _m
+        base_ang = _m.atan2(base[1], base[0])
+        last = None
+        for k in (0, 1, -1, 2, -2, 3, -3, 4):
+            ang = base_ang + k * _m.pi / 4
+            x = float(bp[0] + _m.cos(ang) * step)
+            y = float(bp[1] + _m.sin(ang) * step)
+            try:
+                res = w.place(held, [x, y])
+                res["beside"] = beside_id
+                return res
+            except ActionError as exc:
+                last = exc
+        raise ToolError("no_room", f"No free space next to '{beside_id}' to place the object "
+                        f"({last.message if last else 'unknown'}).")
 
     # ------------------------------------------------------------ measurement
     def measure_height(self, target=None) -> dict:

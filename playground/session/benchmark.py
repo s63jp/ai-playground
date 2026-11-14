@@ -23,6 +23,7 @@ from ..agents.adapters import Adapter
 from ..integrity.claims import find_structures, find_towers, verify_claim
 from ..memory import MemoryStore
 from ..world.physics import PhysicsWorld
+from ..world.mathutil import quat_to_mat
 from .runner import memory_root, run_session
 
 
@@ -61,6 +62,63 @@ def v_spire(world, events) -> dict:
             "criteria": "a block at rest on the spire's top; the body never on the spire"}
 
 
+
+def _agent_support_paths_to_spire(world) -> list[list[str]]:
+    """Find physical support chains from the agent to the Spire."""
+    if not world.grounded:
+        return []
+
+    graph = world.support_graph()
+    paths = []
+
+    def walk(oid: str, path: list[str]) -> None:
+        if oid == "spire":
+            paths.append(path)
+            return
+        for lower in graph.get(oid, []):
+            if lower not in path:
+                walk(lower, path + [lower])
+
+    for oid in sorted(world.support):
+        walk(oid, [oid])
+
+    return paths
+
+
+def v_spire_climbing(world, events) -> dict:
+    """Success requires the agent to be physically standing on the Spire."""
+    paths = _agent_support_paths_to_spire(world)
+    state = world.agent_state()
+    spire = world.specs.get("spire")
+    properties = getattr(spire, "properties", {}) if spire else {}
+    top = float(properties.get("top_height", 6.0))
+    rest_speed = float(world.rc["rest_speed"])
+    height_ok = float(state["feet_height"]) >= top - 0.15
+    stationary = float(state["speed"]) <= rest_speed
+
+    verified = bool(paths) and height_ok and stationary and bool(state["on_ground"])
+
+    return {
+        "verified": verified,
+        "score": 1 if verified else 0,
+        "accuracy": None,
+        "measured": {
+            "position": state["position"],
+            "feet_height": state["feet_height"],
+            "spire_top_height": top,
+            "grounded": state["on_ground"],
+            "speed": state["speed"],
+            "standing_on": state["standing_on"],
+            "support_paths": paths,
+            "direct_support": any(len(path) == 1 for path in paths),
+            "indirect_support": any(len(path) > 1 for path in paths),
+            "height_requirement_met": height_ok,
+            "stationary": stationary,
+        },
+        "criteria": "the agent is stationary and grounded on the Spire, directly or through a physically supported structure",
+    }
+
+
 def v_generate(world, events) -> dict:
     appeared = [e["data"]["object"] for e in events if e["type"] == "object_appeared"]
     n = len(_blocks(world))
@@ -81,6 +139,61 @@ def make_v_height(target: float, tol: float = 0.25) -> Callable:
                              "throws": len(peaks)},
                 "criteria": f"a throw whose recorded peak is within {tol} m of {target} m"}
     return v
+
+
+def make_v_object_at(target_xy, tol: float = 0.6, obj: str = "block_01") -> Callable:
+    """Success = `obj` comes to rest within tol m of a target point, moved by CONTACT (push/pull/
+    slide/roll/kick), not thrown. Rewards the new contact actions instead of throwing."""
+    tx, ty = float(target_xy[0]), float(target_xy[1])
+
+    def v(world, events) -> dict:
+        thrown = any(e["type"] == "throw_release" and e["data"].get("object") == obj for e in events)
+        by_contact = any(e["type"] == "object_impulse" and e["data"].get("object") == obj for e in events)
+        if obj in world.specs and obj in getattr(world, "active", []):
+            p = world.obj_pos(obj)
+            dist = float(((p[0] - tx) ** 2 + (p[1] - ty) ** 2) ** 0.5)
+        else:
+            dist = None
+        ok = dist is not None and dist <= tol and by_contact and not thrown
+        return {"verified": ok, "score": None if dist is None else round(dist, 4),
+                "accuracy": None if dist is None else round(dist, 4),
+                "measured": {"object": obj, "target": [tx, ty], "final_distance": dist, "tolerance": tol,
+                             "moved_by_contact": by_contact, "was_thrown": thrown},
+                "criteria": f"'{obj}' at rest within {tol} m of ({tx}, {ty}), moved by contact not throwing"}
+    return v
+
+
+def make_v_build_height(target: float, tol: float = 0.3) -> Callable:
+    """Success = a resting multi-object structure whose top is within tol of target m. Rewards
+    stacking/building to a controlled height, not a single tall throw."""
+    def v(world, events) -> dict:
+        structs = find_structures(world)
+        tops = [s["top_height"] for s in structs if len(s["objects"]) >= 2]
+        best = max(tops) if tops else None
+        err = None if best is None else abs(best - target)
+        return {"verified": err is not None and err <= tol, "score": None if best is None else round(best, 3),
+                "accuracy": None if err is None else round(err, 4),
+                "measured": {"target": target, "tolerance": tol, "tallest_structure_top": best,
+                             "structures": structs},
+                "criteria": f"a resting structure of 2+ objects whose top is within {tol} m of {target} m"}
+    return v
+
+
+def v_topple(world, events) -> dict:
+    """Success = at least one block that started upright is now tipped on its side, moved by contact."""
+    tipped = []
+    for oid in sorted(getattr(world, "active", [])):
+        s = world.specs.get(oid)
+        if s is None or s.kind != "block":
+            continue
+        up = quat_to_mat(world.obj_quat(oid))[:, 2]
+        if abs(float(up[2])) < 0.8 and world.obj_speed(oid) < 0.1:
+            tipped.append(oid)
+    by_contact = any(e["type"] == "object_impulse" for e in events)
+    ok = bool(tipped) and by_contact
+    return {"verified": ok, "score": len(tipped), "accuracy": None,
+            "measured": {"toppled_blocks": tipped, "moved_by_contact": by_contact},
+            "criteria": "at least one block knocked onto its side by contact (not thrown)"}
 
 
 def v_limited(world, events) -> dict:
@@ -127,6 +240,9 @@ def default_tasks() -> dict[str, Task]:
         Task("spire_landing", "Land a block on the spire",
              "Make a block come to rest on top of THE SPIRE without climbing onto the spire yourself. "
              "Task reference: spire_landing", v_spire, max_steps=60, relevant_categories=("jump_throw",)),
+        Task("spire_climbing", "Reach the top of the Spire",
+             "Find a way to get yourself standing on top of the Spire.",
+             v_spire_climbing, max_steps=80, minutes=30.0),
         Task("generate_blocks", "Generate additional blocks",
              "Find a way to make an additional block exist on the island, beyond the ones there now. "
              "Task reference: generate_blocks", v_generate, max_steps=60, relevant_categories=("ring_generation",)),
@@ -135,6 +251,21 @@ def default_tasks() -> dict[str, Task]:
              f"{TARGET_HEIGHT} m above the ground (within 0.25 m counts). Target height: {TARGET_HEIGHT}. "
              "Task reference: throw_height", make_v_height(TARGET_HEIGHT), max_steps=60,
              relevant_categories=("jump_throw",)),
+        Task("push_to_target", "Move a block to a marked spot without throwing",
+             "Get block_01 to come to rest on the marked spot at x=4, y=0 WITHOUT throwing it "
+             "(within 0.6 m counts). Task reference: push_to_target",
+             make_v_object_at([4.0, 0.0], tol=0.6, obj="block_01"), max_steps=70),
+        Task("roll_to_target", "Roll the rock to a marked spot",
+             "Get the rock to come to rest on the marked spot at x=0, y=5 WITHOUT throwing it "
+             "(within 0.8 m counts). Task reference: roll_to_target",
+             make_v_object_at([0.0, 5.0], tol=0.8, obj="rock"), max_steps=70),
+        Task("build_to_height", "Build to a specified height",
+             "Build a resting structure of two or more objects whose top is as close as possible to "
+             "1.5 m (within 0.3 m counts). Task reference: build_to_height",
+             make_v_build_height(1.5, tol=0.3), max_steps=90),
+        Task("topple", "Knock a block onto its side",
+             "Knock one of the blocks over so it comes to rest on its side, without throwing it. "
+             "Task reference: topple", v_topple, max_steps=60),
         Task("limited_structure", "Build with limited resources",
              "Only four blocks are on the island this time. Build the tallest structure you can. "
              "Task reference: limited_structure", v_limited, scene=scene_limited, max_steps=80,
@@ -172,6 +303,34 @@ def _metrics(db, sid: int, summary: dict, task: Task, memory: MemoryStore, brief
         "resources": {"objects_handled": objects_used, "objects_handled_count": len(objects_used),
                       "objects_lost": sum(1 for e in events if e["type"] == "object_lost"),
                       "blocks_generated": sum(1 for e in events if e["type"] == "object_appeared")},
+        "route_metrics": {
+            "ring_related_actions": sum(
+                1 for a in agent_acts
+                if "ring" in json.dumps(a.get("args", {})).lower()
+            ),
+            "ring_generated_objects": sum(
+                1 for e in events
+                if e["type"] == "object_appeared"
+                and (e.get("data", {}).get("hidden") or {}).get("cause") == "ring_generation"
+            ),
+            "climb_attempts": sum(1 for a in agent_acts if a["tool"] == "climb"),
+            "climb_events": sum(1 for e in events if e["type"] == "climb"),
+            "jump_attempts": sum(1 for a in agent_acts if a["tool"] == "jump"),
+            "placement_actions": sum(
+                1 for a in agent_acts if a["tool"] in ("place", "put_down")
+            ),
+            "successful_placement_actions": sum(
+                1 for a in agent_acts
+                if a["tool"] in ("place", "put_down") and a["success"]
+            ),
+            "agent_landing_events": sum(
+                1 for e in events if e["type"] == "agent_landing"
+            ),
+            "experimentation_actions": sum(
+                1 for a in agent_acts
+                if a["tool"] in ("record_experiment", "run_physics_test")
+            ),
+        },
         "experiments": sum(1 for a in acts if a["tool"] == "record_experiment") +
                        sum(1 for a in acts if a["tool"] == "run_physics_test"),
         "memory_use": {"briefed_with_memory": briefed and bool(relevant_at_start or summary["counters"]["memory_reads"]),
@@ -284,6 +443,35 @@ def run_ablation(cfg: dict, db, adapter_factory: Callable[[str], Adapter], agent
     summary["removed_items"] = removed
     db.x("UPDATE benchmark_runs SET summary_json=? WHERE id=?", (json.dumps(summary, default=str), run_id))
     return {"run_id": run_id, "results": rows, "summary": summary}
+
+
+def run_controller_benchmark(cfg: dict, db, adapter: Adapter, task_id: str = "throw_height",
+                             label: str | None = None, agent_id: str = "neural_controller") -> dict:
+    """Run a single benchmark task with any adapter (used for a neural controller) through the REAL
+    run_task pipeline, so the task's own independent verifier judges the final world — never the agent.
+
+    Returns the verified result. The neural controller only has a policy for throw_height; other tasks
+    make it observe and end, which the verifier will simply score as not completed. Added 2026-11-13
+    (stage: NN lab) to replace the broken CLI 'controller' path that called run_task with the wrong
+    signature. The benchmark uses a throwaway empty memory under benchmark_memory/, so no agent's real
+    memory is touched.
+    """
+    if task_id not in TASKS:
+        raise ValueError(f"unknown task '{task_id}'; available: {sorted(TASKS)}")
+    task = TASKS[task_id]
+    run_id = db.x("INSERT INTO benchmark_runs(label,kind,created_at,params_json) VALUES(?,?,?,?)",
+                  (label or f"controller:{adapter.model}", "controller", time.time(),
+                   json.dumps({"task": task_id, "adapter": adapter.describe()})))
+    root = _bench_root(cfg, run_id)
+    mem = MemoryStore(root / f"controller_{task_id}", agent_id, cfg)
+    r = run_task(cfg, db, task, agent_id, adapter, mem, run_id, "controller", "neural")
+    db.x("UPDATE benchmark_runs SET summary_json=? WHERE id=?",
+         (json.dumps({"controller": r}, default=str), run_id))
+    return {"run_id": run_id, "task_id": task_id, "verified": bool(r.get("completed")),
+            "completed": r.get("completed"), "score": r.get("score"),
+            "accuracy": r.get("accuracy"), "actions": r.get("actions"),
+            "failed_actions": r.get("failed_actions"), "session_id": r.get("session_id"),
+            "adapter": adapter.describe()}
 
 
 def compare(rows: list[dict], by: tuple[str, ...]) -> dict:

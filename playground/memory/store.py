@@ -90,6 +90,10 @@ class MemoryStore:
         self.cfg = cfg
         self.mcfg = cfg.get("memory", {})
         self.db = db
+        # Who is writing memory this session. Stamped onto every item created through the agent-side
+        # writes so a record can never again misattribute the scripted reference policy's output to an
+        # LLM (audit 2026-11-13, session 19). Set by run_session; None for direct/legacy use.
+        self.author: dict | None = None
         self.dir = self.root / agent_id
         (self.dir / "programs").mkdir(parents=True, exist_ok=True)
         (self.dir / "session_history").mkdir(parents=True, exist_ok=True)
@@ -126,6 +130,16 @@ class MemoryStore:
         s = self.state
         return not (self.discoveries["items"] or self.experiments["items"] or s["diary"] or s["mistakes"]
                     or s["goals"] or s["notes"] or self.list_programs() or self.list_networks())
+
+    def _prov(self, session: int) -> dict:
+        """The provenance stamp for an item written this session: which brain (adapter/model) produced it.
+
+        Audit 2026-11-13: without this, a resumed session that swapped the adapter wrote items the record
+        later attributed to the original brain. `self.author` is set by run_session each session.
+        """
+        a = self.author or {}
+        return {"session": session, "adapter": a.get("adapter"), "model": a.get("model"),
+                "source": a.get("source", "agent")}
 
     # ------------------------------------------------------------ nn/ integration
     def _nn_models_dir(self) -> Path:
@@ -224,34 +238,69 @@ class MemoryStore:
         if not open_goals:
             out.append("_None._\n")
         for g in open_goals:
-            out.append(f"- **{g['id']}** [{g['status']}] {g['title']} (set in session {g['origin_session']})\n")
+            label = f"[{g['status']}]" + (f" [{g['kind']}]" if g.get("kind") and g["kind"] != "objective" else "")
+            out.append(f"- **{g['id']}** {label} {g['title']} (set in session {g['origin_session']})\n")
             if g.get("description"):
                 out.append(f"  - {g['description']}\n")
+            if g.get("next_step"):
+                out.append(f"  - next step: {g['next_step']}\n")
             for h in g["history"][-3:]:
                 if h.get("note"):
                     out.append(f"  - session {h['session']}: {h['note']}\n")
         _write_atomic(self.dir / "unfinished_goals.md", "".join(out))
 
     def briefing(self) -> str:
-        """The text an agent is given at the start of a session: its own files, read from disk."""
+        """The text an agent is given at the start of a session: its own files, read from disk.
+
+        Bounded by memory.briefing_char_budget (audit 2026-11-13): the durable parts (handbook, open
+        goals, mistakes) are always included; diary, programs, experiments and networks are added while
+        there is room, trimming the oldest diary/experiment detail first so a long history cannot crowd
+        a small context window.
+        """
         if self.is_empty():
             return ("You have no memory files yet. This is your first session on this island, "
                     "so nothing is known in advance.")
-        parts = [f"YOUR MEMORY FILES ({self.agent_id}; sessions completed so far: "
-                 f"{self.state['sessions_completed']}).\n"
-                 "You wrote these in earlier sessions. The island has been reset to its original configuration "
-                 "since then, so objects are back where they started and anything you built is gone. "
-                 "Entries are only as reliable as their stated status."]
+        header = (f"YOUR MEMORY FILES ({self.agent_id}; sessions completed so far: "
+                  f"{self.state['sessions_completed']}).\n"
+                  "You wrote these in earlier sessions. The island has been reset to its original configuration "
+                  "since then, so objects are back where they started and anything you built is gone. "
+                  "Entries are only as reliable as their stated status.")
+        core = [header]
         for name in ("handbook.md", "unfinished_goals.md", "mistakes.md"):
-            parts.append(f"----- {name} -----\n" + (self.dir / name).read_text(encoding="utf-8").strip())
-        diary = self.state["diary"][-int(self.mcfg.get("diary_entries_in_briefing", 12)):]
-        if diary:
+            core.append(f"----- {name} -----\n" + (self.dir / name).read_text(encoding="utf-8").strip())
+
+        budget = int(self.mcfg.get("briefing_char_budget", 0) or 0)
+        used = sum(len(p) for p in core)
+        optional: list[str] = []
+
+        def fits(block: str) -> bool:
+            nonlocal used
+            if budget and used + len(block) > budget:
+                return False
+            used += len(block)
+            return True
+
+        def diary_block(n: int) -> str:
+            diary = self.state["diary"][-n:]
             lines = [f"- (session {e['session']}, t={e['t']:.1f}s) {e['text']}" for e in diary]
-            parts.append("----- diary.md (most recent entries) -----\n" + "\n".join(lines))
+            return "----- diary.md (most recent entries) -----\n" + "\n".join(lines)
+
+        n_diary = int(self.mcfg.get("diary_entries_in_briefing", 12))
+        if self.state["diary"]:
+            # Shrink the diary window until it fits (keep at least the single most recent entry).
+            while n_diary > 1 and budget and used + len(diary_block(n_diary)) > budget:
+                n_diary -= 1
+            block = diary_block(n_diary)
+            if not budget or used + len(block) <= budget:
+                used += len(block)
+                optional.append(block)
+
         progs = self.list_programs()
         if progs:
             lines = [f"- {p['name']}: {p.get('description') or 'no description'} ({len(p['steps'])} steps)" for p in progs]
-            parts.append("----- programs/ (saved programs you can run with execute_program) -----\n" + "\n".join(lines))
+            block = "----- programs/ (saved programs you can run with execute_program) -----\n" + "\n".join(lines)
+            if fits(block):
+                optional.append(block)
         exps = self.experiments["items"][-6:]
         if exps:
             lines = []
@@ -259,8 +308,9 @@ class MemoryStore:
                 v = e.get("verification", {})
                 lines.append(f"- {e['id']} (session {e['session']}): {e.get('hypothesis') or e.get('question')} -> "
                              f"{e.get('actual_result')} [evidence check: {v.get('verdict', 'n/a')}]")
-            parts.append("----- experiments.json (most recent) -----\n" + "\n".join(lines))
-        # Include nn/ networks if any exist
+            block = "----- experiments.json (most recent) -----\n" + "\n".join(lines)
+            if fits(block):
+                optional.append(block)
         networks = self.list_networks()
         if networks:
             lines = []
@@ -274,8 +324,10 @@ class MemoryStore:
                 if linear_rmse:
                     rmse_str += f" (linear: {linear_rmse:.3f})"
                 lines.append(f"- {n['name']} v{n['version']}: {n.get('target')} <- [{inputs}] ({rmse_str})")
-            parts.append("----- nn/ (networks you trained; run nn_list / nn_predict) -----\n" + "\n".join(lines))
-        return "\n\n".join(parts)
+            block = "----- nn/ (networks you trained; run nn_list / nn_predict) -----\n" + "\n".join(lines)
+            if fits(block):
+                optional.append(block)
+        return "\n\n".join(core + optional)
 
     # ------------------------------------------------------------ agent-side writes
     def add_diary(self, session: int, t: float, text: str) -> dict:
@@ -293,7 +345,8 @@ class MemoryStore:
     def add_experiment(self, session: int, t: float, fields: dict, verification: dict) -> dict:
         n = self.experiments["next_id"]
         self.experiments["next_id"] = n + 1
-        e = {"id": f"E-{n:03d}", "session": session, "t": round(t, 2), **fields, "verification": verification}
+        e = {"id": f"E-{n:03d}", "session": session, "t": round(t, 2), **fields, "verification": verification,
+             "author": self._prov(session)}
         self.experiments["items"].append(e)
         self.save()
         return e
@@ -325,6 +378,7 @@ class MemoryStore:
         d = {"id": f"D-{n:03d}", "statement": statement.strip(), "category": category, "status": granted,
              "requested_status": requested, "status_reason": reason, "evidence": [e["id"] for e in exps],
              "created_session": session, "updated_session": session, "flags": {}, "notes": [],
+             "author": self._prov(session),
              "history": [{"session": session, "from": None, "to": granted, "requested": requested,
                           "reason": reason, "by": "agent"}]}
         self.discoveries["items"].append(d)
@@ -366,14 +420,17 @@ class MemoryStore:
                     action_refs: list[int] | None = None) -> dict:
         m = {"id": self._next("M"), "session": session, "t": round(t, 2), "what": what.strip(),
              "why": (why or "").strip() or None, "lesson": (lesson or "").strip() or None,
-             "action_refs": action_refs or []}
+             "action_refs": action_refs or [], "author": self._prov(session)}
         self.state["mistakes"].append(m)
         self.save()
         return m
 
-    def add_goal(self, session: int, t: float, title: str, description: str | None) -> dict:
+    def add_goal(self, session: int, t: float, title: str, description: str | None,
+                 kind: str | None = None, next_step: str | None = None) -> dict:
         g = {"id": self._next("G"), "title": title.strip(), "description": (description or "").strip() or None,
+             "kind": kind or "objective", "next_step": (next_step or "").strip() or None,
              "origin_session": session, "status": "active", "verification": None,
+             "author": self._prov(session),
              "history": [{"session": session, "t": round(t, 2), "status": "active", "note": "goal set"}]}
         self.state["goals"].append(g)
         self.save()

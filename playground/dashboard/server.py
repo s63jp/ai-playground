@@ -363,6 +363,24 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
         except (ImportError, AttributeError):
             return _all_models_fallback()
 
+    def _ml_registry(scope: str, owner: str):
+        """Resolve the right registry for a scope/owner, raising clean HTTP errors (audit 2026-11-13)."""
+        from ..ml.registry import registry_for
+        from ..ml import MLError
+        scope = scope or "researcher"
+        owner = owner or "researcher"
+        if scope not in ("researcher", "agent"):
+            raise HTTPException(400, f"scope must be 'researcher' or 'agent', got '{scope}'.")
+        if scope == "agent":
+            known = set(agent_ids(cfg)) | {p.name for p in memory_root(cfg).iterdir() if p.is_dir()} \
+                if memory_root(cfg).exists() else set(agent_ids(cfg))
+            if owner not in known:
+                raise HTTPException(404, f"unknown agent '{owner}'")
+        try:
+            return registry_for(cfg, scope, owner)
+        except MLError as e:
+            raise HTTPException(400, e.message) from None
+
     @app.get("/api/ml/status")
     def ml_status():
         from ..ml import torch_status
@@ -374,10 +392,56 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
         return {"inputs": INPUT_COLUMNS, "targets": TARGET_COLUMNS}
 
     @app.get("/api/ml/datasets")
-    def ml_datasets():
-        from ..ml.registry import Registry
-        reg = Registry(cfg)
-        return {"datasets": reg.dataset_info()}
+    def ml_datasets(scope: str = "researcher", owner: str = "researcher"):
+        reg = _ml_registry(scope, owner)
+        return {"scope": scope, "owner": owner, "datasets": reg.dataset_info()}
+
+    @app.post("/api/ml/generate")
+    def ml_generate(body: dict = Body(...)):
+        """Generate a throw dataset by running the real MuJoCo world, saved to the chosen registry.
+
+        This is what lets a researcher build training data from the dashboard (audit 2026-11-13);
+        previously only the CLI could. Runs in a background job because N can be large.
+        """
+        from ..ml.data import generate_throw_dataset
+        from ..ml.registry import NAME_RE
+        from ..ml import MLError
+        name = body.get("name")
+        if not name or not NAME_RE.match(name):
+            raise HTTPException(400, "name must be 1-40 chars of letters, digits, '_' or '-'.")
+        try:
+            n = int(body.get("n", 1500))
+            seed = int(body.get("seed", 7))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "n and seed must be integers.") from None
+        if not (10 <= n <= 20000):
+            raise HTTPException(400, "n must be between 10 and 20000.")
+        scope = body.get("scope", "researcher")
+        owner = body.get("owner", "researcher")
+        reg = _ml_registry(scope, owner)
+        with ml_lock:
+            if ml_running["busy"]:
+                raise HTTPException(409, "A training, evaluation or generation job is already running.")
+            ml_running["busy"] = True
+        job_id = str(uuid.uuid4())[:8]
+        ml_jobs[job_id] = {"status": "queued", "kind": "generate", "dataset": name, "n": n}
+
+        def run_generate():
+            try:
+                ml_jobs[job_id]["status"] = "running"
+                ds = generate_throw_dataset(cfg, n, seed=seed)
+                info = reg.save_dataset(name, ds)
+                ml_jobs[job_id]["status"] = "done"
+                ml_jobs[job_id]["result_summary"] = {**info, "scope": scope, "owner": owner}
+            except Exception as e:  # noqa: BLE001
+                ml_jobs[job_id]["status"] = "error"
+                ml_jobs[job_id]["error"] = str(e)
+            finally:
+                with ml_lock:
+                    ml_running["busy"] = False
+
+        threading.Thread(target=run_generate, daemon=True).start()
+        return {"job_id": job_id}
 
     @app.get("/api/ml/models")
     def ml_models():
@@ -425,37 +489,50 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
             dataset_name = body.get("dataset")
             spec = body.get("spec", {})
             train_cfg = body.get("train", {})
+            scope = body.get("scope", "researcher")
+            owner = body.get("owner", "researcher")
             # Force device to cpu if not specified or auto
             if train_cfg.get("device") in (None, "auto"):
                 train_cfg["device"] = "cpu"
-            # Validate
+            # Resolve registry for the chosen owner (researcher or a specific agent) and load the
+            # dataset from THAT registry so an agent trains on its own data (audit 2026-11-13).
             try:
-                spec = validate_spec(spec)
-                train_cfg = validate_train(train_cfg)
-            except MLError as e:
+                reg = _ml_registry(scope, owner)
+            except HTTPException:
                 with ml_lock:
                     ml_running["busy"] = False
-                raise HTTPException(400, e.message) from None
-            # Load dataset
-            reg = Registry(cfg)
+                raise
             try:
                 ds = reg.load_dataset(dataset_name)
             except MLError as e:
                 with ml_lock:
                     ml_running["busy"] = False
                 raise HTTPException(400, e.message) from None
+            # The dataset carries its own column vocabulary (climb/jump/affordance/...); throw datasets
+            # use the default. Validate the spec against THAT vocabulary (audit 2026-11-13).
+            from ..ml.datasets import vocab_from_manifest
+            in_cols, tgt_cols = vocab_from_manifest(ds.get("manifest", {}))
+            try:
+                spec = validate_spec(spec, in_cols, tgt_cols)
+                train_cfg = validate_train(train_cfg)
+            except MLError as e:
+                with ml_lock:
+                    ml_running["busy"] = False
+                raise HTTPException(400, e.message) from None
             # Create job
             job_id = str(uuid.uuid4())[:8]
-            ml_jobs[job_id] = {"status": "queued", "spec": spec, "dataset": dataset_name}
+            ml_jobs[job_id] = {"status": "queued", "spec": spec, "dataset": dataset_name,
+                               "scope": scope, "owner": owner}
 
             def run_training():
                 try:
                     ml_jobs[job_id]["status"] = "running"
                     from ..ml.nets import train, summarise
-                    result = train(spec, ds["rows"], train_cfg)
-                    saved = reg.save_model("researcher", result, ds)
+                    result = train(spec, ds["rows"], train_cfg, in_cols, tgt_cols)
+                    saved = reg.save_model(owner, result, ds)
                     summary = summarise(result)
                     summary["saved"] = saved
+                    summary["scope"], summary["owner"] = scope, owner
                     ml_jobs[job_id]["status"] = "done"
                     ml_jobs[job_id]["result_summary"] = summary
                 except Exception as e:
@@ -500,8 +577,14 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
                 with ml_lock:
                     ml_running["busy"] = False
                 raise HTTPException(400, "kind must be 'fresh' or 'closed_loop'.")
-            # Load model (researcher registry only for now)
-            reg = Registry(cfg)
+            # Load the model from the right scope so agent-owned networks evaluate too (audit 2026-11-13).
+            scope = body.get("scope", "researcher" if owner == "researcher" else "agent")
+            try:
+                reg = _ml_registry(scope, owner)
+            except HTTPException:
+                with ml_lock:
+                    ml_running["busy"] = False
+                raise
             try:
                 model = reg.load_model(owner, name, version)
             except MLError as e:
@@ -550,6 +633,276 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
             with ml_lock:
                 ml_running["busy"] = False
             raise HTTPException(500, str(e)) from None
+
+    @app.post("/api/ml/controller")
+    def ml_controller(body: dict = Body(...)):
+        """Run a trained network AS an agent's brain on a benchmark task, judged by the task's own
+        verifier (never the agent). This is the 'test my custom network in the world' button
+        (audit 2026-11-13). owner='researcher' or an agent id; the network is loaded from that scope.
+        """
+        from ..ml.registry import NAME_RE
+        from ..ml import MLError
+        from ..agents.adapters import make_neural_adapter, AdapterError
+        from ..session.benchmark import run_controller_benchmark, TASKS
+        owner = body.get("owner", "researcher")
+        name = body.get("name")
+        version = body.get("version")
+        task_id = body.get("task_id", "throw_height")
+        if not name:
+            raise HTTPException(400, "name (model name) is required.")
+        if task_id not in TASKS:
+            raise HTTPException(400, f"unknown task_id; available: {sorted(TASKS)}")
+        with ml_lock:
+            if ml_running["busy"]:
+                raise HTTPException(409, "A training, evaluation or generation job is already running.")
+            ml_running["busy"] = True
+        job_id = str(uuid.uuid4())[:8]
+        ml_jobs[job_id] = {"status": "queued", "kind": "controller",
+                           "model": f"{owner}/{name}", "task_id": task_id}
+
+        def run_controller():
+            try:
+                ml_jobs[job_id]["status"] = "running"
+                adapter = make_neural_adapter(cfg, owner=owner, name=name, version=version)
+                result = run_controller_benchmark(cfg, db, adapter, task_id=task_id,
+                                                  label=f"dashboard:{owner}/{name}")
+                ml_jobs[job_id]["status"] = "done"
+                ml_jobs[job_id]["result_summary"] = result
+            except (MLError, AdapterError) as e:
+                ml_jobs[job_id]["status"] = "error"
+                ml_jobs[job_id]["error"] = getattr(e, "message", str(e))
+            except Exception as e:  # noqa: BLE001
+                ml_jobs[job_id]["status"] = "error"
+                ml_jobs[job_id]["error"] = str(e)
+            finally:
+                with ml_lock:
+                    ml_running["busy"] = False
+
+        threading.Thread(target=run_controller, daemon=True).start()
+        return {"job_id": job_id}
+
+    # ---------------------------------------------------------------- audit 2026-11-13 dashboard access
+    # Everything the audit added to the CLI, exposed to the dashboard: model discovery, the ML on/off
+    # switch, per-session behavioural profiles, the provenance check, and launching exploration /
+    # model-comparison runs from the browser.
+    run_jobs: dict[str, dict] = {}
+    run_lock = threading.Lock()
+    run_state: dict[str, bool] = {"busy": False}
+
+    @app.get("/api/adapters")
+    def list_adapters():
+        table = cfg.get("adapters", {})
+        return {"adapters": [{"name": n, "type": s.get("type"), "model": s.get("model"),
+                              "base_url": s.get("base_url")} for n, s in sorted(table.items())]}
+
+    @app.get("/api/models")
+    def list_models(adapter: str = "lmstudio"):
+        """Every model the given openai_compat server (e.g. LM Studio) is offering, so a model can be
+        chosen in the UI instead of being limited to the config (audit 2026-11-13 steer)."""
+        from ..agents.adapters import list_openai_models
+        spec = cfg.get("adapters", {}).get(adapter)
+        if not spec or spec.get("type") != "openai_compat":
+            raise HTTPException(400, f"'{adapter}' is not an openai_compat adapter.")
+        models = list_openai_models(spec["base_url"], spec.get("api_key_env"))
+        return {"adapter": adapter, "base_url": spec["base_url"],
+                "models": [{"id": m.get("id"), "state": m.get("state"),
+                            "context": m.get("loaded_context_length") or m.get("max_context_length")}
+                           for m in models]}
+
+    @app.get("/api/ml/config")
+    def ml_config_get():
+        from ..session.runner import ml_enabled_for
+        ml = cfg.get("ml", {}) or {}
+        return {"enabled": bool(ml.get("enabled", True)), "agents": ml.get("agents", {}),
+                "resolved": {a: ml_enabled_for(cfg, a) for a in agent_ids(cfg)}}
+
+    @app.post("/api/ml/config")
+    def ml_config_set(body: dict = Body(...)):
+        """Turn the neural-network tools on/off globally or per agent, live (audit 2026-11-13 steer)."""
+        ml = cfg.setdefault("ml", {})
+        if "enabled" in body:
+            ml["enabled"] = bool(body["enabled"])
+        if "agent" in body and "agent_enabled" in body:
+            ml.setdefault("agents", {}).setdefault(str(body["agent"]), {})["enabled"] = bool(body["agent_enabled"])
+        return ml_config_get()
+
+    @app.get("/api/sessions/{sid}/profile")
+    def session_profile_api(sid: int):
+        from ..session.model_compare import session_profile
+        sess(sid)
+        return session_profile(db, sid)
+
+    @app.get("/api/ml/dataset-kinds")
+    def ml_dataset_kinds():
+        """The catalogue of behaviour datasets the lab can build — not just throws (audit 2026-11-13)."""
+        from ..ml.datasets import available_datasets
+        return {"kinds": [{"name": "throw", "description": "Throw outcomes (force/angle -> height/range).",
+                           "tools": ["throw"]}] + available_datasets()}
+
+    @app.post("/api/ml/build-behaviour")
+    def ml_build_behaviour(body: dict = Body(...)):
+        """Build a named behaviour dataset (climb/jump/locomotion/manipulation/placement/affordance) from
+        the recorded log and save it to the chosen registry (audit 2026-11-13). Background job."""
+        from ..ml.datasets import DATASETS, build_dataset
+        from ..ml.registry import NAME_RE
+        name = body.get("name")
+        kind = body.get("kind")
+        if not name or not NAME_RE.match(name):
+            raise HTTPException(400, "name must be 1-40 chars of letters, digits, '_' or '-'.")
+        if kind not in DATASETS:
+            raise HTTPException(400, f"unknown kind '{kind}'; available: {sorted(DATASETS)}")
+        scope = body.get("scope", "researcher")
+        owner = body.get("owner", "researcher")
+        reg = _ml_registry(scope, owner)
+        # Which sessions' actions to draw from: an agent's own, or every session for the researcher scope.
+        if scope == "agent":
+            rows = db.q("SELECT id FROM sessions WHERE agent_id=? ORDER BY id", (owner,))
+        else:
+            rows = db.q("SELECT id FROM sessions ORDER BY id")
+        with ml_lock:
+            if ml_running["busy"]:
+                raise HTTPException(409, "A training, evaluation or generation job is already running.")
+            ml_running["busy"] = True
+        job_id = str(uuid.uuid4())[:8]
+        ml_jobs[job_id] = {"status": "queued", "kind": "build_behaviour", "dataset": name, "behaviour": kind}
+
+        def run_build():
+            try:
+                ml_jobs[job_id]["status"] = "running"
+                actions = []
+                for r in rows:
+                    actions.extend(db.actions(r["id"], limit=10**6))
+                ds = build_dataset(actions, kind)
+                import hashlib as _hl
+                ds["manifest"]["rows_sha256"] = _hl.sha256(
+                    json.dumps(ds["rows"], sort_keys=True).encode()).hexdigest()
+                info = reg.save_dataset(name, ds)
+                ml_jobs[job_id]["status"] = "done"
+                ml_jobs[job_id]["result_summary"] = {**info, "kind": kind, "rows": ds["manifest"]["rows"],
+                                                     "scope": scope, "owner": owner}
+            except Exception as e:  # noqa: BLE001
+                ml_jobs[job_id]["status"] = "error"
+                ml_jobs[job_id]["error"] = str(e)
+            finally:
+                with ml_lock:
+                    ml_running["busy"] = False
+
+        threading.Thread(target=run_build, daemon=True).start()
+        return {"job_id": job_id}
+
+    @app.get("/api/agents/{agent_id}/goals")
+    def agent_goals(agent_id: str):
+        """An agent's OPEN goals from its memory (not just this session) so the dashboard's
+        'Self-selected objectives' reflects reality instead of showing 'none set' (audit 2026-11-13)."""
+        m = mem(agent_id)
+        open_goals = [g for g in m.state["goals"] if g["status"] in ("active", "paused")]
+        return {"agent_id": agent_id, "open_goals": open_goals,
+                "all_goals": m.state["goals"]}
+
+    @app.get("/api/audit/provenance")
+    def audit_provenance():
+        """Sessions whose recorded brain differs from the adapter that actually ran them, and the memory
+        items that are therefore mis-attributed (the session-19 scripted contamination)."""
+        import subprocess, sys as _sys
+        from pathlib import Path as _Path
+        script = _Path(__file__).resolve().parent.parent.parent / "scripts" / "audit_provenance.py"
+        if not script.exists():
+            return {"available": False, "note": "scripts/audit_provenance.py not found"}
+        try:
+            out = subprocess.run([_sys.executable, str(script), "--db", db.path, "--json",
+                                  "--memory-root", str(memory_root(cfg))],
+                                 capture_output=True, text=True, timeout=60)
+            return json.loads(out.stdout) if out.stdout.strip().startswith("{") else {"raw": out.stdout}
+        except Exception as e:  # noqa: BLE001
+            return {"available": False, "error": str(e)}
+
+    def _start_run_job(kind: str, target) -> dict:
+        with run_lock:
+            if run_state["busy"]:
+                raise HTTPException(409, "A run is already in progress.")
+            run_state["busy"] = True
+        job_id = str(uuid.uuid4())[:8]
+        run_jobs[job_id] = {"status": "running", "kind": kind, "progress": [], "result": None}
+
+        def wrap():
+            try:
+                target(run_jobs[job_id])
+                run_jobs[job_id]["status"] = "done"
+            except Exception as e:  # noqa: BLE001
+                run_jobs[job_id]["status"] = "error"
+                run_jobs[job_id]["error"] = str(e)
+            finally:
+                with run_lock:
+                    run_state["busy"] = False
+        threading.Thread(target=wrap, daemon=True).start()
+        return {"job_id": job_id}
+
+    @app.get("/api/run/jobs/{job_id}")
+    def run_job_status(job_id: str):
+        if job_id not in run_jobs:
+            raise HTTPException(404, f"No run job '{job_id}'.")
+        return run_jobs[job_id]
+
+    @app.get("/api/run/active")
+    def run_active():
+        return {"busy": run_state["busy"], "jobs": {k: v["status"] for k, v in run_jobs.items()}}
+
+    @app.post("/api/run/explore")
+    def run_explore(body: dict = Body(...)):
+        """Launch exploration sessions for one agent from the browser (audit 2026-11-13)."""
+        from ..agents.adapters import make_adapter
+        from ..session.runner import run_session
+        agent_id = str(body.get("agent_id") or "agent_001")
+        adapter_name = str(body.get("adapter") or "lmstudio")
+        model = body.get("model")
+        sessions = max(1, min(20, int(body.get("sessions", 1))))
+        max_cont = max(0, min(20, int(body.get("max_continuations", 0))))
+        if adapter_name not in cfg.get("adapters", {}):
+            raise HTTPException(400, f"unknown adapter '{adapter_name}'")
+
+        def job(state):
+            remaining, granted = sessions, 0
+            while remaining > 0:
+                ad = make_adapter(cfg, adapter_name, model=model)
+                s = run_session(json.loads(json.dumps(cfg)) if False else cfg, db, agent_id, ad,
+                                mode="exploration")
+                state["progress"].append({"session_id": s["session_id"], "end_reason": s["end_reason"],
+                                          "actions": s["actions_logged"],
+                                          "continue_requested": s.get("continue_requested")})
+                if s["end_reason"] in ("adapter_error", "runner_error", "interrupted"):
+                    break
+                remaining -= 1
+                if remaining == 0 and s.get("continue_requested") and granted < max_cont:
+                    granted += 1
+                    remaining = 1
+            state["result"] = {"sessions_run": len(state["progress"]), "continuations_granted": granted}
+        return _start_run_job("explore", job)
+
+    @app.post("/api/run/compare")
+    def run_compare(body: dict = Body(...)):
+        """Launch an equal-conditions model comparison from the browser (audit 2026-11-13)."""
+        from ..agents.adapters import make_adapter
+        from ..session.model_compare import compare_models
+        models = [m.strip() for m in (body.get("models") or []) if str(m).strip()]
+        if not models:
+            raise HTTPException(400, "models must be a non-empty list of model ids")
+        adapter_name = str(body.get("adapter") or "lmstudio")
+        agents = max(1, min(10, int(body.get("agents", 2))))
+        max_steps = int(body.get("max_steps", 60))
+        ctx = body.get("context_tokens")
+
+        def adapter_for(model, aid):
+            return make_adapter(cfg, adapter_name, model=model)
+
+        def job(state):
+            res = compare_models(cfg, db, adapter_for, models, agents_per_model=agents, sessions=1,
+                                 context_tokens=int(ctx) if ctx else None, max_steps=max_steps,
+                                 progress=lambda p: state["progress"].append(
+                                     {"model": p["model"], "session_id": p["session_id"],
+                                      "actions": p["actions"], "distinct_tools": p["distinct_tools"],
+                                      "observation_share": p["observation_share"], "goals_set": p["goals_set"]}))
+            state["result"] = res["by_model"]
+        return _start_run_job("compare", job)
 
     # ---------------------------------------------------------------- dashboard
     app.mount("/static", StaticFiles(directory=STATIC), name="static")

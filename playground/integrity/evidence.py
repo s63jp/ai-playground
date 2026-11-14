@@ -39,6 +39,15 @@ def _key(path: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", re.sub(r"\[\d+\]", "", last).lower()).strip("_")
 
 
+def _is_array_leaf(path: str) -> bool:
+    """True if the engine field is a positional array element (e.g. objects.ring[0], end_position[1]).
+
+    These carry coordinates/ids whose values coincide with unrelated claims by chance; they are not
+    named measurement outputs. Audit 2026-11-13.
+    """
+    return bool(re.search(r"\[\d+\]", path.split(".")[-1]))
+
+
 def _close(a: float, b: float) -> bool:
     return abs(a - b) <= max(0.02, 0.02 * abs(b))
 
@@ -74,7 +83,7 @@ def verify_experiment(fields: dict, cited: dict[int, dict | None]) -> dict:
                 continue
             engine.append((i, path, val))
 
-    matches, contradictions, unmatched = [], [], []
+    matches, contradictions, unmatched, weak_matches = [], [], [], []
     for name, claimed in numeric_leaves(fields.get("measurements") or {}):
         ckey = _key(name)
         same_key = [(i, p, v) for i, p, v in engine if _key(p) == ckey]
@@ -88,10 +97,20 @@ def verify_experiment(fields: dict, cited: dict[int, dict | None]) -> dict:
                 contradictions.append({"claim": name, "claimed": claimed, "engine": nearest[2],
                                        "action": nearest[0], "field": nearest[1]})
             continue
+        # No engine field shares this claim's name. A bare value coincidence can still be meaningful
+        # (the agent named its key descriptively, e.g. spire_height vs the engine's top_height), but a
+        # match into a positional ARRAY element (objects.ring[0], target[1], end_position[1]) is almost
+        # always a coincidence of a coordinate, not a measurement of the claimed quantity. Audit
+        # 2026-11-13: platform_count=3 matched the ring's x-coordinate objects.ring[0]=3.0.
         hit = next(((i, p, v) for i, p, v in engine if _close(claimed, v) and abs(v) > 1e-9), None)
-        if hit:
+        if hit and not _is_array_leaf(hit[1]):
             matches.append({"claim": name, "claimed": claimed, "engine": hit[2], "action": hit[0],
-                            "field": hit[1], "match": "value"})
+                            "field": hit[1], "match": "value_named"})
+        elif hit:
+            weak_matches.append({"claim": name, "claimed": claimed, "engine": hit[2], "action": hit[0],
+                                 "field": hit[1], "match": "value_coordinate",
+                                 "note": "value coincides with a positional coordinate of a different name; "
+                                         "not counted as a measurement of this quantity"})
         else:
             unmatched.append({"claim": name, "claimed": claimed,
                               "note": "not found in the cited actions' measurements (derived or unsupported)"})
@@ -99,15 +118,20 @@ def verify_experiment(fields: dict, cited: dict[int, dict | None]) -> dict:
     if contradictions:
         verdict, verified, level = "contradicted", False, None
         issues.append("a claimed measurement disagrees with the value the engine recorded")
-    elif missing and not succeeded and not matches:
+    elif missing and not succeeded and not matches and not weak_matches:
         verdict, verified, level = "invalid_references", False, None
     elif matches:
+        # At least one claimed number matched an engine field of the SAME name: genuine measurement.
         verdict, verified, level = "consistent", True, "measured"
     else:
+        # Cited real physical actions (and possibly bare-value coincidences), but nothing name-matched.
         verdict, verified, level = "grounded", True, "cited"
+        if weak_matches:
+            issues.append("some claimed numbers only coincide in value with unrelated engine fields; "
+                          "they ground the record but are not counted as measurements")
     return {"verified": verified, "verdict": verdict, "level": level, "checked_actions": sorted(physical),
-            "missing_actions": missing, "matches": matches, "contradictions": contradictions,
-            "unmatched": unmatched, "issues": issues}
+            "missing_actions": missing, "matches": matches, "weak_matches": weak_matches,
+            "contradictions": contradictions, "unmatched": unmatched, "issues": issues}
 
 
 def check_flight(flight: dict, g: float = 9.81) -> list[str]:

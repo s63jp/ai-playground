@@ -1,0 +1,205 @@
+[
+ {
+  "ts": "2026-11-12 11:46:08",
+  "t": 1794483968.0,
+  "path": "<home>\\.lmstudio\\models\\lmstudio-community\\Qwen3.5-9B-GGUF\\Qwen3.5-9B-Q4_K_M.gguf",
+  "n_slots": 1,
+  "n_ctx_slot": 114432
+ },
+ {
+  "ts": "2026-11-12 12:24:56",
+  "t": 1794486296.0,
+  "path": "<home>\\.lmstudio\\models\\lmstudio-community\\LFM2-24B-A2B-GGUF\\LFM2-24B-A2B-Q4_K_M.gguf",
+  "n_slots": 1,
+  "n_ctx_slot": 128000
+ },
+ {
+  "ts": "2026-11-12 12:31:20",
+  "t": 1794486680.0,
+  "path": "<home>\\.lmstudio\\models\\HauhauCS\\Qwen3.5-9B-Uncensored-HauhauCS-Aggressive\\Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q6_K.gguf",
+  "n_slots": 1,
+  "n_ctx_slot": 97280
+ },
+ {
+  "ts": "2026-11-12 17:15:37",
+  "t": 1794503737.0,
+  "path": "<home>\\.lmstudio\\models\\lmstudio-community\\Qwen3.5-9B-GGUF\\Qwen3.5-9B-Q4_K_M.gguf",
+  "n_slots": 1,
+  "n_ctx_slot": 32768
+ },
+ {
+  "ts": "2026-11-12 17:46:37",
+  "t": 1794505597.0,
+  "path": "<home>\\.lmstudio\\models\\local\\unslothqen 4b\\Qwen3.54B.Q8_0.gguf",
+  "n_slots": 1,
+  "n_ctx_slot": 119040
+ },
+ {
+  "ts": "2026-11-12 22:04:04",
+  "t": 1794521044.0,
+  "path": "<home>\\.lmstudio\\models\\local\\unslothqen 4b\\Qwen3.54B.Q8_0.gguf",
+  "n_slots": 4,
+  "n_ctx_slot": 8192
+ },
+ {
+  "ts": "2026-11-12 22:11:45",
+  "t": 1794521505.0,
+  "path": "<home>\\.lmstudio\\models\\local\\unslothqen 4b\\Qwen3.54B.Q8_0.gguf",
+  "n_slots": 4,
+  "n_ctx_slot": 8192
+ },
+ {
+  "ts": "2026-11-12 22:38:04",
+  "t": 1794523084.0,
+  "path": "<home>\\.lmstudio\\models\\lmstudio-community\\Ministral-3-3B-Instruct-2512-GGUF\\Ministral-3-3B-Instruct-2512-Q8_0.gguf",
+  "n_slots": 4,
+  "n_ctx_slot": 8192
+ },
+ {
+  "ts": "2026-11-12 22:42:19",
+  "t": 1794523339.0,
+  "path": "<home>\\.lmstudio\\models\\HauhauCS\\Qwen3.5-9B-Uncensored-HauhauCS-Aggressive\\Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q6_K.gguf",
+  "n_slots": 1,
+  "n_ctx_slot": 36096
+ },
+ {
+  "ts": "2026-11-12 22:42:58",
+  "t": 1794523378.0,
+  "path": "<home>\\.lmstudio\\models\\lmstudio-community\\Qwen3.5-9B-GGUF\\Qwen3.5-9B-Q4_K_M.gguf",
+  "n_slots": 1,
+  "n_ctx_slot": 51200
+ },
+ {
+  "ts": "2026-11-12 22:58:57",
+  "t": 1794524337.0,
+  "path": "<home>\\.lmstudio\\models\\local\\LOWKEYQWEN3.52B\\Qwen3.5-2B.Q8_0.gguf",
+  "n_slots": 4,
+  "n_ctx_slot": 8192
+ },
+ {
+  "ts": "2026-11-12 22:59:37",
+  "t": 1794524377.0,
+  "path": "<home>\\.lmstudio\\models\\local\\LOWKEYQWEN3.52B\\Qwen3.5-2B.Q8_0.gguf",
+  "n_slots": 1,
+  "n_ctx_slot": 12544
+ },
+ {
+  "ts": "2026-11-12 23:01:31",
+  "t": 1794524491.0,
+  "path": "<home>\\.lmstudio\\models\\lmstudio-community\\Qwen3.5-9B-GGUF\\Qwen3.5-9B-Q4_K_M.gguf",
+  "n_slots": 1,
+  "n_ctx_slot": 51200
+ },
+ {
+  "ts": "2026-11-12 23:04:05",
+  "t": 1794524645.0,
+  "path": "<home>\\.lmstudio\\models\\lmstudio-community\\Qwen3.5-9B-GGUF\\Qwen3.5-9B-Q4_K_M.gguf",
+  "n_slots": 1,
+  "n_ctx_slot": 51200
+ },
+ {
+  "ts": "2026-11-12 23:17:23",
+  "t": 1794525443.0,
+  "path": "<home>\\.lmstudio\\models\\lmstudio-community\\Qwen3-VL-4B-Instruct-GGUF\\Qwen3-VL-4B-Instruct-Q6_K.gguf",
+  "n_slots": 1,
+  "n_ctx_slot": 19200
+ },
+ {
+  "ts": "2026-11-12 23:18:00",
+  "t": 1794525480.0,
+  "path": "<home>\\.lmstudio\\models\\local\\unslothqen 4b\\Qwen3.54B.Q8_0.gguf",
+  "n_slots": 1,
+  "n_ctx_slot": 15360
+ },
+ {
+  "ts": "2026-11-12 23:46:40",
+  "t": 1794527200.0,
+  "path": "<home>\\.lmstudio\\models\\local\\LOWKEYQWEN3.52B\\Qwen3.5-2B.Q8_0.gguf",
+  "n_slots": 1,
+  "n_ctx_slot": 12544
+ },
+ {
+  "ts": "2026-11-12 23:49:01",
+  "t": 1794527341.0,
+  "path": "<home>\\.lmstudio\\models\\local\\unslothqen 4b\\Qwen3.54B.Q8_0.gguf",
+  "n_slots": 4,
+  "n_ctx_slot": 8192
+ },
+ {
+  "ts": "2026-11-12 23:49:37",
+  "t": 1794527377.0,
+  "path": "<home>\\.lmstudio\\models\\local\\LOWKEYQWEN3.52B\\Qwen3.5-2B.Q8_0.gguf",
+  "n_slots": 1,
+  "n_ctx_slot": 14592
+ },
+ {
+  "ts": "2026-11-12 23:58:53",
+  "t": 1794527933.0,
+  "path": "<home>\\.lmstudio\\models\\local\\unslothqen 4b\\Qwen3.54B.Q8_0.gguf",
+  "n_slots": 4,
+  "n_ctx_slot": 8192
+ },
+ {
+  "ts": "2026-11-13 00:02:57",
+  "t": 1794528177.0,
+  "path": "<home>\\.lmstudio\\models\\local\\unslothqen 4b\\Qwen3.54B.Q8_0.gguf",
+  "n_slots": 4,
+  "n_ctx_slot": 8192
+ },
+ {
+  "ts": "2026-11-13 00:05:27",
+  "t": 1794528327.0,
+  "path": "<home>\\.lmstudio\\models\\local\\unslothqen 4b\\Qwen3.54B.Q8_0.gguf",
+  "n_slots": 1,
+  "n_ctx_slot": 17152
+ },
+ {
+  "ts": "2026-11-13 00:05:41",
+  "t": 1794528341.0,
+  "path": "<home>\\.lmstudio\\models\\local\\unslothqen 4b\\Qwen3.54B.Q8_0.gguf",
+  "n_slots": 1,
+  "n_ctx_slot": 15872
+ },
+ {
+  "ts": "2026-11-13 00:07:55",
+  "t": 1794528475.0,
+  "path": "<home>\\.lmstudio\\models\\local\\unslothqen 4b\\Qwen3.54B.Q8_0.gguf",
+  "n_slots": 1,
+  "n_ctx_slot": 15872
+ },
+ {
+  "ts": "2026-11-13 00:08:53",
+  "t": 1794528533.0,
+  "path": "<home>\\.lmstudio\\models\\local\\LOWKEYQWEN3.52B\\Qwen3.5-2B.Q8_0.gguf",
+  "n_slots": 1,
+  "n_ctx_slot": 14592
+ },
+ {
+  "ts": "2026-11-13 00:09:40",
+  "t": 1794528580.0,
+  "path": "<home>\\.lmstudio\\models\\local\\unslothqen 4b\\Qwen3.54B.Q8_0.gguf",
+  "n_slots": 1,
+  "n_ctx_slot": 15872
+ },
+ {
+  "ts": "2026-11-13 00:16:00",
+  "t": 1794528960.0,
+  "path": "<home>\\.lmstudio\\models\\local\\unslothqen 4b\\Qwen3.54B.Q8_0.gguf",
+  "n_slots": 2,
+  "n_ctx_slot": 15872
+ },
+ {
+  "ts": "2026-11-13 00:36:55",
+  "t": 1794530215.0,
+  "path": "<home>\\.lmstudio\\models\\local\\unslothqen 4b\\Qwen3.54B.Q8_0.gguf",
+  "n_slots": 2,
+  "n_ctx_slot": 15872
+ },
+ {
+  "ts": "2026-11-13 00:39:17",
+  "t": 1794530357.0,
+  "path": "<home>\\.lmstudio\\models\\local\\unslothqen 4b\\Qwen3.54B.Q8_0.gguf",
+  "n_slots": 2,
+  "n_ctx_slot": 77056
+ }
+]

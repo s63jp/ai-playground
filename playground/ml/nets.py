@@ -24,8 +24,16 @@ ACTIVATIONS = ("relu", "tanh", "gelu", "silu", "sigmoid")
 LIMITS = {"max_layers": 8, "max_width": 1024, "max_epochs": 5000, "min_rows": 20}
 
 
-def validate_spec(spec: dict) -> dict:
-    """Check a model spec and fill in defaults. Raises MLError with a precise reason."""
+def validate_spec(spec: dict, input_columns: dict | None = None, target_columns: dict | None = None) -> dict:
+    """Check a model spec and fill in defaults. Raises MLError with a precise reason.
+
+    input_columns/target_columns default to the throw vocabulary (features.py) for backward
+    compatibility. A general transition dataset passes its own vocabulary (transition_features.py) so the
+    same validator and trainer serve both the throw special case and the general (state, action) ->
+    next-state model. Audit 2026-11-13.
+    """
+    in_cols = input_columns or INPUT_COLUMNS
+    tgt_cols = target_columns or TARGET_COLUMNS
     if not isinstance(spec, dict):
         raise MLError("invalid_spec", "A model spec must be an object.")
     s = {"name": spec.get("name"), "inputs": spec.get("inputs"), "target": spec.get("target"),
@@ -37,14 +45,14 @@ def validate_spec(spec: dict) -> dict:
     ins = s["inputs"]
     if not isinstance(ins, list) or not ins or len(set(ins)) != len(ins):
         raise MLError("invalid_spec", "inputs must be a non-empty list of distinct column names.",
-                      available_inputs=sorted(INPUT_COLUMNS))
-    bad = [c for c in ins if c not in INPUT_COLUMNS]
+                      available_inputs=sorted(in_cols))
+    bad = [c for c in ins if c not in in_cols]
     if bad:
-        raise MLError("invalid_spec", f"Unknown input column(s) {bad}. Inputs must be known at the moment of release.",
-                      available_inputs=sorted(INPUT_COLUMNS))
-    if s["target"] not in TARGET_COLUMNS:
-        raise MLError("invalid_spec", f"target must be one of {sorted(TARGET_COLUMNS)}.",
-                      available_targets=sorted(TARGET_COLUMNS))
+        raise MLError("invalid_spec", f"Unknown input column(s) {bad}.",
+                      available_inputs=sorted(in_cols))
+    if s["target"] not in tgt_cols:
+        raise MLError("invalid_spec", f"target must be one of {sorted(tgt_cols)}.",
+                      available_targets=sorted(tgt_cols))
     h = s["hidden"]
     if not isinstance(h, list) or len(h) > LIMITS["max_layers"] or \
             not all(isinstance(x, int) and 1 <= x <= LIMITS["max_width"] for x in h):
@@ -158,9 +166,14 @@ def least_squares(xtr: list[list[float]], ytr: list[float]):
     return lambda xs: (np.hstack([np.asarray(xs, dtype=float), np.ones((len(xs), 1))]) @ coef).tolist()
 
 
-def train(spec: dict, rows: list[dict], train_cfg: dict | None = None) -> dict:
-    """Train a network. Returns {"state_dict", "normaliser", "metrics", "history", ...}."""
-    spec = validate_spec(spec)
+def train(spec: dict, rows: list[dict], train_cfg: dict | None = None,
+          input_columns: dict | None = None, target_columns: dict | None = None) -> dict:
+    """Train a network. Returns {"state_dict", "normaliser", "metrics", "history", ...}.
+
+    input_columns/target_columns default to the throw vocabulary; pass the transition vocabulary to train
+    a general (state, action) -> next-state model on a transition dataset. Audit 2026-11-13.
+    """
+    spec = validate_spec(spec, input_columns, target_columns)
     tc = validate_train(train_cfg or {})
     torch = _require_torch()
     data = usable_rows(rows, spec)

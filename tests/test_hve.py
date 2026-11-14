@@ -680,6 +680,28 @@ class TestBenchmark:
                 continue
             assert t.verify(world, [])["verified"] is False, t.id
 
+    def test_spire_climbing_accepts_direct_and_indirect_support(self, cfg):
+        task = TASKS["spire_climbing"]
+
+        direct = PhysicsWorld(cfg)
+        direct.setup_finish()
+        direct.setup_agent(8.0, 0.0, feet=6.002)
+        for _ in range(20):
+            direct.step()
+        direct_result = task.verify(direct, direct.events)
+        assert direct_result["verified"], direct_result
+        assert direct_result["measured"]["direct_support"]
+
+        indirect = PhysicsWorld(cfg)
+        indirect.setup_place("block_01", [8.0, 0.0, 6.25])
+        indirect.setup_finish()
+        indirect.setup_agent(8.0, 0.0, feet=6.502)
+        for _ in range(20):
+            indirect.step()
+        indirect_result = task.verify(indirect, indirect.events)
+        assert indirect_result["verified"], indirect_result
+        assert indirect_result["measured"]["indirect_support"]
+
     def test_unfinished_construction_scene(self, cfg):
         w = PhysicsWorld(cfg)
         TASKS["complete_construction"].scene(w)

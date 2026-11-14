@@ -104,12 +104,15 @@ def nn_list(env: "Environment") -> dict:
 
 
 # ------------------------------------------------------------------ nn_make_dataset
-def nn_make_dataset(env: "Environment", name: str, min_rows: int = 20) -> dict:
-    """Build a dataset from the agent's own engine-recorded throws in this and past sessions.
+def nn_make_dataset(env: "Environment", name: str, min_rows: int = 20, kind: str = "throw") -> dict:
+    """Build a dataset from the agent's own engine records in this and past sessions.
 
     Args:
         name: Name for the dataset (1-40 chars, letters/digits/_/-).
-        min_rows: Minimum number of usable throw rows required.
+        min_rows: Minimum number of usable rows required.
+        kind: What to learn. "throw" (default) = throw outcomes. Other behaviours: "climb", "jump",
+            "locomotion", "manipulation", "placement", "affordance" (the cross-action self-model) —
+            see nn_list for the catalogue. Lets an agent learn about more than throwing.
 
     Returns:
         Dataset info including row count and provenance hash.
@@ -120,40 +123,43 @@ def nn_make_dataset(env: "Environment", name: str, min_rows: int = 20) -> dict:
     if not NAME_RE.match(name):
         raise ToolError("invalid_name", "Dataset names are 1-40 characters of letters, digits, '_' or '-'.")
 
-    # Get all sessions for this agent
-    agent_sessions = env.db.q(
-        "SELECT id FROM sessions WHERE agent_id = ? ORDER BY id",
-        (env.agent_id,)
-    )
+    agent_sessions = env.db.q("SELECT id FROM sessions WHERE agent_id = ? ORDER BY id", (env.agent_id,))
     session_ids = [s["id"] for s in agent_sessions]
-
     if not session_ids:
         raise ToolError("not_enough_data", "No sessions found for this agent.")
 
-    # Collect events from all sessions
-    all_events = []
-    for sid in session_ids:
-        events = env.db.events(sid, types=["throw_release", "flight_end"], limit=10**6)
-        all_events.extend(events)
-
-    # Build dataset
-    ds = dataset_from_session_events(all_events, env.cfg)
+    if kind == "throw":
+        all_events = []
+        for sid in session_ids:
+            all_events.extend(env.db.events(sid, types=["throw_release", "flight_end"], limit=10**6))
+        ds = dataset_from_session_events(all_events, env.cfg)
+    else:
+        from .datasets import DATASETS, build_dataset
+        if kind not in DATASETS:
+            raise ToolError("unknown_kind", f"Unknown dataset kind '{kind}'.",
+                            available=["throw"] + sorted(DATASETS))
+        actions = []
+        for sid in session_ids:
+            actions.extend(env.db.actions(sid, limit=10**6))
+        ds = build_dataset(actions, kind)
 
     if ds["manifest"]["rows"] < min_rows:
         raise ToolError("not_enough_data",
-                        f"Only {ds['manifest']['rows']} usable throw rows found; at least {min_rows} required.",
+                        f"Only {ds['manifest']['rows']} usable '{kind}' rows found; at least {min_rows} required.",
                         rows_found=ds["manifest"]["rows"])
 
     ds["manifest"]["source"] = f"agent:{env.agent_id}"
     ds["manifest"]["sessions"] = session_ids
     ds["manifest"]["created_at"] = time.time()
+    if "rows_sha256" not in ds["manifest"]:
+        ds["manifest"]["rows_sha256"] = _hash(ds["rows"])
 
-    # Save
     p = _dataset_path(env.memory.dir) / f"{name}.json"
     p.write_text(json.dumps(ds), encoding="utf-8")
 
     return {
         "name": name,
+        "kind": kind,
         "rows": ds["manifest"]["rows"],
         "rows_sha256": ds["manifest"]["rows_sha256"],
         "sessions": len(session_ids),
@@ -187,9 +193,14 @@ def nn_train(env: "Environment", dataset_name: str, spec: dict, train_config: di
 
     ds = json.loads(ds_path.read_text(encoding="utf-8"))
 
+    # The dataset carries its own column vocabulary (throw datasets use the default). This lets an agent
+    # train climb/jump/affordance/etc. models through the same path as throws (audit 2026-11-13).
+    from .datasets import vocab_from_manifest
+    in_cols, tgt_cols = vocab_from_manifest(ds.get("manifest", {}))
+
     # Validate spec
     try:
-        spec = validate_spec(spec)
+        spec = validate_spec(spec, in_cols, tgt_cols)
     except MLError as e:
         raise ToolError(e.code, e.message, **e.details) from None
 
@@ -204,7 +215,7 @@ def nn_train(env: "Environment", dataset_name: str, spec: dict, train_config: di
 
     # Train
     try:
-        result = train(spec, ds["rows"], tc)
+        result = train(spec, ds["rows"], tc, in_cols, tgt_cols)
     except MLError as e:
         raise ToolError(e.code, e.message, **e.details) from None
 

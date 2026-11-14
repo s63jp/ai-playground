@@ -1,0 +1,17 @@
+Behaviour before vs after LM Studio context overflow (server begins dropping the middle of the conversation)
+dup = call whose (tool, args, world-result) exactly repeats an earlier call in the same session
+  3 unslothqen 4b   ctx 119040 overflow@turn None | PRE n=281 obs  26% dup  14% tools 17 phys 10 | POST -
+  6 qwen/qwen3.5-9b ctx None   overflow@turn None | PRE n= 31 obs  39% dup   0% tools 14 phys 12 | POST -
+  9 lowkeyqwen3.52b ctx 12544  overflow@turn 18   | PRE n= 16 obs  94% dup   0% tools  9 phys  0 | POST n=141 obs  99% dup  78% tools 11 phys  0
+ 10 unslothqen 4b   ctx 15360  overflow@turn 25   | PRE n= 22 obs  32% dup   0% tools  7 phys  8 | POST n=159 obs  36% dup   6% tools 23 phys 24
+ 15 lowkeyqwen3.52b ctx 14592  overflow@turn 27   | PRE n= 24 obs  71% dup   4% tools  8 phys  1 | POST n=138 obs  78% dup  37% tools 12 phys  1
+ 16 lowkeyqwen3.52b ctx 14592  overflow@turn 31   | PRE n= 29 obs  86% dup  14% tools 12 phys  2 | POST -
+ 19 unslothqen 4b   ctx 8192   overflow@turn None | PRE n= 71 obs  24% dup   6% tools 24 phys 21 | POST -
+ 22 unslothqen 4b   ctx 15872  overflow@turn 23   | PRE n= 21 obs  29% dup   0% tools  7 phys  2 | POST -
+ 30 unslothqen 4b   ctx 77056  overflow@turn None | PRE n= 41 obs  41% dup   0% tools  9 phys  2 | POST -
+ 31 unslothqen 4b   ctx 77056  overflow@turn None | PRE n= 89 obs  19% dup   1% tools 16 phys 17 | POST -
+ 32 unslothqen 4b   ctx 77056  overflow@turn None | PRE n=107 obs  10% dup   3% tools  8 phys  5 | POST -
+ 33 unslothqen 4b   ctx 77056  overflow@turn None | PRE n=101 obs  21% dup   0% tools 15 phys  4 | POST -
+ 34 unslothqen 4b   ctx 77056  overflow@turn None | PRE n= 45 obs  36% dup   4% tools 17 phys  7 | POST -
+ 37 unslothqen 4b   ctx 77056  overflow@turn None | PRE n= 28 obs  36% dup   0% tools  7 phys  0 | POST -
+ 38 unslothqen 4b   ctx 77056  overflow@turn None | PRE n=199 obs  18% dup   3% tools 19 phys 58 | POST -

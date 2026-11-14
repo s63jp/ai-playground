@@ -17,6 +17,7 @@
     <button data-tab="compare">Compare agents</button>
     <button data-tab="bench">Benchmarks</button>
     <button data-tab="nn">Neural networks</button>
+    <button data-tab="lab">Run &amp; models</button>
   </nav>
   <span id="health"></span>
 </header>
@@ -83,15 +84,104 @@
   <div class="card"><h3>Benchmark and ablation runs</h3><div id="b-runs"></div></div>
 </section>
 
+<section id="tab-lab" class="tab">
+  <div class="cols2">
+    <div>
+      <div class="card">
+        <h3>Model provider <span class="muted small">(LM Studio, Unsloth, any OpenAI-compatible server)</span></h3>
+        <div class="form-row">
+          <label>Provider <select id="lab-adapter"></select></label>
+          <button id="lab-list-models" class="btn">List models</button>
+          <span id="lab-models-status" class="muted small"></span>
+        </div>
+        <div id="lab-models" class="scroll"></div>
+      </div>
+      <div class="card">
+        <h3>Launch exploration <span class="muted small">(runs live in the world)</span></h3>
+        <form id="lab-run-form">
+          <div class="form-row">
+            <label>Agent <select id="lab-run-agent"></select></label>
+            <label>Model <input type="text" id="lab-run-model" placeholder="default / &lt;id&gt;" size="20"></label>
+          </div>
+          <div class="form-row">
+            <label>Sessions <input type="number" id="lab-run-sessions" value="1" min="1" max="20"></label>
+            <label>Max continuations <input type="number" id="lab-run-cont" value="0" min="0" max="20"></label>
+            <button type="submit" class="btn">Launch run</button>
+          </div>
+          <div id="lab-run-status" class="muted small"></div>
+        </form>
+      </div>
+      <div class="card">
+        <h3>Neural-network tools</h3>
+        <div class="form-row">
+          <label><input type="checkbox" id="lab-ml-global"> enabled globally</label>
+          <span id="lab-ml-status" class="muted small"></span>
+        </div>
+        <div id="lab-ml-agents" class="scroll small"></div>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <h3>Compare models <span class="muted small">(equal conditions: fresh agents, same cap &amp; window)</span></h3>
+        <form id="lab-cmp-form">
+          <div class="form-row">
+            <label>Models (comma-separated ids) <input type="text" id="lab-cmp-models" placeholder="modelA, modelB" size="28"></label>
+          </div>
+          <div class="form-row">
+            <label>Agents/model <input type="number" id="lab-cmp-agents" value="2" min="1" max="10"></label>
+            <label>Max steps <input type="number" id="lab-cmp-steps" value="60" min="5" max="500"></label>
+            <label>Context tokens <input type="number" id="lab-cmp-ctx" placeholder="auto" min="1000"></label>
+            <button type="submit" class="btn">Run comparison</button>
+          </div>
+          <div id="lab-cmp-status" class="muted small"></div>
+        </form>
+        <div id="lab-cmp-results" class="scroll tall"></div>
+      </div>
+      <div class="card">
+        <h3>Provenance audit <span class="muted small">(sessions whose brain ≠ the recorded adapter)</span></h3>
+        <button id="lab-prov-run" class="btn">Check provenance</button>
+        <div id="lab-prov" class="scroll"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section id="tab-nn" class="tab">
   <div class="bar">
+    <label>Registry
+      <select id="nn-scope">
+        <option value="researcher">researcher (shared)</option>
+        <option value="agent">agent (per-agent)</option>
+      </select>
+    </label>
+    <label id="nn-owner-wrap" style="display:none">Agent <select id="nn-owner"></select></label>
     <span id="nn-status" class="muted small"></span>
   </div>
   <div class="cols2">
     <div>
       <div class="card">
-        <h3>Datasets</h3>
+        <h3>Datasets <span class="muted small">(for the selected registry)</span></h3>
         <div id="nn-datasets"></div>
+      </div>
+      <div class="card">
+        <h3>Generate dataset <span class="muted small">(runs the real MuJoCo world)</span></h3>
+        <form id="nn-gen-form" class="form-row">
+          <label>Name <input type="text" id="nn-gen-name" placeholder="my_throws" maxlength="40"></label>
+          <label>Throws <input type="number" id="nn-gen-n" value="1500" min="10" max="20000"></label>
+          <label>Seed <input type="number" id="nn-gen-seed" value="7"></label>
+          <button type="submit" class="btn">Generate</button>
+          <span id="nn-gen-status" class="muted small"></span>
+        </form>
+      </div>
+      <div class="card">
+        <h3>Build behaviour dataset <span class="muted small">(climb, jump, cognition… from the recorded log)</span></h3>
+        <form id="nn-beh-form" class="form-row">
+          <label>Kind <select id="nn-beh-kind"></select></label>
+          <label>Name <input type="text" id="nn-beh-name" placeholder="my_climbs" maxlength="40"></label>
+          <button type="submit" class="btn">Build</button>
+          <span id="nn-beh-status" class="muted small"></span>
+        </form>
+        <div id="nn-beh-desc" class="muted small"></div>
       </div>
       <div class="card">
         <h3>Models</h3>
@@ -104,7 +194,7 @@
         <div id="nn-detail"></div>
       </div>
       <div class="card">
-        <h3>Train new model</h3>
+        <h3>Train new model <span class="muted small">(saves into the selected registry)</span></h3>
         <form id="nn-train-form">
           <div class="form-row">
             <label>Dataset <select id="nn-ds-select"></select></label>

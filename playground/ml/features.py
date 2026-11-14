@@ -36,6 +36,24 @@ TARGET_COLUMNS = {
 }
 ALL_COLUMNS = {**INPUT_COLUMNS, **TARGET_COLUMNS}
 
+# ---- Contact-manipulation (push/pull/slide/roll/kick/nudge) rows. A separate, smaller feature set:
+# what the agent controlled at the moment of contact, paired with how far/fast the object then went.
+# These let a network learn the NON-throw dynamics of the world (action-space expansion 2026-11-13).
+IMPULSE_INPUT_COLUMNS = {
+    "force": "contact force in newtons",
+    "dir_x": "x (east) component of the unit contact direction",
+    "dir_y": "y (north) component of the unit contact direction",
+    "object_mass": "mass of the object, kg",
+    "launch_speed": "speed imparted to the object at contact, m/s",
+}
+IMPULSE_TARGET_COLUMNS = {
+    "distance_moved": "how far the object ended up from where it started, m",
+    "horizontal_range": "horizontal distance from contact point to first impact, m",
+    "impact_speed": "speed at first impact, m/s",
+    "flight_time": "seconds from contact to first impact",
+}
+IMPULSE_COLUMNS = {**IMPULSE_INPUT_COLUMNS, **IMPULSE_TARGET_COLUMNS}
+
 
 def _f(v: Any) -> float | None:
     try:
@@ -108,5 +126,38 @@ def throw_row(release: dict, flight: dict | None = None) -> dict | None:
         "impact_speed": _f(fl.get("impact_speed")),
     }
     if row["force"] is None or row["object_mass"] is None:
+        return None
+    return {k: (round(v, 6) if isinstance(v, float) else v) for k, v in row.items()}
+
+
+def impulse_row(launch: dict, end: dict | None = None) -> dict | None:
+    """Build one contact-manipulation row from an object_impulse record and its flight_end.
+
+    `launch` is the object_impulse event data (verb, force, direction, launch_speed, object_mass);
+    `end` is the matching flight_end. Returns None if the essentials are missing.
+    """
+    d = launch.get("direction")
+    if d is None or _f(launch.get("force")) is None or _f(launch.get("object_mass")) is None:
+        return None
+    dx, dy = float(d[0]), float(d[1])
+    n = math.hypot(dx, dy) or 1.0
+    e = end or {}
+    start = launch.get("contact_position")
+    fp = e.get("final_position")
+    dist = e.get("distance_moved")
+    if dist is None and start is not None and fp is not None:
+        dist = math.hypot(float(fp[0]) - float(start[0]), float(fp[1]) - float(start[1]))
+    row = {
+        "verb": launch.get("verb"),
+        "force": _f(launch.get("force")),
+        "dir_x": dx / n, "dir_y": dy / n,
+        "object_mass": _f(launch.get("object_mass")),
+        "launch_speed": _f(launch.get("launch_speed")),
+        "distance_moved": _f(dist),
+        "horizontal_range": _f(e.get("horizontal_range")),
+        "impact_speed": _f(e.get("impact_speed")),
+        "flight_time": _f(e.get("flight_time")),
+    }
+    if row["launch_speed"] is None:
         return None
     return {k: (round(v, 6) if isinstance(v, float) else v) for k, v in row.items()}

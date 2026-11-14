@@ -136,6 +136,24 @@ def researcher_registry(cfg: dict) -> Registry:
     return Registry(cfg)
 
 
+def registry_for(cfg: dict, scope: str = "researcher", owner: str = "researcher") -> Registry:
+    """A Registry rooted at the right place for `scope`/`owner`.
+
+    scope 'researcher' (or owner 'researcher') -> the shared researcher registry under experiments/ml/.
+    scope 'agent' -> that agent's own registry under <memory.root>/<owner>/nn/, which is the SAME layout
+    (datasets/ and models/<owner>/<name>/v*.json) the agent's in-session nn_* tools write to, so a model
+    an agent trained for itself and a model the researcher trained INTO that agent are one and the same.
+    This is the single source of truth the dashboard, CLI and neural adapter all go through so per-agent
+    networks are selectable and testable the same way everywhere (audit 2026-11-13, stage: NN lab).
+    """
+    if scope == "researcher" or owner == "researcher":
+        return Registry(cfg)
+    if not NAME_RE.match(owner):
+        raise MLError("invalid_name", "Agent owner must be 1-40 characters of letters, digits, '_' or '-'.")
+    mem_root = resolve_path(cfg, cfg["memory"]["root"])
+    return Registry(cfg, root=mem_root / owner / "nn")
+
+
 def agent_nn_root(memory_dir: Path) -> Path:
     """Single source of truth for where an agent's ML artefacts live: <agent memory dir>/nn/."""
     return Path(memory_dir) / "nn"

@@ -84,6 +84,55 @@ TOOLS: list[dict] = [
     _tool("catch", "object", "Wait for a moving object to come within reach and grab it.",
           {"object_id": STR, "max_wait": {**NUM, "description": "Seconds to wait at most. Default 5."}},
           ["object_id"]),
+    # ---------------------------------------------------------------- contact manipulation
+    # Ways to move an object you are NOT holding. The object must be within reach and resting.
+    _tool("push", "object", "Push an object that is within reach, away from you (or along a direction).",
+          {"object_id": STR, "direction": {**DIRECTION, "description": DIRECTION["description"] +
+                                            " Optional: without it, the object is pushed directly away from you."},
+           "force": {**NUM, "description": "Newtons, 5 to 120. Default 40."},
+           "wait": {"type": "string", "enum": ["rest", "impact", "none"]}},
+          ["object_id"]),
+    _tool("pull", "object", "Pull an object that is within reach towards you.",
+          {"object_id": STR, "force": {**NUM, "description": "Newtons, 5 to 60. Default 25."},
+           "wait": {"type": "string", "enum": ["rest", "impact", "none"]}},
+          ["object_id"]),
+    _tool("slide", "object", "Slide an object that is within reach along the ground in a direction.",
+          {"object_id": STR, "direction": DIRECTION,
+           "force": {**NUM, "description": "Newtons, 2 to 80. Default 30."},
+           "wait": {"type": "string", "enum": ["rest", "impact", "none"]}},
+          ["object_id", "direction"]),
+    _tool("nudge", "object", "Give an object within reach a small gentle push.",
+          {"object_id": STR, "direction": {**DIRECTION, "description": DIRECTION["description"] +
+                                            " Optional: defaults to directly away from you."},
+           "force": {**NUM, "description": "Newtons, 1 to 15. Default 6."},
+           "wait": {"type": "string", "enum": ["rest", "impact", "none"]}},
+          ["object_id"]),
+    _tool("kick", "object", "Kick an object within reach, sending it off with some lift.",
+          {"object_id": STR, "direction": {**DIRECTION, "description": DIRECTION["description"] +
+                                            " Optional: defaults to directly away from you."},
+           "force": {**NUM, "description": "Newtons, 20 to 160. Default 80."},
+           "wait": {"type": "string", "enum": ["rest", "impact", "none"]}},
+          ["object_id"]),
+    _tool("roll", "object", "Roll an object within reach along the ground (works best on round objects).",
+          {"object_id": STR, "direction": DIRECTION,
+           "force": {**NUM, "description": "Newtons, 5 to 120. Default 40."},
+           "wait": {"type": "string", "enum": ["rest", "impact", "none"]}},
+          ["object_id", "direction"]),
+    # ---------------------------------------------------------------- construction (convenience)
+    # Thin, discoverable wrappers over pick_up + carry + place. They encode no strategy: they just
+    # spare an agent the exact release-coordinate arithmetic, so stacking/lining up is as cheap to
+    # TRY as throwing. Whether they help is for the agent to judge from the result.
+    _tool("stack_on", "object", "Put the object you are holding on top of another object.",
+          {"object_id": {**STR, "description": "Optional; defaults to the held object."},
+           "target_id": {**STR, "description": "The object to stack on top of."}},
+          ["target_id"]),
+    _tool("build_row", "object",
+          "Place the object you are holding next to another one, forming or extending a row on the ground.",
+          {"object_id": {**STR, "description": "Optional; defaults to the held object."},
+           "beside_id": {**STR, "description": "The object to place next to."},
+           "direction": {**DIRECTION, "description": DIRECTION["description"] +
+                         " Which way from the neighbour to place it. Optional; defaults to the open side."}},
+          ["beside_id"]),
     # ---------------------------------------------------------------- experimentation
     _tool("measure_height", "experiment", "Measure heights of yourself, an object or the surface at a point.",
           {"target": TARGET}),
@@ -151,8 +200,14 @@ TOOLS: list[dict] = [
     _tool("record_mistake", "memory", "Record a mistake and what you learned from it.",
           {"what": STR, "why": STR, "lesson": STR, "action_refs": {"type": "array", "items": INT}}, ["what"],
           program_ok=False),
-    _tool("set_goal", "memory", "Note an objective you have chosen for yourself.",
-          {"title": STR, "description": STR}, ["title"], program_ok=False),
+    _tool("set_goal", "memory", "Note an objective you have chosen for yourself. Use 'kind' to say what "
+          "it is: a question you want answered, a hypothesis you want to test, or a thing you want to "
+          "build or do. 'next_step' is the very next action you intend to take towards it.",
+          {"title": STR, "description": STR,
+           "kind": {"type": "string", "enum": ["question", "hypothesis", "build", "explore", "objective"],
+                    "description": "What sort of goal this is. Default: objective."},
+           "next_step": {**STR, "description": "The next concrete action you plan to take towards it."}},
+          ["title"], program_ok=False),
     _tool("update_goal", "memory",
           "Change a goal's status. A goal marked completed can carry a claim, which is checked independently.",
           {"goal_id": STR, "status": {"type": "string", "enum": ["active", "paused", "completed", "abandoned"]},
@@ -168,16 +223,24 @@ TOOLS: list[dict] = [
           "State that you have achieved something and have it checked against the physical record. Types: "
           "tower, object_on, agent_on, height_reached, block_count, juggle, structure.",
           {"type": STR, "params": {"type": "object"}, "description": STR}, ["type"], program_ok=False),
-    _tool("end_session", "memory", "Finish for now. Your memory files are kept; the island is reset.",
-          {"reason": STR}, program_ok=False),
+    _tool("end_session", "memory", "Finish for now. Your memory files are kept; the island is reset. "
+          "Set continue_next_session=true if you have unfinished experiments or open questions and would "
+          "like another session (with this same memory) to carry on, rather than treating this as the end.",
+          {"reason": STR, "continue_next_session": {"type": "boolean",
+           "description": "True if you want to resume exploring in a follow-up session."}},
+          program_ok=False),
     # ---------------------------------------------------------------- learning (neural networks)
     _tool("nn_list", "learning",
           "List your trained models and datasets. Shows available input columns and prediction targets.",
           program_ok=False),
     _tool("nn_make_dataset", "learning",
-          "Build a dataset from your own engine-recorded throws. Only includes throws from your sessions.",
+          "Build a dataset from your own engine-recorded actions. kind='throw' (default) learns throw "
+          "outcomes; 'climb','jump','locomotion','manipulation','placement','affordance' learn other "
+          "behaviours (affordance = a self-model of which actions succeed). nn_list shows the catalogue.",
           {"name": {**STR, "description": "1-40 chars: letters, digits, underscores, hyphens."},
-           "min_rows": {**INT, "description": "Minimum usable throw rows required. Default 20."}},
+           "kind": {**STR, "description": "throw (default), climb, jump, locomotion, manipulation, "
+                                          "placement, or affordance."},
+           "min_rows": {**INT, "description": "Minimum usable rows required. Default 20."}},
           ["name"], program_ok=False),
     _tool("nn_train", "learning",
           "Train a neural network on one of your datasets. Training happens on CPU.",
