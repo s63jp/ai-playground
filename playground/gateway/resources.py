@@ -22,6 +22,7 @@ import ctypes
 import json
 import subprocess
 import sys
+import threading
 import time
 from typing import Any
 
@@ -29,6 +30,7 @@ _IS_WINDOWS = sys.platform.startswith("win")
 _GPU_COUNTER_TTL = 4.0        # perf-counter queries are slow; cache briefly
 _gpu_counter_cache: dict[str, Any] = {}
 _cpu_prev: dict[str, int] = {}
+_lock = threading.Lock()      # guards the module-global sampling caches (snapshot() runs in the threadpool)
 
 try:                              # optional, never required
     import psutil as _psutil
@@ -95,14 +97,16 @@ def cpu_percent() -> dict:
             if ok:
                 i, k, u = _ft(idle), _ft(kern), _ft(user)
                 busy, total = (k + u) - i, (k + u)
-                prev = _cpu_prev
-                if prev:
-                    db, dt = busy - prev["busy"], total - prev["total"]
+                # Read the previous baseline and store the new sample atomically, so a
+                # concurrent caller never observes a half-updated baseline.
+                with _lock:
+                    prev = dict(_cpu_prev)
                     _cpu_prev.update(busy=busy, total=total)
-                    pct = round(100.0 * db / dt, 1) if dt > 0 else None
+                if prev:
+                    d_busy, d_total = busy - prev["busy"], total - prev["total"]
+                    pct = round(100.0 * d_busy / d_total, 1) if d_total > 0 else None
                     return {"percent": pct, "logical_cores": _cpu_count(),
                             "source": "measured", "via": "GetSystemTimes"}
-                _cpu_prev.update(busy=busy, total=total)
                 # first call has no baseline: take a brief 80ms sample so we still return a number
                 time.sleep(0.08)
                 return cpu_percent()
@@ -138,9 +142,10 @@ def _query_windows_gpu_counters(timeout: float = 6.0) -> list[dict] | None:
     if not _IS_WINDOWS:
         return None
     now = time.time()
-    c = _gpu_counter_cache.get("samples")
-    if c and now - c["ts"] < _GPU_COUNTER_TTL:
-        return c["data"]
+    with _lock:
+        c = _gpu_counter_cache.get("samples")
+        if c and now - c["ts"] < _GPU_COUNTER_TTL:
+            return c["data"]
     ps = (
         "$ErrorActionPreference='SilentlyContinue';"
         "$e=(Get-Counter '\\GPU Engine(*)\\Utilization Percentage').CounterSamples |"
@@ -154,15 +159,18 @@ def _query_windows_gpu_counters(timeout: float = 6.0) -> list[dict] | None:
                              capture_output=True, text=True, timeout=timeout)
         txt = (out.stdout or "").strip()
         if not txt:
-            _gpu_counter_cache["samples"] = {"ts": now, "data": None}
+            with _lock:
+                _gpu_counter_cache["samples"] = {"ts": now, "data": None}
             return None
         data = json.loads(txt)
         if isinstance(data, dict):
             data = [data]
-        _gpu_counter_cache["samples"] = {"ts": now, "data": data}
+        with _lock:
+            _gpu_counter_cache["samples"] = {"ts": now, "data": data}
         return data
     except (subprocess.SubprocessError, OSError, ValueError):
-        _gpu_counter_cache["samples"] = {"ts": now, "data": None}
+        with _lock:
+            _gpu_counter_cache["samples"] = {"ts": now, "data": None}
         return None
 
 
@@ -212,6 +220,27 @@ def gpus() -> list[dict]:
     except Exception:  # noqa: BLE001
         torch = None
 
+    # Count GPUs so we can be honest about attribution: the perf counters are system-wide, so a
+    # cross-adapter max can only be pinned to a specific device when there is exactly one GPU.
+    n_devices = 0
+    if torch is not None:
+        try:
+            if hasattr(torch, "xpu") and torch.xpu.is_available():
+                n_devices += torch.xpu.device_count()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if torch.cuda.is_available():
+                n_devices += torch.cuda.device_count()
+        except Exception:  # noqa: BLE001
+            pass
+    single = n_devices == 1
+    # Utilisation is a derived composite of per-engine counters (summed+capped), so it is an
+    # ESTIMATE, never labelled measured. Dedicated VRAM is a direct counter read, measured only
+    # when it can be attributed to the one GPU present.
+    util_src = "estimated" if sys_util is not None else "unknown"
+    mem_src = ("measured" if single else "estimated") if dedicated is not None else "unknown"
+
     def _add_devices(backend, count, props, alloc, reserved, total_attr):
         for i in range(count):
             p = props(i)
@@ -222,13 +251,14 @@ def gpus() -> list[dict]:
                 "total_vram_bytes": _tag(total, "measured" if total else "unknown"),
                 "torch_allocated_bytes": _tag(alloc(i), "measured", scope="process_torch"),
                 "torch_reserved_bytes": _tag(reserved(i), "measured", scope="process_torch"),
-                "utilization_percent": _tag(sys_util, "measured" if sys_util is not None else "unknown",
-                                            scope="system" if sys_util is not None else None),
-                "dedicated_vram_used_bytes": _tag(dedicated, "measured" if dedicated is not None else "unknown",
+                "utilization_percent": _tag(sys_util, util_src,
+                                            scope="system_aggregate" if sys_util is not None else None),
+                "dedicated_vram_used_bytes": _tag(dedicated, mem_src,
                                                   scope="system" if dedicated is not None else None),
             }
             if total and dedicated is not None:
-                dev["vram_percent"] = _tag(round(100.0 * dedicated / total, 1), "measured", scope="system")
+                pct = round(min(100.0, max(0.0, 100.0 * dedicated / total)), 1)   # clamped to [0,100]
+                dev["vram_percent"] = _tag(pct, mem_src, scope="system")
             out.append(dev)
 
     if torch is not None:

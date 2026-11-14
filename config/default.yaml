@@ -118,6 +118,11 @@ server:
 # settings tune the OpenAI-compatible /v1 passthrough and (stage C) its resource manager.
 gateway:
   request_timeout: 300          # seconds for an outbound provider request
+  # Security: by default the gateway is loopback-only (server.host 127.0.0.1) and needs no auth.
+  # If you bind the dashboard to a non-loopback host, set auth_token_env to the NAME of an env var
+  # holding a shared secret; every /v1 request must then present it (Authorization: Bearer <token>
+  # or X-Gateway-Key). Without it on a non-loopback bind the gateway warns that /v1 is an open relay.
+  auth_token_env: null
   # Concurrency limits are added in stage C:
   #   max_concurrent: global cap; per_provider / per_model / per_agent: {name: limit}
   #   queue_max: 0 disables queueing (reject when full)

@@ -373,6 +373,30 @@ class Database:
         sets = ",".join(f"{k}=?" for k in f)
         self.x(f"UPDATE gateway_requests SET {sets} WHERE request_id=?", [*f.values(), request_id])
 
+    def gateway_request_finish(self, request_id: str, **f) -> None:
+        """Write a terminal status, but never overwrite a row already 'cancelled' (so a
+        completion that races a cancel cannot resurrect the request as 'done')."""
+        for k in ("request_json", "response_json"):
+            if k in f and not isinstance(f[k], (str, type(None))):
+                f[k] = _j(f[k])
+        if not f:
+            return
+        sets = ",".join(f"{k}=?" for k in f)
+        self.x(f"UPDATE gateway_requests SET {sets} WHERE request_id=? AND status!='cancelled'",
+               [*f.values(), request_id])
+
+    def gateway_request_cancel(self, request_id: str) -> dict:
+        """Atomically move a queued/running request to 'cancelled'. Single UPDATE guarded on
+        status, so it cannot race a concurrent completion. Returns {found, cancelled}."""
+        with self.lock:
+            cur = self.conn.execute(
+                "UPDATE gateway_requests SET status='cancelled', cancelled=1, ended_at=? "
+                "WHERE request_id=? AND status IN ('queued','running')", (time.time(), request_id))
+            cancelled = cur.rowcount > 0
+            exists = self.conn.execute(
+                "SELECT 1 FROM gateway_requests WHERE request_id=?", (request_id,)).fetchone()
+        return {"found": bool(exists), "cancelled": cancelled}
+
     def gateway_request(self, request_id: str) -> dict | None:
         r = self.one("SELECT * FROM gateway_requests WHERE request_id=?", (request_id,))
         if r:

@@ -167,14 +167,18 @@ def test_failover_to_second_provider(cfg, db, monkeypatch):
     # Two providers both offer the model; the first is unreachable, the second answers.
     monkeypatch.setattr("playground.gateway.providers.list_openai_models",
                         lambda base, *a, **k: [{"id": "shared", "state": "loaded"}])
+    # Names chosen so the FAILING provider (a_primary -> LM_BASE) is ranked first and the gateway
+    # must fail over to the reachable one (z_backup), genuinely exercising the failover path.
     two = {"adapters": {
-        "primary": {"type": "openai_compat", "base_url": LM_BASE, "model": "shared"},
-        "backup": {"type": "openai_compat", "base_url": "http://127.0.0.1:5555/v1", "model": "shared"}}}
+        "a_primary": {"type": "openai_compat", "base_url": LM_BASE, "model": "shared"},
+        "z_backup": {"type": "openai_compat", "base_url": "http://127.0.0.1:5555/v1", "model": "shared"}}}
     merged = {**cfg, "adapters": two["adapters"]}
     app = create_app(merged, db)
     gw = app.state.gateway["chat_gateway"]
+    tried = []
 
     def flaky_post(url, json, headers):
+        tried.append(url)
         if url.startswith(LM_BASE):
             raise httpx.ConnectError("primary down")
         return FakeResp(200, _completion(True))
@@ -182,9 +186,11 @@ def test_failover_to_second_provider(cfg, db, monkeypatch):
     r = TestClient(app).post("/v1/chat/completions",
                              json={"model": "shared", "messages": [{"role": "user", "content": "x"}]})
     assert r.status_code == 200
+    assert tried[0].startswith(LM_BASE)            # the failing provider was tried first
+    assert len(tried) == 2                         # then failed over
     row = db.gateway_requests()[0]
     assert row["status"] == "done"
-    assert row["provider"] == "backup"             # failed over to the reachable provider
+    assert row["provider"] == "z_backup"           # recorded provider is the one that answered
 
 
 def test_monitor_list_filters(app_db, monkeypatch):
