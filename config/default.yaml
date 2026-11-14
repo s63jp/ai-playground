@@ -123,9 +123,20 @@ gateway:
   # holding a shared secret; every /v1 request must then present it (Authorization: Bearer <token>
   # or X-Gateway-Key). Without it on a non-loopback bind the gateway warns that /v1 is an open relay.
   auth_token_env: null
-  # Concurrency limits are added in stage C:
-  #   max_concurrent: global cap; per_provider / per_model / per_agent: {name: limit}
-  #   queue_max: 0 disables queueing (reject when full)
+  # Backend-enforced concurrency + request queue. All limits default to 0 = unlimited, so the
+  # gateway is unconstrained out of the box and behaves exactly as before. Raise a limit to cap
+  # how many requests run at once in a scope; excess requests queue (ordered by priority, then
+  # FIFO) until a slot frees. A request header X-Playground-Priority overrides default_priority.
+  concurrency:
+    max_concurrent: 0        # global cap across all providers/agents (0 = unlimited)
+    provider_default: 0      # default per-provider cap; per_provider overrides by name
+    model_default: 0         # default per-model cap; per_model overrides by name
+    agent_default: 0         # default per-agent cap; per_agent overrides by name (stops monopoly)
+    per_provider: {}         # e.g. {lmstudio: 2}
+    per_model: {}            # e.g. {"qwen/qwen3.5-9b": 1}
+    per_agent: {}            # e.g. {agent_001: 1}
+    queue_max: 0             # max queued requests (0 = unbounded); reject with 429 when full
+    default_priority: 5      # higher = scheduled sooner
 
 # Agent "brains". The simulator is provider neutral; pick one with --adapter.
 # Secrets are never stored here: api_key_env names an environment variable.

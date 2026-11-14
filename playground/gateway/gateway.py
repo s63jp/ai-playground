@@ -18,21 +18,31 @@ import time
 from typing import Any
 
 import httpx
-from fastapi import HTTPException, Query, Request
+from fastapi import Body, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
+from .concurrency import Admission, Cancelled, QueueFull, ResourceManager
 from .router import Router
 from .tracking import RequestMonitor, redact, redact_text, tokens_from_response, estimate_prompt_tokens
 
 ENDPOINT = "/v1/chat/completions"
 
-# Request headers the gateway reads for identity/correlation (all optional).
+# Request headers the gateway reads for identity/correlation/priority (all optional).
 H_AGENT = "x-playground-agent"
 H_APP = "x-playground-app"
 H_REQID = "x-request-id"
 H_CORR = "x-correlation-id"
 H_IDEM = "idempotency-key"
+H_PRIORITY = "x-playground-priority"
+
+
+def _priority(headers: Any) -> int | None:
+    raw = headers.get(H_PRIORITY)
+    try:
+        return int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _identity(headers: Any) -> dict:
@@ -64,6 +74,7 @@ class ChatGateway:
         gw = (cfg.get("gateway") or {})
         self.timeout = float(gw.get("request_timeout", 300.0))
         self.client = httpx.Client(timeout=self.timeout)
+        self.rm = ResourceManager(gw.get("concurrency"))
 
     def _provider_headers(self, route) -> dict:
         h = {"Content-Type": "application/json"}
@@ -115,9 +126,34 @@ class ChatGateway:
                     "error": {"message": msg, "type": "model_not_found"}},
                     headers={"X-Request-Id": request_id})
 
+            provider0 = candidates[0].name
+            if not self.rm.enabled:
+                started = time.time()
+                self.monitor.create(status="running", started_at=started, provider=provider0, **base)
+                return self._forward(request_id, body, candidates, started)
+            # Backend-enforced concurrency: the request is queued until it can be admitted across
+            # every applicable scope (global / provider / model / agent).
+            self.monitor.create(status="queued", provider=provider0, **base)
+            try:
+                adm = self.rm.acquire(provider0, model, ident["agent"], _priority(headers),
+                                      is_cancelled=lambda: self.monitor.is_cancelled(request_id))
+            except QueueFull:
+                self.monitor.finish(request_id, status="error", http_status=429,
+                                    error="request queue full", ended_at=time.time())
+                return JSONResponse(status_code=429, content={
+                    "error": {"message": "request queue is full", "type": "rate_limit_exceeded"}},
+                    headers={"X-Request-Id": request_id})
+            except Cancelled:
+                self.monitor.update(request_id, status="cancelled", cancelled=1, ended_at=time.time())
+                return JSONResponse(status_code=499, content={
+                    "error": {"message": "request cancelled while queued", "type": "cancelled"}},
+                    headers={"X-Request-Id": request_id})
             started = time.time()
-            self.monitor.create(status="running", started_at=started, provider=candidates[0].name, **base)
-            return self._forward(request_id, body, candidates, started)
+            self.monitor.update(request_id, status="running", started_at=started)
+            try:
+                return self._forward(request_id, body, candidates, started)
+            finally:
+                self.rm.release(adm)
         finally:
             self.monitor.clear_inflight(idem, request_id)
 
@@ -204,10 +240,33 @@ class ChatGateway:
                 "error": {"message": msg, "type": "model_not_found"}},
                 headers={"X-Request-Id": request_id})
         route = candidates[0]
-        started = time.time()
-        self.monitor.create(status="running", request_id=request_id, correlation_id=correlation_id,
-                            agent=ident["agent"], app=ident["app"], provider=route.name, model=model,
-                            endpoint=ENDPOINT, stream=1, started_at=started, request_json=redact(body))
+        # Backend concurrency: for a stream the admission is held for the whole response.
+        adm = Admission()
+        if self.rm.enabled:
+            self.monitor.create(status="queued", request_id=request_id, correlation_id=correlation_id,
+                                agent=ident["agent"], app=ident["app"], provider=route.name, model=model,
+                                endpoint=ENDPOINT, stream=1, request_json=redact(body))
+            try:
+                adm = self.rm.acquire(route.name, model, ident["agent"], _priority(headers),
+                                      is_cancelled=lambda: self.monitor.is_cancelled(request_id))
+            except QueueFull:
+                self.monitor.finish(request_id, status="error", http_status=429,
+                                    error="request queue full", ended_at=time.time())
+                return JSONResponse(status_code=429, content={
+                    "error": {"message": "request queue is full", "type": "rate_limit_exceeded"}},
+                    headers={"X-Request-Id": request_id})
+            except Cancelled:
+                self.monitor.update(request_id, status="cancelled", cancelled=1, ended_at=time.time())
+                return JSONResponse(status_code=499, content={
+                    "error": {"message": "request cancelled while queued", "type": "cancelled"}},
+                    headers={"X-Request-Id": request_id})
+            started = time.time()
+            self.monitor.update(request_id, status="running", started_at=started)
+        else:
+            started = time.time()
+            self.monitor.create(status="running", request_id=request_id, correlation_id=correlation_id,
+                                agent=ident["agent"], app=ident["app"], provider=route.name, model=model,
+                                endpoint=ENDPOINT, stream=1, started_at=started, request_json=redact(body))
         url = route.base_url.rstrip("/") + "/chat/completions"
         monitor = self.monitor
 
@@ -215,6 +274,7 @@ class ChatGateway:
             req = self.client.build_request("POST", url, json=body, headers=self._provider_headers(route))
             resp = self.client.send(req, stream=True)
         except (httpx.TransportError, httpx.TimeoutException) as exc:
+            self.rm.release(adm)
             err = redact_text(f"{type(exc).__name__}: {exc}")
             monitor.finish(request_id, status="error", http_status=502, error=err, ended_at=time.time(),
                            latency_ms=round((time.time() - started) * 1000, 1))
@@ -225,6 +285,7 @@ class ChatGateway:
         if resp.status_code != 200:
             body_text = redact_text(resp.read().decode("utf-8", "replace"), 500)
             resp.close()
+            self.rm.release(adm)
             monitor.finish(request_id, status="error", http_status=resp.status_code,
                            error=f"HTTP {resp.status_code}", ended_at=time.time(),
                            latency_ms=round((time.time() - started) * 1000, 1))
@@ -251,6 +312,7 @@ class ChatGateway:
                     {"error": {"message": err, "type": "provider_unavailable"}}).encode() + b"\n\n")
             finally:
                 resp.close()
+                self.rm.release(adm)
                 latency = round((time.time() - started) * 1000, 1)
                 # Streamed responses rarely carry a usage block; estimate and label it.
                 pt = estimate_prompt_tokens(body)
@@ -271,6 +333,7 @@ def register_chat_routes(app, cfg: dict, db: Any, state: dict) -> None:
     gateway = ChatGateway(cfg, db, state["registry"], request_monitor)
     state["request_monitor"] = request_monitor
     state["chat_gateway"] = gateway
+    state["resource_manager"] = gateway.rm
 
     # Optional gateway auth. The gateway attaches each provider's own key to outbound calls, so
     # an unauthenticated /v1 endpoint exposed off-loopback would be an open relay to those
@@ -339,3 +402,17 @@ def register_chat_routes(app, cfg: dict, db: Any, state: dict) -> None:
         if not found:
             raise HTTPException(404, f"no request '{request_id}'")
         return {"request_id": request_id, "cancelled": True}
+
+    # ------------------------------------------------------------ resource management (queue)
+    @app.get("/api/gateway/queue")
+    def gateway_queue():
+        return gateway.rm.snapshot()
+
+    @app.get("/api/gateway/concurrency")
+    def gateway_concurrency():
+        return gateway.rm._limits_dict()
+
+    @app.post("/api/gateway/concurrency")
+    def gateway_concurrency_set(patch: dict = Body(...)):
+        """Change concurrency limits live (backend-enforced on the next admission)."""
+        return gateway.rm.update_limits(patch)
