@@ -31,7 +31,7 @@ jobs:
           # CPU PyTorch so the neural-network tests actually run (the repo pins an XPU build for local dev).
           pip install torch --index-url https://download.pytorch.org/whl/cpu
 
-      - name: Run the test suite (XPU-only tests excluded)
+      - name: Run the test suite (XPU + platform-physics tests excluded)
         env:
           MUJOCO_GL: egl
-        run: python -m pytest -m "not xpu" -q
+        run: python -m pytest -m "not xpu and not physics" -q

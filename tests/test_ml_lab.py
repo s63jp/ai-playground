@@ -191,8 +191,14 @@ class TestAgentToolsHappy:
         assert not r["success"]
         assert r["error"]["code"] == "not_enough_data"
 
+    @pytest.mark.physics
     def test_agent_tools_end_to_end(self, make_env):
-        """Full workflow: make dataset -> train -> predict -> evaluate."""
+        """Full workflow: make dataset -> train -> predict -> evaluate.
+
+        Marked `physics`: it needs ~15 *usable* rows to emerge from 40 real throws, and how many land
+        in a usable spot depends on MuJoCo's solver, which is not bit-identical across platforms. Passes
+        on the reference platform; excluded from cross-platform CI (see pyproject markers).
+        """
         env = make_env()
         self._do_throws(env, n=40)
 

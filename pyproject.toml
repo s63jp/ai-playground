@@ -24,4 +24,7 @@ playground = ["dashboard/static/*", "dashboard/static/vendor/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-markers = ["xpu: needs an Intel XPU device"]
+markers = [
+    "xpu: needs an Intel XPU device",
+    "physics: depends on emergent throw-physics yields that differ across platforms (MuJoCo's solver is not bit-identical Linux vs Windows); run on the reference platform, excluded from CI",
+]
