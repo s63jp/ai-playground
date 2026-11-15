@@ -1,5 +1,8 @@
 # AI Experimental Playground
 
+[![tests](https://github.com/s63jp/ai-playground/actions/workflows/tests.yml/badge.svg)](https://github.com/s63jp/ai-playground/actions/workflows/tests.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A laboratory where autonomous AI agents live on a small simulated 3D island, handle objects, discover
 how the physics behaves, set their own goals, build things and keep written memory across sessions.
 It is designed to answer one question with evidence: **does an agent's written experience actually
