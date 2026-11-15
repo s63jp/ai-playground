@@ -17,7 +17,8 @@ function showTab(name) {
   document.querySelectorAll('#tabs button').forEach((x) => x.classList.toggle('active', x === b));
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${name}`));
   if (location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);   // deep link to a view
-  ({ memory: loadMemory, analytics: loadAnalytics, compare: loadCompare, bench: loadBench, nn: loadNn, lab: loadLab }[name] || (() => {}))();
+  ({ memory: loadMemory, analytics: loadAnalytics, compare: loadCompare, bench: loadBench, nn: loadNn, lab: loadLab,
+     infra: loadInfra, providers: loadProviders, monitor: loadMonitor, resources: loadResources }[name] || (() => {}))();
   if (name === 'watch') resize();
 }
 document.querySelectorAll('#tabs button').forEach((b) => b.onclick = () => showTab(b.dataset.tab));
@@ -85,11 +86,99 @@ function ensureMesh(id) {
   meshes[id] = makeMesh({ ...blockTemplate, id, colour, position: [0, 0, -50] });   // generated in-world
   return meshes[id];
 }
-const agentMesh = new THREE.Mesh(new THREE.BoxGeometry(spec.agent_body.width, spec.agent_body.width, spec.agent_body.height),
-  new THREE.MeshStandardMaterial({ color: 0x5aa9ff, emissive: 0x0b2a4a }));
-const nose = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.3, 12), new THREE.MeshStandardMaterial({ color: 0xffffff }));
-nose.position.set(0, 0, spec.agent_body.height / 2 + 0.25); agentMesh.add(nose);
-world.add(agentMesh);
+// ------------------------------------------------------------------ agent player model
+// Procedural humanoid rig for the agent, built from the player-model asset (assets/humanoid_mujoco.xml):
+// same joint layout, proportions and materials, scaled to the island's agent body (spec.agent_body).
+// The physics agent stays the deterministic collision box — the rig is a faithful visual driven by the
+// same pose stream (position per frame; heading and gait derived from velocity, like the pose replay).
+const agentMesh = makeAgentRig();
+function makeAgentRig() {
+  const H = spec.agent_body.height;                       // 1.6 m collision box height
+  const skin = new THREE.MeshStandardMaterial({ color: 0xb3a69a, roughness: 0.9 });
+  const shirt = new THREE.MeshStandardMaterial({ color: 0x5aa9ff, roughness: 0.7, emissive: 0x0b2a4a, emissiveIntensity: 0.4 });
+  const trousers = new THREE.MeshStandardMaterial({ color: 0x3a4453, roughness: 0.85 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x223044, roughness: 0.6 });
+
+  function capsule(r, len, mat) {
+    const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 4, 10), mat);
+    m.rotation.x = Math.PI / 2;                           // build along +Z (capsules are Y-aligned)
+    return m;
+  }
+  const rig = new THREE.Group();
+  const add = (mesh, pos) => { mesh.position.set(...pos); rig.add(mesh); return mesh; };
+  // Torso/pelvis are capsules so the figure reads as a body from any angle (not a slab edge-on)
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.165, 0.26, 4, 12), shirt);
+  torso.rotation.x = Math.PI / 2; add(torso, [0, 0, 0.36]);
+  add(new THREE.Mesh(new THREE.SphereGeometry(0.135, 14, 10), shirt), [0, 0, 0.58]);          // chest
+  const pelvis = new THREE.Mesh(new THREE.CapsuleGeometry(0.125, 0.10, 4, 12), trousers);
+  pelvis.rotation.x = Math.PI / 2; add(pelvis, [0, 0, 0.10]);
+  // Head + face marker on the front (+X is the model's forward, like the export)
+  const head = add(new THREE.Mesh(new THREE.SphereGeometry(0.115, 18, 14), skin), [0, 0, 0.94]);
+  add(new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.10, 0.05), dark), [0.095, 0, 0.96]);        // visor
+  head.userData.name = 'head';
+  // Arms: pivot groups at the shoulders so they swing around the walk gait
+  function arm(side) {
+    const sx = 0.20 * side;
+    const shoulder = new THREE.Group(); shoulder.position.set(sx, 0, 0.56); rig.add(shoulder);
+    const upper = capsule(0.04, 0.20, shirt); upper.position.set(0, 0, -0.13); shoulder.add(upper);
+    const elbow = new THREE.Group(); elbow.position.set(0, 0, -0.26); shoulder.add(elbow);
+    const fore = capsule(0.032, 0.16, skin); fore.position.set(0, 0, -0.11); elbow.add(fore);
+    return { shoulder, elbow };
+  }
+  function leg(side) {
+    const sx = 0.09 * side;
+    const hip = new THREE.Group(); hip.position.set(sx, 0, 0.08); rig.add(hip);
+    const thigh = capsule(0.055, 0.26, trousers); thigh.position.set(0, 0, -0.17); hip.add(thigh);
+    const knee = new THREE.Group(); knee.position.set(0, 0, -0.34); hip.add(knee);
+    const shin = capsule(0.04, 0.32, trousers); shin.position.set(0, 0, -0.19); knee.add(shin);
+    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.18, 0.05), dark);
+    foot.position.set(0.03, 0, -0.40); knee.add(foot);
+    return { hip, knee };
+  }
+  const armL = arm(1), armR = arm(-1), legL = leg(1), legR = leg(-1);
+  rig.userData = { armL, armR, legL, legR, totalHeight: H };
+  window.__agentRig = rig;    // inspection hook for automated QA
+  window.__view3d = { camera, controls, world };   // QA hook: camera control for automated checks
+  window.__replay = { poses: () => poses, show, cur: () => cur };   // QA hook: replay access
+  world.add(rig);
+  return rig;
+}
+
+// Rig animation: heading/gait are derived from the same frame stream the replay uses (deterministic
+// per frame pair, so scrubbing is stable). Forward is +X in model space; legs swing around the Y axis.
+let rigHeading = 0;
+function animateRig(p, prev) {
+  let speed = 0, heading = rigHeading;
+  if (prev) {
+    const dt = Math.max(0.01, p.t - prev.t);
+    const vx = (p.agent[0] - prev.agent[0]) / dt, vy = (p.agent[1] - prev.agent[1]) / dt;
+    speed = Math.hypot(vx, vy);
+    if (speed > 0.05) {
+      const target = Math.atan2(vy, vx);
+      let d = target - rigHeading;
+      while (d > Math.PI) d -= 2 * Math.PI;
+      while (d < -Math.PI) d += 2 * Math.PI;
+      heading = rigHeading + d * 0.4;
+    }
+  }
+  rigHeading = heading;
+  const vz = prev ? (p.agent[2] - prev.agent[2]) / Math.max(0.01, p.t - prev.t) : 0;
+  const airborne = vz > 0.35 ? 1 : (vz < -0.35 ? -1 : 0);   // rising tuck / landing prep
+  const swing = Math.min(0.55, speed * 0.4);
+  const phase = p.t * (2.6 + speed * 2.4);
+  const s = Math.sin(phase);
+  const u = agentMesh.userData;
+  u.legL.hip.rotation.y = airborne > 0 ? -0.5 : -swing * s;
+  u.legR.hip.rotation.y = airborne > 0 ? 0.15 : swing * s;
+  u.legL.knee.rotation.y = airborne > 0 ? 0.9 : Math.max(0, 0.55 * swing * -s);
+  u.legR.knee.rotation.y = airborne > 0 ? 1.15 : Math.max(0, 0.55 * swing * s);
+  u.armL.shoulder.rotation.y = airborne === 0 ? swing * s : 0.55 * airborne;
+  u.armR.shoulder.rotation.y = p.held ? -0.5 : (airborne === 0 ? -swing * s : -0.55 * airborne);
+  u.armL.elbow.rotation.y = airborne === 0 ? -0.2 * Math.abs(s) : 0.6;
+  u.armR.elbow.rotation.y = p.held ? -1.2 : (airborne === 0 ? -0.2 * Math.abs(s) : 0.6);
+  agentMesh.rotation.z = heading;
+}
+
 const trails = new THREE.Group(); world.add(trails);
 
 function resize() {
@@ -130,6 +219,7 @@ function show(i) {
     m.quaternion.set(q[4], q[5], q[6], q[3]);   // MuJoCo w,x,y,z -> three x,y,z,w
   }
   agentMesh.position.set(...p.agent);
+  animateRig(p, poses[cur - 1] || null);
   $('#r-scrub').value = cur; $('#r-time').textContent = `t=${fmt(p.t, 1)}s  frame ${cur + 1}/${poses.length}`;
   trails.children.forEach((l) => { l.visible = l.userData.t0 <= p.t; });
 }
@@ -169,6 +259,7 @@ async function loadSessions() {
 }
 async function openSession(id) {
   sessionId = +id; frames = []; poses = []; flights = []; lastSeen = { a: 0, e: 0, m: 0 };
+  rigHeading = 0;
   trails.clear();
   ['#w-actions', '#w-msgs', '#w-exps'].forEach((s) => $(s).innerHTML = '');
   await refresh(true);
@@ -212,6 +303,9 @@ async function refresh(first = false) {
   const st = detail.final_state;
   const s = detail.summary;
   $('#w-status').textContent = `${detail.status}${detail.end_reason ? ' · ' + detail.end_reason : ''} · ${detail.action_count} actions · sim ${fmt(detail.sim_time, 1)} s · ${detail.adapter}/${detail.model}`;
+  // Enable/disable the stop button based on whether this session is running
+  const stopBtn = $('#w-stop');
+  if (stopBtn) stopBtn.disabled = (detail.status !== 'running');
   const last = poses[poses.length - 1];
   $('#w-state').innerHTML = last ? `<div class="mono small">body at [${last.agent.map((v) => fmt(v)).join(', ')}] · holding ${esc(last.held || 'nothing')}</div>
     ${s ? `<div class="small">behaviour: ${Object.entries(s.behaviour).map(([k, v]) => `${k.replace(/_/g, ' ')} <b>${v}</b>`).join(' · ')}</div>` : ''}` : '';
@@ -256,6 +350,30 @@ setInterval(async () => {
     await refresh();
   } catch (e) { $('#w-status').textContent = String(e); }
 }, 1500);
+
+// Stop session button: sends a stop signal to the running session and any active run job
+$('#w-stop')?.addEventListener('click', async () => {
+  const btn = $('#w-stop');
+  if (!sessionId || btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = 'Stopping…';
+  try {
+    await api(`/api/sessions/${sessionId}/stop`, { method: 'POST' });
+    // Also stop any active run job that might be driving this session
+    try {
+      const active = await api('/api/run/active');
+      for (const [jid, status] of Object.entries(active.jobs || {})) {
+        if (status === 'running') await api(`/api/run/jobs/${jid}/stop`, { method: 'POST' });
+      }
+    } catch (e) { /* non-fatal */ }
+    $('#w-status').textContent = 'Stop requested — session will end at the next safe point.';
+    setTimeout(() => { btn.textContent = 'Stop'; }, 2000);
+  } catch (err) {
+    $('#w-status').textContent = String(err);
+    btn.disabled = false;
+    btn.textContent = 'Stop';
+  }
+});
 
 // ------------------------------------------------------------------ memory tab
 let memFile = 'handbook', memData = null;
@@ -342,6 +460,7 @@ async function loadBench() {
 
 // ------------------------------------------------------------------ neural networks tab
 let nnColumns = null, nnJobPoll = null;
+const nnDatasetRows = {};   // rows count per dataset seen last, to flash real refreshes on the tab
 
 // Which registry the NN tab is pointed at. 'researcher' is the shared lab; 'agent' + an agent id is
 // that agent's own networks (per-agent selection, audit 2026-11-13 NN lab stage).
@@ -374,6 +493,99 @@ function nnQuery() {
   ownerSel?.addEventListener('change', sync);
 })();
 
+async function loadDatasetQuality(datasetName) {
+  const el = $('#nn-quality');
+  if (!el) return;
+  if (!datasetName) { el.textContent = 'select a dataset'; return; }
+  $('#nn-quality-name').textContent = `(${datasetName})`;
+  try {
+    const q = await api(`/api/ml/datasets/${encodeURIComponent(datasetName)}/quality?${nnQuery()}`);
+    const parts = [];
+    parts.push(`<div><b>${q.rows}</b> rows · kind ${esc(q.kind || '–')} · ${q.stale ? '<span class="warn">stale</span>' : 'fresh'}`
+      + (q.age_minutes != null ? ` · updated ${q.age_minutes < 1 ? 'just now' : Math.round(q.age_minutes) + ' min ago'}` : '') + '</div>');
+    if (q.coverage && Object.keys(q.coverage).length) {
+      parts.push('<div>log coverage: ' + Object.entries(q.coverage)
+        .map(([t, n]) => `${esc(t)} <b>${n}</b> acts`).join(' · ') + '</div>');
+    }
+    if (q.balance) {
+      const b = q.balance, tot = Math.max(1, b.class_1 + b.class_0);
+      parts.push(`<div>balance (${esc(b.column)}): 1 → <b>${b.class_1}</b> (${Math.round(100 * b.class_1 / tot)}%) · 0 → <b>${b.class_0}</b> (${Math.round(100 * b.class_0 / tot)}%) `
+        + `<span class="bar-mini"><span style="width:${Math.round(100 * b.class_1 / tot)}%"></span></span></div>`);
+    }
+    if (q.warnings && q.warnings.length) {
+      parts.push(q.warnings.map((w) => `<div class="warn">⚠ ${esc(w)}</div>`).join(''));
+    } else {
+      parts.push('<div class="ok">no quality warnings</div>');
+    }
+    parts.push(`<div class="muted">lineage: sha <span class="mono">${esc((q.rows_sha256 || '–').slice(0, 12))}</span>${q.source ? ' · source ' + esc(q.source) : ''}</div>`);
+    el.innerHTML = parts.join('');
+  } catch (e) {
+    el.innerHTML = `<span class="bad">${esc(String(e))}</span>`;
+  }
+}
+
+// Leaderboard: persistent per-model matrix, click a column header to sort
+let lbSort = { key: 'best_test_r2', dir: -1 };
+async function loadLeaderboard() {
+  const el = $('#nn-leaderboard');
+  if (!el) return;
+  try {
+    const r = await api('/api/ml/leaderboard');
+    const rows = (r.by_model || []).slice();
+    if (!rows.length) { el.innerHTML = '<span class="muted">no profiles recorded yet — train a model or run a comparison</span>'; return; }
+    rows.sort((a, b) => {
+      const ka = a[lbSort.key], kb = b[lbSort.key];
+      const va = ka === undefined || ka === null ? -Infinity : ka;
+      const vb = kb === undefined || kb === null ? -Infinity : kb;
+      return (va < vb ? -1 : va > vb ? 1 : 0) * lbSort.dir;
+    });
+    const cols = [
+      { key: 'owner', label: 'owner' }, { key: 'name', label: 'model' },
+      { key: 'best_test_r2', label: 'best R²' }, { key: 'best_test_rmse', label: 'best RMSE' },
+      { key: 'beats_linear', label: 'beats linear' },
+      { key: 'trend_r2', label: 'trend' }, { key: 'train_count', label: 'trains' },
+      { key: 'compare_count', label: 'compares' }, { key: 'last_ts', label: 'last run' }];
+    el.innerHTML = '<table class="lb"><tr>' + cols.map((c) =>
+      `<th class="sortable" data-k="${c.key}">${esc(c.label)}${lbSort.key === c.key ? (lbSort.dir < 0 ? ' ▾' : ' ▴') : ''}</th>`).join('') + '</tr>' +
+      rows.map((m) => {
+        const trend = m.trend_r2 == null ? '–' : (m.trend_r2 > 0 ? `<span class="ok">▲${m.trend_r2}</span>` : m.trend_r2 < 0 ? `<span class="bad">▼${Math.abs(m.trend_r2)}</span>` : '=0');
+        const last = m.last_ts ? new Date(m.last_ts * 1000).toLocaleString([], { year: '2-digit', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '–';
+        const cmp = m.latest_compare ? `${m.latest_compare.actions_mean ?? '–'} acts · ${m.latest_compare.distinct_tools_mean ?? '–'} tools` : '–';
+        return `<tr><td class="small">${esc(m.owner)}</td><td>${esc(m.name)}</td>` +
+          `<td>${m.best_test_r2 == null ? '–' : m.best_test_r2.toFixed(3)}</td>` +
+          `<td>${m.best_test_rmse == null ? '–' : m.best_test_rmse.toFixed(3)}</td>` +
+          `<td>${m.beats_linear ? '<span class="ok">yes</span>' : '<span class="bad">no</span>'}</td>` +
+          `<td>${trend}</td><td>${m.train_count}</td><td>${m.compare_count}<div class="muted small mono">${esc(cmp)}</div></td>` +
+          `<td class="small muted">${esc(last)}</td></tr>`;
+      }).join('') + '</table>';
+    el.querySelectorAll('th.sortable').forEach((th) => th.onclick = () => {
+      const k = th.dataset.k;
+      const isText = (k === 'owner' || k === 'name');
+      const dflt = isText ? 1 : -1;
+      lbSort = (lbSort.key === k) ? { key: k, dir: -lbSort.dir } : { key: k, dir: dflt };
+      loadLeaderboard();
+    });
+  } catch (e) {
+    el.innerHTML = `<span class="bad">${esc(String(e))}</span>`;
+  }
+}
+
+async function loadColumnsForDataset(datasetName) {
+  try {
+    const q = datasetName ? `?dataset=${encodeURIComponent(datasetName)}&${nnQuery()}` : `?${nnQuery()}`;
+    const cols = await api(`/api/ml/columns${q}`);
+    nnColumns = cols;
+    const inputsDiv = $('#nn-inputs');
+    if (inputsDiv) inputsDiv.innerHTML = Object.entries(cols.inputs).map(([k, v]) =>
+      `<label title="${esc(v)}"><input type="checkbox" name="input" value="${esc(k)}">${esc(k)}</label>`
+    ).join('');
+    const targetSel = $('#nn-target');
+    if (targetSel) targetSel.innerHTML = Object.entries(cols.targets).map(([k, v]) =>
+      `<option value="${esc(k)}" title="${esc(v)}">${esc(k)}</option>`
+    ).join('');
+  } catch (e) { console.error('loadColumnsForDataset:', e); }
+}
+
 async function loadNn() {
   loadBehaviourKinds();
   // Status
@@ -392,31 +604,42 @@ async function loadNn() {
   } catch (e) {
     $('#nn-status').textContent = String(e);
   }
-  // Columns (for form)
-  if (!nnColumns) {
-    try {
-      nnColumns = await api('/api/ml/columns');
-      const inputsDiv = $('#nn-inputs');
-      inputsDiv.innerHTML = Object.entries(nnColumns.inputs).map(([k, v]) =>
-        `<label title="${esc(v)}"><input type="checkbox" name="input" value="${esc(k)}">${esc(k)}</label>`
-      ).join('');
-      const targetSel = $('#nn-target');
-      targetSel.innerHTML = Object.entries(nnColumns.targets).map(([k, v]) =>
-        `<option value="${esc(k)}" title="${esc(v)}">${esc(k)}</option>`
-      ).join('');
-    } catch (e) { console.error(e); }
+  // Columns (for form) + quality — load dataset-specific data when a dataset is selected
+  if (!window._nnColumnsWired) {
+    window._nnColumnsWired = true;
+    document.addEventListener('change', (e) => {
+      if (e.target && e.target.id === 'nn-ds-select') loadColumnsForDataset(e.target.value);
+      if (e.target && e.target.id === 'nn-ds-select') loadDatasetQuality(e.target.value);
+    });
   }
-  // Datasets (scoped to the selected registry)
+  // Datasets (scoped to the selected registry) — with dataset-age + refresh flash
   try {
     const ds = (await api(`/api/ml/datasets?${nnQuery()}`)).datasets;
-    $('#nn-datasets').innerHTML = ds.length ? `<table><tr><th>name</th><th>rows</th><th>source</th><th>created</th></tr>
-      ${ds.map((d) => `<tr><td>${esc(d.name)}</td><td>${d.rows}</td><td>${esc(d.source)}</td>
-        <td>${d.created_at ? new Date(d.created_at * 1000).toLocaleDateString() : '–'}</td></tr>`).join('')}</table>` : '<span class="muted">no datasets</span>';
-    const dsSel = $('#nn-ds-select');
-    dsSel.innerHTML = ds.map((d) => `<option value="${esc(d.name)}">${esc(d.name)} (${d.rows} rows)</option>`).join('');
+    const changed = [];
+    $('#nn-datasets').innerHTML = ds.length ? `<table><tr><th>name</th><th>rows</th><th>source</th><th>updated</th></tr>
+      ${ds.map((d) => {
+        const prev = nnDatasetRows[d.name];
+        const changedNow = prev !== undefined && prev !== d.rows;
+        if (changedNow) changed.push(d.name);
+        nnDatasetRows[d.name] = d.rows;
+        const ageMin = d.updated_at ? Math.max(0, (Date.now() / 1000 - d.updated_at) / 60) : null;
+        const ageTxt = ageMin === null ? '–' : (ageMin < 1 ? 'just now' : ageMin < 60 ? `${Math.round(ageMin)} min ago`
+          : ageMin < 60 * 24 ? `${Math.round(ageMin / 60)} h ago` : `${Math.round(ageMin / 1440)} d ago`);
+        return `<tr${changedNow ? ' class="ds-flash"' : ''}><td>${esc(d.name)}${changedNow ? ' <span class="ok small">updated</span>' : ''}</td><td>${d.rows}</td><td>${esc(d.source)}</td><td class="small muted" title="dataset age">${esc(ageTxt)}</td></tr>`;
+      }).join('')}</table>` : '<span class="muted">no datasets</span>';
+    if (changed.length) $('#nn-status').insertAdjacentHTML('beforeend',
+      ` · <span class="ok">datasets refreshed: ${changed.map(esc).join(', ')}</span>`);
+    const dsSel2 = $('#nn-ds-select');
+    const prevVal = dsSel2.value;
+    dsSel2.innerHTML = ds.map((d) => `<option value="${esc(d.name)}">${esc(d.name)} (${d.rows} rows)</option>`).join('');
+    if (prevVal && ds.some((d) => d.name === prevVal)) dsSel2.value = prevVal;
+    // Load columns + quality for the currently selected dataset (or defaults)
+    await loadColumnsForDataset(dsSel2.value);
+    loadDatasetQuality(dsSel2.value);
   } catch (e) {
     $('#nn-datasets').innerHTML = `<span class="bad">${esc(String(e))}</span>`;
   }
+  loadLeaderboard();
   // Models (the /api/ml/models scan returns every scope; filter to the selected registry)
   try {
     let models = (await api('/api/ml/models')).models;
@@ -500,6 +723,8 @@ async function loadModelDetail(scope, owner, name, version) {
       <button class="btn" id="nn-eval-cl">Closed-loop test</button>
       <button class="btn" id="nn-run-ctrl">Run as controller</button>
       <select id="nn-ctrl-task" title="benchmark task"><option value="throw_height">throw_height</option></select>
+      <button class="btn" id="nn-clv-btn" title="same task, same conditions: this network AS the brain vs the scripted reference policy, both judged by the task's own verifier">vs scripted baseline</button>
+      <div id="nn-clv-out" class="small" style="margin-top:6px"></div>
     </div>`;
 
     $('#nn-detail').innerHTML = `
@@ -540,6 +765,40 @@ async function loadModelDetail(scope, owner, name, version) {
         });
         pollJob(r.job_id);
       } catch (e) { alert(String(e)); }
+    };
+    // Closed-loop vs scripted: the network AS the brain vs the scripted reference, same task + verifier.
+    $('#nn-clv-btn').onclick = async () => {
+      const out = $('#nn-clv-out');
+      try {
+        out.textContent = 'Running both sides (neural first, then scripted baseline)…';
+        const task_id = $('#nn-ctrl-task').value;
+        const r = await api('/api/ml/closed-loop-compare', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ owner, name, version, task_id })
+        });
+        const started = Date.now();
+        const timer = setInterval(async () => {
+          try {
+            const j = await api(`/api/ml/jobs/${r.job_id}`);
+            if (j.status === 'done') {
+              clearInterval(timer);
+              const s = j.result_summary, v = s.verdict;
+              out.innerHTML = `<table><tr><th></th><th>network</th><th>scripted</th></tr>
+                <tr><td>completed</td><td>${s.model.completed ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>'}</td><td>${s.baseline.completed ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>'}</td></tr>
+                <tr><td>score</td><td><b>${s.model.score ?? '–'}</b></td><td><b>${s.baseline.score ?? '–'}</b></td></tr>
+                <tr><td>accuracy error</td><td>${s.model.accuracy ?? '–'}</td><td>${s.baseline.accuracy ?? '–'}</td></tr>
+                <tr><td>actions</td><td>${s.model.actions ?? '–'}</td><td>${s.baseline.actions ?? '–'}</td></tr>
+                <tr><td>failed</td><td>${s.model.failed_actions ?? '–'}</td><td>${s.baseline.failed_actions ?? '–'}</td></tr>
+                </table><div>${v.beats_baseline === true ? '<span class="ok">✔ The network BEAT the scripted baseline.' : v.beats_baseline === false ? '<span class="warn">✖ The scripted baseline scored higher.</span>' : '<span class="muted">Neither side produced a score to compare.</span>'}${v.score_delta != null ? ` (Δ ${v.score_delta})` : ''}</div>`;
+            } else if (j.status === 'error') {
+              clearInterval(timer);
+              out.innerHTML = `<span class="bad">${esc(j.error || 'error')}</span>`;
+            } else {
+              out.textContent = `Running (${Math.round((Date.now() - started) / 1000)} s)…`;
+            }
+          } catch (e2) { clearInterval(timer); out.innerHTML = `<span class="bad">${esc(String(e2))}</span>`; }
+        }, 1200);
+      } catch (e) { out.innerHTML = `<span class="bad">${esc(String(e))}</span>`; }
     };
   } catch (e) {
     $('#nn-detail-card').style.display = 'block';
@@ -701,23 +960,44 @@ async function pollRunJob(jobId, statusEl, onDone) {
   tick();
 }
 
+let labRunJob = null; // id of the job launched most recently from this form
 $('#lab-run-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const body = { agent_id: $('#lab-run-agent').value, adapter: $('#lab-adapter').value,
     model: $('#lab-run-model').value.trim() || null,
     sessions: parseInt($('#lab-run-sessions').value, 10) || 1,
+    max_steps: parseInt($('#lab-run-steps').value, 10) || null,
+    concurrency: parseInt($('#lab-run-concurrency').value, 10) || 1,
     max_continuations: parseInt($('#lab-run-cont').value, 10) || 0 };
   const el = $('#lab-run-status');
   el.textContent = 'Launching…';
   try {
     const r = await api('/api/run/explore', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body) });
+    labRunJob = r.job_id;
+    const stopBtn = $('#lab-run-stop');
+    if (stopBtn) stopBtn.disabled = false;
     pollRunJob(r.job_id, el, (j) => {
       el.innerHTML = `<span class="ok">Done.</span> ` + (j.progress || []).map((p) =>
-        `s${p.session_id}: ${p.actions} acts, ${esc(p.end_reason)}${p.continue_requested ? ' · asked to continue' : ''}`).join(' · ');
+        `s${p.session_id}: ${p.actions} acts, ${esc(p.end_reason)}${p.continue_requested ? ' · asked to continue' : ''}${p.error ? `<br><span class="bad small">${esc(String(p.error))}</span>` : ''}`).join(' · ');
       loadSessions();
     });
   } catch (err) { el.innerHTML = `<span class="bad">${esc(String(err))}</span>`; }
+});
+
+$('#lab-run-stop')?.addEventListener('click', async () => {
+  if (!labRunJob) return;
+  const btn = $('#lab-run-stop');
+  btn.disabled = true;
+  btn.textContent = 'Stopping…';
+  try {
+    await api(`/api/run/jobs/${labRunJob}/stop`, { method: 'POST' });
+    setTimeout(() => { btn.textContent = 'Stop run'; }, 2000);
+  } catch (err) {
+    $('#lab-run-status').innerHTML = `<span class="bad">${esc(String(err))}</span>`;
+    btn.disabled = false;
+    btn.textContent = 'Stop run';
+  }
 });
 
 $('#lab-cmp-form')?.addEventListener('submit', async (e) => {
@@ -789,6 +1069,88 @@ document.getElementById('nn-beh-form')?.addEventListener('submit', async (e) => 
     $('#nn-beh-status').textContent = `Job ${r.job_id} started`;
     pollJob(r.job_id);
   } catch (err) { $('#nn-beh-status').innerHTML = `<span class="bad">${esc(String(err))}</span>`; }
+});
+
+// Kill switch: one click stops every running session and run job
+$('#panic')?.addEventListener('click', async () => {
+  const btn = $('#panic');
+  btn.disabled = true;
+  btn.textContent = 'Stopping…';
+  try {
+    const r = await api('/api/panic', { method: 'POST' });
+    const parts = [];
+    if (r.sessions_signalled) parts.push(`${r.sessions_signalled} session${r.sessions_signalled === 1 ? '' : 's'}`);
+    if (r.run_jobs_stopping) parts.push(`${r.run_jobs_stopping} run job${r.run_jobs_stopping === 1 ? '' : 's'}`);
+    $('#health').textContent = parts.length ? `kill switch: stopping ${parts.join(' + ')}` : $('#health').textContent;
+    setTimeout(() => { btn.disabled = false; btn.textContent = 'Kill switch'; loadSessions(); }, 1500);
+  } catch (err) {
+    btn.textContent = 'Kill switch';
+    btn.disabled = false;
+    $('#health').textContent = String(err);
+  }
+});
+
+// ------------------------------------------------------------------ live console (SSE, all sessions)
+const lcState = { es: null, cols: new Map() };   // running, session columns by sid
+function lcColFor(sid, meta = null) {
+  let col = lcState.cols.get(sid);
+  if (!col) {
+    const grid = $('#live-console');
+    const box = document.createElement('div');
+    box.className = 'lc-col';
+    box.innerHTML = `<h4>#${sid}</h4><div class="lc-evs"></div>`;
+    grid.appendChild(box);
+    col = { title: box.querySelector('h4'), evs: box.querySelector('.lc-evs'), n: 0 };
+    lcState.cols.set(sid, col);
+    while (grid.children.length > 6) grid.children[0].remove();   // keep the newest 6 sessions
+  }
+  if (meta) col.title.innerHTML = `#${sid} <span class="small muted">${esc(meta.agent_id || '')} · ${esc(meta.mode || '')}</span> ` +
+    (meta.status === 'running' ? '<span class="pill-ok">●</span>' : `<span class="pill-end">${esc(meta.status || '')}</span>`);
+  return col;
+}
+function lcPush(sid, text, bad = false, meta = null) {
+  const col = lcColFor(sid, meta);
+  const div = document.createElement('div');
+  div.className = 'lc-ev' + (bad ? ' bad' : '');
+  div.textContent = text;
+  col.evs.appendChild(div);
+  col.n++;
+  if (col.n > 40) { col.evs.children[0].remove(); col.n--; }
+  col.evs.scrollTop = col.evs.scrollHeight;
+}
+$('#lc-toggle')?.addEventListener('click', () => {
+  const btn = $('#lc-toggle');
+  if (lcState.es) {
+    lcState.es.close(); lcState.es = null;
+    btn.textContent = 'Start';
+    $('#live-console').innerHTML = '<span class="muted small">Stopped.</span>';
+    lcState.cols.clear();
+    return;
+  }
+  btn.textContent = 'Stop';
+  $('#live-console').innerHTML = '';
+  lcState.cols.clear();
+  lcState.es = new EventSource('/api/stream/events');
+  lcState.es.onmessage = (e) => {
+    let ev;
+    try { ev = JSON.parse(e.data); } catch { return; }
+    if (ev.type === 'session') {
+      const line = ev.status === 'completed' ? `session ended (${ev.end_reason || ev.status})`
+                                             : `session ${ev.status} (${ev.agent_id}, #${ev.session_number})`;
+      lcPush(ev.session_id, line, false, { agent_id: ev.agent_id, mode: ev.mode, status: ev.status });
+      lcColFor(ev.session_id, ev);
+    } else if (ev.type === 'action') {
+      const args = Object.entries(ev.args || {}).slice(0, 2)
+        .map(([k, v]) => `${k}=${typeof v === 'number' ? (Math.round(v * 100) / 100) : v}`).join(' ');
+      lcPush(ev.session_id, `${ev.tool}(${args})${ev.success ? '' : ' ✗' + (ev.error_code || '')}`,
+             !ev.success, { status: 'running', agent_id: '' });
+    }
+  };
+  lcState.es.onerror = () => {
+    if (lcState.es && lcState.es.readyState === EventSource.CLOSED) {
+      lcState.es = null; btn.textContent = 'Start';
+    }
+  };
 });
 
 // ------------------------------------------------------------------ boot

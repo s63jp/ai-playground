@@ -224,11 +224,23 @@ def build_dataset(actions: list[dict], name: str) -> dict:
     for a in actions:
         if a.get("tool") not in s.tools:
             continue
-        try:
-            args = json.loads(a.get("args_json") or "{}")
-            result = json.loads(a.get("result_json") or "{}")
-        except (TypeError, ValueError):
-            continue
+        # Database.actions() returns parsed dicts under `args`/`result`; raw JSON exports use `args_json`/`result_json`.
+        raw_args = a.get("args")
+        raw_result = a.get("result")
+        if isinstance(raw_args, dict):
+            args = raw_args
+        else:
+            try:
+                args = json.loads(a.get("args_json") or "{}")
+            except (TypeError, ValueError):
+                args = {}
+        if isinstance(raw_result, dict):
+            result = raw_result
+        else:
+            try:
+                result = json.loads(a.get("result_json") or "{}")
+            except (TypeError, ValueError):
+                result = {}
         # The engine's result normally carries "action"; guarantee it so builders that key off the tool
         # name (e.g. the cross-action affordance model) work even on records that omit it.
         result.setdefault("action", a.get("tool"))
@@ -239,3 +251,33 @@ def build_dataset(actions: list[dict], name: str) -> dict:
             "manifest": {"source": f"behaviour:{name}", "kind": name, "rows": len(rows),
                          "inputs": sorted(s.inputs), "targets": sorted(s.targets),
                          "description": s.description}}
+
+
+def refresh_log_datasets(db, reg) -> list[dict]:
+    """Incremental refresh (Nov 2026): rebuild every log-derived behaviour dataset from the current
+    action log and save it. Throw datasets are seed-generated (independent of the log) and are left
+    alone. Returns one summary per refreshed dataset: {name, kind, rows, changed} where `changed`
+    compares the rows hash against what was saved before, so the UI can flash real updates."""
+    import hashlib as _hl
+    import time as _time
+    actions: list[dict] = []
+    for r in db.q("SELECT id FROM sessions ORDER BY id"):
+        actions.extend(db.actions(r["id"], limit=10 ** 9))
+    refreshed: list[dict] = []
+    for name in reg.list_datasets():
+        try:
+            existing = reg.load_dataset(name)
+        except Exception:
+            continue
+        kind = (existing.get("manifest") or {}).get("kind")
+        if kind not in DATASETS or not (existing.get("manifest") or {}).get("source", "").startswith("behaviour:"):
+            continue
+        ds = build_dataset(actions, kind)
+        ds["manifest"]["rows_sha256"] = _hl.sha256(
+            json.dumps(ds["rows"], sort_keys=True).encode()).hexdigest()
+        ds["manifest"]["updated_at"] = _time.time()
+        old_sha = (existing.get("manifest") or {}).get("rows_sha256")
+        info = reg.save_dataset(name, ds)
+        refreshed.append({"name": name, "kind": kind, "rows": len(ds["rows"]), "path": info["path"],
+                          "changed": bool(ds["rows"]) and old_sha != ds["manifest"]["rows_sha256"]})
+    return refreshed

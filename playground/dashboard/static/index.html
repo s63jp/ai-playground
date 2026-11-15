@@ -18,8 +18,13 @@
     <button data-tab="bench">Benchmarks</button>
     <button data-tab="nn">Neural networks</button>
     <button data-tab="lab">Run &amp; models</button>
+    <button data-tab="infra">Infrastructure</button>
+    <button data-tab="providers">Providers</button>
+    <button data-tab="monitor">API monitor</button>
+    <button data-tab="resources">Resources</button>
   </nav>
   <span id="health"></span>
+  <button id="panic" class="danger" type="button" title="Stop every running session and run job now">Kill switch</button>
 </header>
 
 <section id="tab-watch" class="tab active">
@@ -27,6 +32,7 @@
     <label>Agent <select id="w-agent"></select></label>
     <label>Session <select id="w-session"></select></label>
     <label><input type="checkbox" id="w-follow" checked> follow live</label>
+    <button id="w-stop" class="danger" type="button" disabled>Stop</button>
     <span id="w-status" class="muted"></span>
   </div>
   <div class="watch">
@@ -48,6 +54,11 @@
       <div class="card"><h3>Experiments &amp; hypotheses (this session)</h3><div id="w-exps" class="scroll"></div></div>
       <div class="card"><h3>Integrity: claimed vs verified</h3><div id="w-integ"></div></div>
     </div>
+  </div>
+  <div class="card" style="margin-top:8px">
+    <h3>Live console <span class="muted small">(SSE push across ALL running sessions; side-by-side)</span>
+      <button type="button" id="lc-toggle" class="btn" style="float:right">Start</button></h3>
+    <div id="live-console" class="lc-grid"><span class="muted small">Stopped — press Start to stream every action from every session as it happens.</span></div>
   </div>
 </section>
 
@@ -104,9 +115,12 @@
             <label>Model <input type="text" id="lab-run-model" placeholder="default / &lt;id&gt;" size="20"></label>
           </div>
           <div class="form-row">
-            <label>Sessions <input type="number" id="lab-run-sessions" value="1" min="1" max="20"></label>
+            <label>Sessions <input type="number" id="lab-run-sessions" value="1" min="1" max="50"></label>
+            <label>Steps/session <input type="number" id="lab-run-steps" value="60" min="1" max="10000"></label>
+            <label>At a time <input type="number" id="lab-run-concurrency" value="1" min="1" max="8"></label>
             <label>Max continuations <input type="number" id="lab-run-cont" value="0" min="0" max="20"></label>
             <button type="submit" class="btn">Launch run</button>
+            <button type="button" id="lab-run-stop" class="danger" disabled>Stop run</button>
           </div>
           <div id="lab-run-status" class="muted small"></div>
         </form>
@@ -184,6 +198,10 @@
         <div id="nn-beh-desc" class="muted small"></div>
       </div>
       <div class="card">
+        <h3>Model leaderboard <span class="muted small">(persistent; click a column to sort; ▲▼ = R² trend)</span></h3>
+        <div id="nn-leaderboard" class="small"></div>
+      </div>
+      <div class="card">
         <h3>Models</h3>
         <div id="nn-models" class="scroll tall"></div>
       </div>
@@ -192,6 +210,10 @@
       <div class="card" id="nn-detail-card" style="display:none">
         <h3>Model detail</h3>
         <div id="nn-detail"></div>
+      </div>
+      <div class="card">
+        <h3>Dataset quality <span id="nn-quality-name" class="muted small"></span></h3>
+        <div id="nn-quality" class="small"></div>
       </div>
       <div class="card">
         <h3>Train new model <span class="muted small">(saves into the selected registry)</span></h3>
@@ -221,6 +243,67 @@
         <div id="nn-job"></div>
       </div>
     </div>
+  </div>
+</section>
+
+<section id="tab-infra" class="tab">
+  <div class="bar"><span class="muted small">Live infrastructure overview — refreshes automatically.</span><span id="inf-updated" class="muted small" style="margin-left:auto"></span></div>
+  <div class="metrics-grid" id="inf-tiles"></div>
+  <div class="cols2">
+    <div class="card"><h3>Provider health</h3><div id="inf-providers"></div></div>
+    <div class="card"><h3>Hardware</h3><div id="inf-hw"></div></div>
+  </div>
+  <div class="cols2">
+    <div class="card"><h3>Active &amp; queued requests</h3><div id="inf-queue" class="scroll"></div></div>
+    <div class="card"><h3>Recent requests</h3><div id="inf-recent" class="scroll"></div></div>
+  </div>
+</section>
+
+<section id="tab-providers" class="tab">
+  <div class="bar"><button id="pv-refresh" class="btn">Refresh</button><span id="pv-status" class="muted small"></span></div>
+  <div class="card"><h3>Providers <span class="muted small">(discovered from config + runtime; capabilities probed, not assumed)</span></h3><div id="pv-list"></div></div>
+  <div class="card" id="pv-detail-card" style="display:none"><h3>Provider detail</h3><div id="pv-detail"></div></div>
+</section>
+
+<section id="tab-monitor" class="tab">
+  <div class="bar">
+    <label>Provider <input type="text" id="mon-f-provider" size="9"></label>
+    <label>Model <input type="text" id="mon-f-model" size="14"></label>
+    <label>Agent <input type="text" id="mon-f-agent" size="9"></label>
+    <label>Status <select id="mon-f-status"><option value="">any</option><option>queued</option><option>running</option><option>done</option><option>error</option><option>cancelled</option></select></label>
+    <label class="checkbox-grid"><input type="checkbox" id="mon-f-failed"> failed only</label>
+    <button id="mon-refresh" class="btn">Refresh</button>
+    <span id="mon-stats" class="muted small" style="margin-left:auto"></span>
+  </div>
+  <div class="cols2">
+    <div class="card"><h3>Requests</h3><div id="mon-table" class="scroll tall"></div></div>
+    <div class="card" id="mon-detail-card"><h3>Request detail</h3><div id="mon-detail" class="muted">Select a request to inspect its metadata, timing, tokens and redacted bodies.</div></div>
+  </div>
+</section>
+
+<section id="tab-resources" class="tab">
+  <div class="bar"><span class="muted small">Measured = read from OS/driver; estimated = derived; unknown = unavailable on this host.</span></div>
+  <div class="card"><h3>Hardware</h3><div id="res-hw"></div></div>
+  <div class="cols2">
+    <div class="card">
+      <h3>Concurrency limits <span class="muted small">(backend-enforced; 0 = unlimited)</span></h3>
+      <form id="res-conc-form">
+        <div class="form-row">
+          <label>Global <input type="number" id="rc-global" min="0" value="0"></label>
+          <label>Per provider <input type="number" id="rc-provider" min="0" value="0"></label>
+          <label>Per model <input type="number" id="rc-model" min="0" value="0"></label>
+          <label>Per agent <input type="number" id="rc-agent" min="0" value="0"></label>
+        </div>
+        <div class="form-row">
+          <label>Queue max <input type="number" id="rc-queue" min="0" value="0"></label>
+          <label>Default priority <input type="number" id="rc-priority" value="5"></label>
+          <button type="submit" class="btn">Apply</button>
+          <span id="rc-status" class="muted small"></span>
+        </div>
+        <div id="rc-overrides" class="muted small"></div>
+      </form>
+    </div>
+    <div class="card"><h3>Queue <span class="muted small">(priority then FIFO)</span></h3><div id="res-queue" class="scroll"></div></div>
   </div>
 </section>
 

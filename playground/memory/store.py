@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -37,10 +38,28 @@ class MemoryError_(Exception):
 
 
 def _write_atomic(path: Path, text: str) -> None:
+    """Write-or-replace that is safe under concurrency: a unique temp file per writer (two sessions for
+    the same agent used to collide on the shared '<file>.tmp' name and crash with PermissionError) and a
+    per-path lock so the rename sequence is serialised within the process."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8", newline="\n")
-    os.replace(tmp, path)
+    with _path_lock(path):
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(text, encoding="utf-8", newline="\n")
+        os.replace(tmp, path)
+
+
+_path_locks: dict[str, threading.Lock] = {}
+_path_locks_guard = threading.Lock()
+
+
+def _path_lock(path: Path) -> threading.Lock:
+    key = str(path).lower()
+    with _path_locks_guard:
+        lock = _path_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _path_locks[key] = lock
+        return lock
 
 
 def evaluate_status(requested: str, experiments: list[dict], cfg_memory: dict) -> tuple[str, str]:

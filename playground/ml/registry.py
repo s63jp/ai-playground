@@ -63,8 +63,11 @@ class Registry:
         out = []
         for name in self.list_datasets():
             m = json.loads(self.dataset_path(name).read_text(encoding="utf-8"))["manifest"]
-            out.append({"name": name, **{k: m.get(k) for k in ("source", "rows", "seed", "rows_sha256",
-                                                               "physics_config_hash", "created_at")}})
+            row = {"name": name, **{k: m.get(k) for k in ("source", "rows", "seed", "rows_sha256",
+                                                          "physics_config_hash", "created_at")}}
+            row["updated_at"] = m.get("updated_at") or (
+                self.dataset_path(name).stat().st_mtime)
+            out.append(row)
         return out
 
     # ------------------------------------------------------------ models

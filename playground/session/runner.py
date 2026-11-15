@@ -6,6 +6,7 @@ one session to the next is the agent's memory directory.
 from __future__ import annotations
 
 import json
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -23,6 +24,33 @@ from ..memory import MemoryStore
 from ..world.physics import PhysicsWorld
 
 _canonical_cache: dict[str, str] = {}
+
+# Per-session stop signals. Any thread running a session can be asked to stop cleanly; the main loop
+# checks this flag between turns. External sessions are stopped by finishing them directly.
+_session_stop_events: dict[int, threading.Event] = {}
+
+
+def request_stop_session(sid: int) -> bool:
+    """Ask the running session `sid` to stop at the next safe point. Returns True if the session was known."""
+    ev = _session_stop_events.get(sid)
+    if ev is not None:
+        ev.set()
+        return True
+    return False
+
+
+def is_session_stop_requested(sid: int) -> bool:
+    return _session_stop_events.get(sid, threading.Event()).is_set()
+
+
+def _register_session_stop(sid: int) -> threading.Event:
+    ev = threading.Event()
+    _session_stop_events[sid] = ev
+    return ev
+
+
+def _unregister_session_stop(sid: int) -> None:
+    _session_stop_events.pop(sid, None)
 
 
 def canonical_initial_hash(cfg: dict) -> str:
@@ -180,6 +208,9 @@ def run_session(cfg: dict, db, agent_id: str, adapter: Adapter, mode: str = "exp
                                 memory_dir=str(memory.dir),
                                 budget_json={"minutes": s_cfg["duration_minutes"], "max_steps": s_cfg.get("max_steps")},
                                 **(extra or {}))
+        # Register the stop signal as soon as the session exists, so a stop requested during startup is honored.
+        _unregister_session_stop(sid)
+        _register_session_stop(sid)
         env = Environment(cfg, db, memory, agent_id, sid, number, mode=mode, allowed_tools=tool_names,
                           scene=scene, clock=clock)
     briefing = memory.briefing() if include_briefing else None
@@ -219,6 +250,9 @@ def run_session(cfg: dict, db, agent_id: str, adapter: Adapter, mode: str = "exp
         user_text: str | None = opening
         results: list[tuple[ToolCall, dict]] = []
         while True:
+            if is_session_stop_requested(sid):
+                end_reason = "stopped_by_user"
+                break
             turn = adapter.step(user_text, results)
             turns += 1
             for k, v in (turn.usage or {}).items():
@@ -251,6 +285,11 @@ def run_session(cfg: dict, db, agent_id: str, adapter: Adapter, mode: str = "exp
             for call in turn.tool_calls:
                 res = env.call(call.name, call.args, source="agent", turn=turns)
                 results.append((call, res))
+                if is_session_stop_requested(sid):
+                    end_reason = "stopped_by_user"
+                    break
+            if end_reason == "stopped_by_user":
+                break
             if env.phase == "closed":
                 break
     except AdapterError as exc:
@@ -259,6 +298,8 @@ def run_session(cfg: dict, db, agent_id: str, adapter: Adapter, mode: str = "exp
         error, end_reason = "interrupted by operator", "interrupted"
     except Exception as exc:  # noqa: BLE001
         error, end_reason = f"{type(exc).__name__}: {exc}\n{traceback.format_exc(limit=3)}", "runner_error"
+    finally:
+        _unregister_session_stop(sid)
     return finish_session(cfg, db, env, adapter, turns, usage,
                           end_reason if error else (env.end_reason or end_reason or "closed"), error, on_finish)
 
@@ -268,6 +309,7 @@ def finish_session(cfg: dict, db, env: Environment, adapter: Adapter, turns: int
                    on_finish: Callable[[Environment], dict] | None = None) -> dict:
     """Save everything, snapshot the memory files and discard the world (the reset)."""
     sid = env.sid
+    _unregister_session_stop(sid)   # every finished session (loop, external, stopped) drops its stop signal
     resumable = end_reason in ("adapter_error", "interrupted", "runner_error")
     
     # Auto-capture agent's last words when session ends without memory being written

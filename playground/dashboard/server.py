@@ -15,10 +15,11 @@ import re
 import threading
 import time
 import uuid
+import copy
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -150,6 +151,7 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
                                  verify if task else None)
         with lock:
             live.pop(sid, None)
+        _refresh_datasets_async()   # the log just grew; keep behaviour datasets current
         return summary
 
     # ---------------------------------------------------------------- researcher views
@@ -259,6 +261,29 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
             r["stale"] = (r["last_activity"] or r["started_at"] or 0) < stale
             out.append(r)
         return {"running": out}
+
+    @app.post("/api/sessions/{sid}/stop")
+    def stop_session(sid: int):
+        from ..session.runner import request_stop_session, finish_session
+        row = db.session(sid)
+        if not row:
+            raise HTTPException(404, f"no session {sid}")
+        if row["status"] != "running":
+            raise HTTPException(409, f"session {sid} is not running")
+        # External sessions driven through this server are finished directly.
+        with lock:
+            item = live.pop(sid, None)
+        if item is not None:
+            task = item.get("task")
+            def verify(env):
+                return task.verify(env.world, db.events(env.sid, limit=10 ** 9)) if task else None
+            finish_session(item["cfg"], db, item["env"], item["adapter"], item["env"].agent_calls, {},
+                           "stopped_by_user", None, verify if task else None)
+            _refresh_datasets_async()   # log grew; refresh datasets
+            return {"ok": True, "stopped": True, "note": "external session finished"}
+        # In-process sessions get a stop signal that the runner checks between turns.
+        stopped = request_stop_session(sid)
+        return {"ok": True, "stopped": stopped, "note": "stop signal sent" if stopped else "session not currently running in this process"}
 
     @app.get("/api/analytics")
     def analytics(agent_id: str | None = None):
@@ -393,14 +418,88 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
         return torch_status()
 
     @app.get("/api/ml/columns")
-    def ml_columns():
+    def ml_columns(dataset: str | None = None, scope: str = "researcher", owner: str = "researcher"):
+        from ..ml.datasets import vocab_from_manifest
         from ..ml.features import INPUT_COLUMNS, TARGET_COLUMNS
+        if dataset:
+            reg = _ml_registry(scope, owner)
+            try:
+                ds = reg.load_dataset(dataset)
+            except Exception as e:
+                raise HTTPException(400, f"Could not load dataset: {e}") from None
+            in_cols, tgt_cols = vocab_from_manifest(ds.get("manifest", {}))
+            if in_cols is None or tgt_cols is None:
+                in_cols, tgt_cols = INPUT_COLUMNS, TARGET_COLUMNS
+            return {"inputs": in_cols, "targets": tgt_cols, "dataset": dataset}
         return {"inputs": INPUT_COLUMNS, "targets": TARGET_COLUMNS}
 
     @app.get("/api/ml/datasets")
     def ml_datasets(scope: str = "researcher", owner: str = "researcher"):
         reg = _ml_registry(scope, owner)
         return {"scope": scope, "owner": owner, "datasets": reg.dataset_info()}
+
+    @app.get("/api/ml/datasets/{name}/quality")
+    def ml_dataset_quality(name: str, scope: str = "researcher", owner: str = "researcher"):
+        """Quality report for one dataset: rows/age, per-tool coverage from the live log, class balance
+        on any binary target, warnings (0 rows, below training minimum, class skew) and hash lineage."""
+        reg = _ml_registry(scope, owner)
+        try:
+            ds = reg.load_dataset(name)
+        except Exception as e:
+            raise HTTPException(400, f"Could not load dataset: {e}") from None
+        rows = ds.get("rows") or []
+        m = ds.get("manifest") or {}
+        from ..ml.datasets import DATASETS
+        kind = m.get("kind")
+        s = DATASETS.get(kind)
+        tools = list(s.tools) if s else []
+        coverage = {}
+        for t in tools:
+            c = db.one("SELECT COUNT(*) c FROM actions WHERE tool=?", (t,))
+            coverage[t] = c["c"] if c else 0
+        # Class balance on a binary target column ({0.0, 1.0}). Prefer a column that actually has both
+        # classes, and prefer 'success'-style columns, so a constant measure isn't mistaken for the
+        # classifier target.
+        balance = None
+        tgt_cols = list(m.get("targets") or []) if isinstance(m.get("targets"), list) else list(m.get("targets") or {})
+        best = None
+        for col in tgt_cols:
+            values = [r.get(col) for r in rows if r.get(col) is not None]
+            if not rows or not values or not set(values) <= {0.0, 1.0}:
+                continue
+            n1 = sum(1 for v in values if v == 1.0)
+            both = 0 < n1 < len(values)
+            prefer = (4 if both else 0) + (2 if "success" in col.lower() else 0) + 1
+            if best is None or prefer > best[0]:
+                best = (prefer, col, n1, len(values) - n1)
+        if best:
+            balance = {"column": best[1], "class_1": best[2], "class_0": best[3]}
+        warnings = []
+        if not rows:
+            warnings.append("0 rows — nothing usable for training; run sessions that log this behaviour")
+        elif len(rows) < 20:
+            warnings.append(f"only {len(rows)} rows — below the 20-row training minimum, keep logging")
+        if balance:
+            minority = min(balance["class_1"], balance["class_0"])
+            if len(rows) and minority < max(2, 0.1 * len(rows)):
+                skew = minority / len(rows)
+                warnings.append(f"class skew: {balance['column']} is {balance['class_1']}/{balance['class_0']} "
+                                f"(minority {skew:.0%}) — the model may learn to always answer the majority")
+        age_min = None
+        if m.get("updated_at"):
+            age_min = max(0.0, (time.time() - m["updated_at"]) / 60)
+        stale = age_min is not None and age_min > 60
+        return {"name": name, "kind": kind, "rows": len(rows), "updated_at": m.get("updated_at"),
+                "age_minutes": None if age_min is None else round(age_min, 1), "stale": stale,
+                "coverage": coverage, "balance": balance, "warnings": warnings,
+                "rows_sha256": m.get("rows_sha256"), "source": m.get("source"),
+                "targets": tgt_cols, "inputs": list(m.get("inputs") or []) if isinstance(m.get("inputs"), list)
+                else list(m.get("inputs") or {})}
+
+    @app.get("/api/ml/leaderboard")
+    def ml_leaderboard():
+        from ..ml import leaderboard as lb
+        return {"entries": lb.entries(cfg, limit=100), "by_model": lb.by_model(cfg)}
 
     @app.post("/api/ml/generate")
     def ml_generate(body: dict = Body(...)):
@@ -541,6 +640,24 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
                     summary["scope"], summary["owner"] = scope, owner
                     ml_jobs[job_id]["status"] = "done"
                     ml_jobs[job_id]["result_summary"] = summary
+                    # Leaderboard: one persistent profile entry per finished training run.
+                    try:
+                        from ..ml import leaderboard as lb
+                        mets = result["metrics"]
+                        lb.record(cfg, {
+                            "source": "train", "scope": scope, "owner": owner,
+                            "name": spec.get("name", "?"), "version": (saved or {}).get("version"),
+                            "dataset": dataset_name, "dataset_rows": len(ds["rows"]),
+                            "target": spec.get("target"), "parameters": result.get("parameters"),
+                            "test_rmse": mets["test"]["rmse"], "test_r2": mets["test"]["r2"],
+                            "test_mae": mets["test"]["mae"],
+                            "beats_linear": bool(mets["beats_linear_baseline"]),
+                            "beats_mean": bool(mets["beats_mean_baseline"]),
+                            "linear_rmse": mets["baseline_linear"]["rmse"],
+                            "epochs_run": result.get("epochs_run"), "device": result.get("device"),
+                        })
+                    except Exception:  # leaderboard must never break training
+                        pass
                 except Exception as e:
                     ml_jobs[job_id]["status"] = "error"
                     ml_jobs[job_id]["error"] = str(e)
@@ -687,6 +804,70 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
         threading.Thread(target=run_controller, daemon=True).start()
         return {"job_id": job_id}
 
+    @app.post("/api/ml/closed-loop-compare")
+    def ml_closed_loop_compare(body: dict = Body(...)):
+        """One click (Nov 2026): run a trained network AS the agent's brain on a benchmark task AND the
+        same task with the scripted reference policy under identical conditions. Both are judged by the
+        task's own verifier; the result is a side-by-side with a verdict. Uses the ML lock like the
+        other eval jobs so nothing overloads the world."""
+        from ..ml.registry import NAME_RE
+        from ..ml import MLError
+        from ..agents.adapters import make_adapter, make_neural_adapter, AdapterError
+        from ..session.benchmark import run_controller_benchmark, TASKS
+        owner = body.get("owner", "researcher")
+        name = body.get("name")
+        version = body.get("version")
+        task_id = body.get("task_id", "throw_height")
+        if not name:
+            raise HTTPException(400, "name (model name) is required.")
+        if task_id not in TASKS:
+            raise HTTPException(400, f"unknown task_id; available: {sorted(TASKS)}")
+        with ml_lock:
+            if ml_running["busy"]:
+                raise HTTPException(409, "A training, evaluation or generation job is already running.")
+            ml_running["busy"] = True
+        job_id = str(uuid.uuid4())[:8]
+        ml_jobs[job_id] = {"status": "queued", "kind": "closed_loop_compare",
+                           "model": f"{owner}/{name}", "task_id": task_id}
+
+        def run_compare_job():
+            try:
+                ml_jobs[job_id]["status"] = "running"
+                neural = make_neural_adapter(cfg, owner=owner, name=name, version=version)
+                model_result = run_controller_benchmark(cfg, db, neural, task_id=task_id,
+                                                        label=f"clv:{owner}/{name}")
+                scripted = make_adapter(cfg, "scripted")
+                baseline_result = run_controller_benchmark(cfg, db, scripted, task_id=task_id,
+                                                           label=f"clv:{owner}/{name}:baseline")
+                def better(a, b):
+                    if a is None or b is None:
+                        return None
+                    return a > b
+                verdict = {
+                    "beats_baseline": better(model_result.get("score"), baseline_result.get("score")),
+                    "model_completed": model_result.get("completed"),
+                    "baseline_completed": baseline_result.get("completed"),
+                    "score_delta": (None if model_result.get("score") is None or
+                                    baseline_result.get("score") is None
+                                    else round(model_result["score"] - baseline_result["score"], 3)),
+                }
+                ml_jobs[job_id]["status"] = "done"
+                ml_jobs[job_id]["result_summary"] = {
+                    "task_id": task_id, "model": model_result, "baseline": baseline_result,
+                    "verdict": verdict}
+            except (MLError, AdapterError) as e:
+                ml_jobs[job_id]["status"] = "error"
+                ml_jobs[job_id]["error"] = getattr(e, "message", str(e))
+            except Exception as e:  # noqa: BLE001
+                ml_jobs[job_id]["status"] = "error"
+                ml_jobs[job_id]["error"] = str(e)
+            finally:
+                with ml_lock:
+                    ml_running["busy"] = False
+
+        threading.Thread(target=run_compare_job, daemon=True).start()
+        return {"job_id": job_id}
+
     # ---------------------------------------------------------------- audit 2026-11-13 dashboard access
     # Everything the audit added to the CLI, exposed to the dashboard: model discovery, the ML on/off
     # switch, per-session behavioural profiles, the provenance check, and launching exploration /
@@ -782,6 +963,7 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
                 import hashlib as _hl
                 ds["manifest"]["rows_sha256"] = _hl.sha256(
                     json.dumps(ds["rows"], sort_keys=True).encode()).hexdigest()
+                ds["manifest"]["updated_at"] = time.time()
                 info = reg.save_dataset(name, ds)
                 ml_jobs[job_id]["status"] = "done"
                 ml_jobs[job_id]["result_summary"] = {**info, "kind": kind, "rows": ds["manifest"]["rows"],
@@ -834,6 +1016,10 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
             try:
                 target(run_jobs[job_id])
                 run_jobs[job_id]["status"] = "done"
+                # Incremental datasets: the run just added actions to the log; rebuild the log-derived
+                # behaviour datasets so the NN lab trains on current data.
+                _refresh_datasets_async(on_done=lambda out: run_jobs[job_id].setdefault(
+                    "dataset_refresh", out))
             except Exception as e:  # noqa: BLE001
                 run_jobs[job_id]["status"] = "error"
                 run_jobs[job_id]["error"] = str(e)
@@ -843,45 +1029,251 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
         threading.Thread(target=wrap, daemon=True).start()
         return {"job_id": job_id}
 
+    dataset_refresh_lock = threading.Lock()
+
+    def _all_registries():
+        """The researcher registry plus every agent nn/ registry that holds datasets."""
+        from ..ml.registry import Registry, registry_for
+        regs = [registry_for(cfg, "researcher", "researcher")]
+        mem_root = resolve_path(cfg, cfg["memory"]["root"])
+        mem_root = Path(mem_root)
+        if mem_root.exists():
+            for d in sorted(mem_root.iterdir()):
+                if (d / "nn" / "datasets").is_dir():
+                    regs.append(Registry(cfg, root=d / "nn"))
+        return regs
+
+    def _refresh_datasets_async(on_done=None):
+        """Rebuild log-derived behaviour datasets in a background thread (no-op if disabled)."""
+        if not (cfg.get("ml", {}).get("auto_refresh_datasets", True)):
+            return None
+
+        def run():
+            out: list = []
+            try:
+                from ..ml.datasets import refresh_log_datasets
+                with dataset_refresh_lock:
+                    for reg in _all_registries():
+                        out.extend(refresh_log_datasets(db, reg))
+            except Exception as e:  # noqa: BLE001
+                out = [{"error": str(e)}]
+            if on_done:
+                try:
+                    on_done(out)
+                except Exception:
+                    pass
+            return out
+        threading.Thread(target=run, daemon=True).start()
+        return True
+
+
     @app.get("/api/run/jobs/{job_id}")
     def run_job_status(job_id: str):
         if job_id not in run_jobs:
             raise HTTPException(404, f"No run job '{job_id}'.")
         return run_jobs[job_id]
 
+    @app.post("/api/run/jobs/{job_id}/stop")
+    def run_job_stop(job_id: str):
+        if job_id not in run_jobs:
+            raise HTTPException(404, f"No run job '{job_id}'.")
+        with run_lock:
+            run_jobs[job_id]["stop"] = True
+        return {"ok": True, "job_id": job_id, "note": "stop requested"}
+
+    @app.post("/api/panic")
+    def panic_stop():
+        """Kill switch: stop every running session and run job this server knows about, in one call."""
+        from ..session.runner import _session_stop_events, request_stop_session, finish_session
+        sessions_requested = 0
+        # In-process loop sessions (runner registry): ask each to stop at its next safe point.
+        for sid in list(_session_stop_events.keys()):
+            if request_stop_session(sid):
+                sessions_requested += 1
+        # Externally driven sessions: finish them directly.
+        with lock:
+            external_items = list(live.items())
+            live.clear()
+        external_finished = 0
+        for sid, item in external_items:
+            task = item.get("task")
+            def verify(env):
+                return task.verify(env.world, db.events(env.sid, limit=10 ** 9)) if task else None
+            finish_session(item["cfg"], db, item["env"], item["adapter"], item["env"].agent_calls, {},
+                           "stopped_by_user", None, verify if task else None)
+            external_finished += 1
+            sessions_requested += 1
+        _refresh_datasets_async()   # the killed sessions' actions are now in the log
+        # Run jobs: mark every running job as stopping.
+        jobs_stopped = 0
+        with run_lock:
+            for jid, job in run_jobs.items():
+                if job.get("status") == "running":
+                    job["stop"] = True
+                    jobs_stopped += 1
+        return {"ok": True, "sessions_signalled": sessions_requested,
+                "external_finished": external_finished, "run_jobs_stopping": jobs_stopped}
+
     @app.get("/api/run/active")
     def run_active():
         return {"busy": run_state["busy"], "jobs": {k: v["status"] for k, v in run_jobs.items()}}
 
+    @app.get("/api/stream/events")
+    async def stream_events(request: Request, agent: str | None = None, max_events: int = 0):
+        """Server-Sent Events: push every recorded action (plus session lifecycle) as it appears in the
+        log, across ALL sessions at once. The stream reads the shared SQLite log, so sessions driven by
+        the CLI in another process stream here too — watching never interferes. `max_events` (test hook)
+        ends the stream after N events; `agent` filters to one agent."""
+        import asyncio as _asyncio
+        from fastapi.responses import StreamingResponse
+
+        state = {"last_action": 0, "sessions": {}}
+
+        def poll() -> list[dict]:
+            out: list[dict] = []
+            where, params = "", []
+            if agent:
+                where = "AND s.agent_id=?"
+                params = [agent]
+            rows = db.q(f"SELECT id, agent_id, mode, session_number, status, end_reason FROM sessions s "
+                        f"ORDER BY id DESC LIMIT 40")
+            live_now = {}
+            for r in rows:
+                live_now[r["id"]] = r
+                prev = state["sessions"].get(r["id"])
+                if prev is None or prev.get("status") != r["status"] or prev.get("end_reason") != r["end_reason"]:
+                    state["sessions"][r["id"]] = r
+                    out.append({"type": "session", "session_id": r["id"], "agent_id": r["agent_id"],
+                                "mode": r["mode"], "session_number": r["session_number"],
+                                "status": r["status"], "end_reason": r["end_reason"]})
+            for sid in list(state["sessions"]):
+                if sid not in live_now:
+                    del state["sessions"][sid]
+            acts = db.q(f"SELECT a.id, a.session_id, a.tool, a.category, a.success, a.error_code, "
+                        f"a.turn, a.t_start, a.args_json FROM actions a JOIN sessions s ON s.id=a.session_id "
+                        f"WHERE a.id > ? {where} ORDER BY a.id LIMIT 200",
+                        [state["last_action"], *params])
+            for a in acts:
+                state["last_action"] = max(state["last_action"], a["id"])
+                try:
+                    args = json.loads(a.get("args_json") or "{}")
+                except (TypeError, ValueError):
+                    args = {}
+                out.append({"type": "action", "id": a["id"], "session_id": a["session_id"],
+                            "tool": a["tool"], "category": a["category"], "success": bool(a["success"]),
+                            "error_code": a["error_code"], "turn": a["turn"],
+                            "args": {k: args[k] for k in list(args)[:6] if not isinstance(args[k], (dict, list))}})
+            return out
+
+        async def gen():
+            sent = 0
+            # Initial state: the last 5 actions per running session so a fresh console is not empty.
+            for r in db.q("SELECT id, agent_id, mode, session_number, status FROM sessions "
+                          "WHERE status='running' ORDER BY id DESC LIMIT 8"):
+                state["sessions"][r["id"]] = dict(r)
+                yield f"data: {json.dumps({'type': 'session', **r})}\n\n"
+            idle_ticks = 0
+            while True:
+                events = poll()
+                for e in events:
+                    sent += 1
+                    yield f"data: {json.dumps(e, default=str)}\n\n"
+                if max_events and sent >= max_events:
+                    return
+                idle_ticks += 1
+                if idle_ticks % 30 == 0:      # ~15 s heartbeat at 0.5 s cadence
+                    yield ": heartbeat\n\n"
+                await _asyncio.sleep(0.5)
+
+        return StreamingResponse(gen(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
     @app.post("/api/run/explore")
     def run_explore(body: dict = Body(...)):
-        """Launch exploration sessions for one agent from the browser (audit 2026-11-13)."""
+        """Launch exploration sessions for one agent from the browser (audit 2026-11-13).
+
+        Accepted knobs (the dashboard's run form): agent_id, adapter, model, sessions (per run),
+        max_steps (steps per session), concurrency (sessions running at a time), max_continuations.
+        """
+        from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait
         from ..agents.adapters import make_adapter
-        from ..session.runner import run_session
+        from ..session.runner import run_session, request_stop_session
         agent_id = str(body.get("agent_id") or "agent_001")
         adapter_name = str(body.get("adapter") or "lmstudio")
         model = body.get("model")
-        sessions = max(1, min(20, int(body.get("sessions", 1))))
+        sessions = max(1, min(50, int(body.get("sessions", 1))))
+        concurrency = max(1, min(8, int(body.get("concurrency", 1))))
         max_cont = max(0, min(20, int(body.get("max_continuations", 0))))
+        max_steps = body.get("max_steps")
         if adapter_name not in cfg.get("adapters", {}):
             raise HTTPException(400, f"unknown adapter '{adapter_name}'")
 
+        def run_one(state):
+            ad = make_adapter(cfg, adapter_name, model=model)
+            run_cfg = cfg
+            if max_steps is not None:
+                run_cfg = copy.deepcopy(cfg)
+                run_cfg.setdefault("session", {})["max_steps"] = max(1, int(max_steps))
+            return run_session(run_cfg, db, agent_id, ad, mode="exploration",
+                               on_event=lambda etype, data: state.setdefault("current_sessions", set()).add(data["session_id"]))
+
         def job(state):
             remaining, granted = sessions, 0
-            while remaining > 0:
-                ad = make_adapter(cfg, adapter_name, model=model)
-                s = run_session(json.loads(json.dumps(cfg)) if False else cfg, db, agent_id, ad,
-                                mode="exploration")
-                state["progress"].append({"session_id": s["session_id"], "end_reason": s["end_reason"],
-                                          "actions": s["actions_logged"],
-                                          "continue_requested": s.get("continue_requested")})
-                if s["end_reason"] in ("adapter_error", "runner_error", "interrupted"):
-                    break
-                remaining -= 1
-                if remaining == 0 and s.get("continue_requested") and granted < max_cont:
+            stop_sent: set[int] = set()
+            progress = state["progress"]
+
+            def collect(f) -> None:
+                """Record one finished session and steer the remaining budget."""
+                nonlocal remaining, granted
+                try:
+                    s = f.result()
+                except Exception as e:
+                    progress.append({"session_id": None, "end_reason": "runner_error", "actions": 0,
+                                     "continue_requested": False, "error": str(e)})
+                    remaining = 0
+                    return
+                cur: set = state.get("current_sessions") or set()
+                cur.discard(s["session_id"])
+                progress.append({"session_id": s["session_id"], "end_reason": s["end_reason"],
+                                 "actions": s["actions_logged"],
+                                 "continue_requested": s.get("continue_requested"),
+                                 "error": s.get("error")})
+                if s["end_reason"] in ("adapter_error", "runner_error", "interrupted", "stopped_by_user"):
+                    remaining = 0
+                elif remaining == 0 and s.get("continue_requested") and granted < max_cont:
                     granted += 1
                     remaining = 1
-            state["result"] = {"sessions_run": len(state["progress"]), "continuations_granted": granted}
+
+            with ThreadPoolExecutor(max_workers=concurrency) as pool:
+                futures: set = set()
+                while remaining > 0 or futures:
+                    # A pending stop: signal every in-flight session to stop at its next safe point,
+                    # spawn nothing new, give the runner up to 60 s to write them out.
+                    if state.get("stop"):
+                        cur: set = state.get("current_sessions") or set()
+                        for sid in list(cur):
+                            if sid not in stop_sent:
+                                request_stop_session(sid)
+                                stop_sent.add(sid)
+                        if not futures:
+                            break
+                        done, futures = wait(futures, timeout=60, return_when=FIRST_COMPLETED)
+                        for f in done:
+                            collect(f)
+                        if not futures:
+                            break
+                        continue
+                    while len(futures) < concurrency and remaining > 0:
+                        remaining -= 1
+                        futures.add(pool.submit(run_one, state))
+                    if not futures:
+                        break
+                    # 0.5 s slice so a stop request is honoured mid-run, not only between sessions.
+                    done, futures = wait(futures, timeout=0.5, return_when=FIRST_COMPLETED)
+                    for f in done:
+                        collect(f)
+            state["result"] = {"sessions_run": len(progress), "continuations_granted": granted,
+                               "stopped": bool(state.get("stop"))}
         return _start_run_job("explore", job)
 
     @app.post("/api/run/compare")
@@ -908,6 +1300,24 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
                                       "actions": p["actions"], "distinct_tools": p["distinct_tools"],
                                       "observation_share": p["observation_share"], "goals_set": p["goals_set"]}))
             state["result"] = res["by_model"]
+            # Leaderboard: one persistent behavioural entry per compared model.
+            try:
+                from ..ml import leaderboard as lb
+                for model_id, agg in res["by_model"].items():
+                    lb.record(cfg, {
+                        "source": "compare", "owner": "researcher", "name": model_id,
+                        "adapter": adapter_name, "agents": agents, "sessions_per_agent": 1,
+                        "max_steps": max_steps, "context_tokens": ctx,
+                        "actions_mean": agg.get("actions_mean"),
+                        "distinct_tools_mean": agg.get("distinct_tools_mean"),
+                        "goals_set_mean": agg.get("goals_set_mean"),
+                        "confirmed_discoveries_mean": agg.get("confirmed_discoveries_mean"),
+                        "failed_share_mean": agg.get("failed_share_mean"),
+                        "experiments_mean": agg.get("experiments_mean"),
+                        "errored": agg.get("errored"),
+                    })
+            except Exception:
+                pass
         return _start_run_job("compare", job)
 
     # ---------------------------------------------------------------- dashboard

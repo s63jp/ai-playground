@@ -1,9 +1,27 @@
 # Humanoid Asset for AI Playground (MuJoCo)
 
-## Files Created
+## Status: VERIFIED WORKING (Nov 2026)
 
-1. **humanoid_rigged.blend** - Blender source file with rigged humanoid
-2. **humanoid_mujoco.xml** - MuJoCo physics simulation model
+`assets/humanoid_mujoco.xml` loads and simulates cleanly under mujoco 4.0.1: 14 bodies / 14 named
+joints / 12 actuators, 250 steps stable, motors drive their joints. Covered by
+`tests/test_humanoid_asset.py` (runs in the HVE suite) and by
+`scripts/test_humanoid_integration.py` (standalone run).
+
+## Corrections made to the original export
+
+The exported XML as first shipped **did not load** — mujoco rejected it on the first actuator:
+1. **Unnamed joints**: the actuators referenced `joint="torso/spine_L2"` but the joint elements had no
+   `name` attributes. Every joint is now named and actuators reference bare joint names.
+2. **Ball joint driven by three motors**: the head was one `<joint type="ball"/>` with three motors
+   aimed at it. Replaced with three named hinges (`head_pitch` / `head_yaw` / `head_roll`) composed on
+   one body (MuJoCo composes multiple joints per body; intermediate bodies must own geoms to have mass).
+3. **Layout lying along -Y**: limbs extended sideways (legs/arms along -Y and a `-0.5` root offset).
+   The figure now stands along +Z: legs below the torso, arms hanging at the sides, head above, feet on
+   a ground plane — a 1.6 m standing figure matching the island's agent body (0.44 × 1.6 m box).
+4. **Wrong absolute path**: `meshdir="<home>/Projects/<other-project>/assets/meshes/"`
+   pointed at a different project. Removed (the asset uses no mesh files) — the XML is portable.
+5. **Joint damping** (1.5) added so a neutral ctrl holds a stable rest pose instead of flailing.
+
 
 ## Joint Hierarchy (14 joints total)
 
