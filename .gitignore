@@ -8,3 +8,4 @@ experiments/
 *.db-wal
 *.db-shm
 experiments_archive/
+backups/
