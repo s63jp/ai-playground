@@ -71,6 +71,37 @@ _TC_OPEN = _BQ + "antml:tool_calls" + _BQ
 _TC_CLOSE = _BQ + "/antml:tool_calls" + _BQ
 _TC_BLOCK_RE = re.compile(re.escape(_TC_OPEN) + r"(.*?)" + re.escape(_TC_CLOSE), re.S)
 
+# ---- history digest (reports/PILOT_20261116_QWEN_60STEPS.md finding 4) ----
+# Prompt latency grows with request size: a local model's per-call prefill over
+# tens of thousands of history tokens costs minutes late in a long session. The
+# trim already bounds the request; this digest keeps it INFORMATIVE while it is
+# bounded: every dropped message is compressed to one deterministic line and
+# carried inside the "earlier turns" marker, capped at _DIGEST_MAX_CHARS.
+_DIGEST_MAX_CHARS = 4000
+_DIGEST_RESERVE = 1400  # guaranteed slot the drop loop keeps free for the digest marker
+_DIGEST_HEAD = ("[Earlier turns of this session were removed to save space. Your memory files "
+                "and the world itself are unchanged. So far, in one line each (newest first):\n")
+
+
+def _digest_line(msg: dict) -> str:
+    """One deterministic line for a message the trim is dropping. Never calls the
+    model, never invents content: tool names + arguments (truncated), tool outcomes
+    (the error code is what matters) or the agent's own words, truncated."""
+    role = msg.get("role", "?")
+    if role == "assistant":
+        names = [tc.get("function", {}).get("name", "?") for tc in msg.get("tool_calls") or []]
+        if names:
+            args = ", ".join(str(tc.get("function", {}).get("arguments", ""))[:80] for tc in
+                             msg.get("tool_calls") or [])
+            return f"[agent] called {'+'.join(names)}({args[:160]})"
+        text = str(msg.get("content", "")).strip().replace("\n", " ")
+        return f"[agent said] {text[:160]}" if text else "[agent] (no text, no call)"
+    if role == "tool":
+        text = str(msg.get("content", "")).strip().replace("\n", " ")
+        return f"[result] {text[:160]}"
+    text = str(msg.get("content", "")).strip().replace("\n", " ")
+    return f"[prompt] {text[:160]}"
+
 
 def _parse_bool(raw: str) -> Any:
     stripped = raw.strip().lower()
@@ -240,6 +271,7 @@ class OpenAICompatAdapter(Adapter):
         self.chars_per_token = chars_per_token
         self.extra_body = extra_body or {}
         self.name = label or "openai_compat"
+        self.digest_lines: list[str] = []
         self.client = httpx.Client(timeout=timeout)
         self.messages: list[dict] = []
         self.tools: list[dict] = []
@@ -282,18 +314,57 @@ class OpenAICompatAdapter(Adapter):
                       and "[Earlier turns" in str(self.messages[2].get("content")))
         start = 3 if has_marker else 2
         # Drop oldest complete exchanges (an assistant turn and the tool/user turns answering it) from the
-        # middle, never touching messages[0] (system) or messages[1] (opening).
-        while body_size() > budget and len(self.messages) - start > 4:
+        # middle, never touching messages[0] (system) or messages[1] (opening). What is dropped is not
+        # lost: the message history is an in-prompt working set only — the session's actions table
+        # (the authority on what happened) and the agent's own memory files outlive everything here.
+        # The loop leaves room for the digest marker — but only while NO marker exists yet:
+        # once one is in place at index 2, its rendered size already occupies its budget share,
+        # and re-reserving on every call would creep (each call dropping exchanges that fit).
+        reserve = 0 if has_marker else _DIGEST_RESERVE
+        while body_size() + reserve > budget and len(self.messages) - start > 4:
             i = start
             removed += 1
+            dropped = [self.messages[i]]
             del self.messages[i]
             while i < len(self.messages) and self.messages[i]["role"] in ("tool", "user"):
+                dropped.append(self.messages[i])
                 del self.messages[i]
-        if removed and not has_marker:
-            self.messages.insert(2, {"role": "user", "content": "[Earlier turns of this session were removed "
-                                     "to save space. Your memory files and the world itself are unchanged.]"})
+            self.digest_lines.extend(_digest_line(m) for m in dropped)
+        if self.digest_lines or (removed and not has_marker):
+            # The digest REPLACES an existing marker and is otherwise inserted; the room it
+            # may occupy is what the drops freed, measured against the body WITH the marker
+            # slot accounted (json serialized, escaping included).
+            old_marker = len(json.dumps(self.messages[2])) if has_marker else 0
+            room = max(600, budget - (body_size() - old_marker))
+            self._refresh_digest_marker(min(_DIGEST_MAX_CHARS, room),
+                                        lambda: body_size() <= budget)
         self.last_trim = {"removed_exchanges": removed, "budget_chars": budget,
                           "request_chars": body_size()} if removed else None
+
+    def _put_marker(self, content: str) -> None:
+        if len(self.messages) > 2 and self.messages[2].get("role") == "user" \
+                and "[Earlier turns" in str(self.messages[2].get("content")):
+            self.messages[2]["content"] = content
+        else:
+            self.messages.insert(2, {"role": "user", "content": content})
+
+    def _refresh_digest_marker(self, cap: int, within_budget) -> None:
+        """Render the 'earlier turns' marker with a bounded digest of everything the trim ever
+        dropped (newest lines first). The digest is deterministic — tool names, outcomes and the
+        agent's own words are compressed, never invented — and shrinks from its OLDEST end
+        until it fits ``cap`` AND ``within_budget()`` is satisfied."""
+        if not self.digest_lines:
+            self._put_marker(_DIGEST_HEAD + "nothing has been removed yet.]")
+            return
+        lines = list(reversed(self.digest_lines))  # newline per dropped message; newest first
+        n = len(lines)
+        while True:
+            marker = _DIGEST_HEAD + "\n".join(lines[:n]) + "\n]" if n else (_DIGEST_HEAD.rstrip(":\n") + " nothing has been removed yet.]")
+            self._put_marker(marker)
+            # Always terminates: n walks down to 0 and the n==0 render is final.
+            if n == 0 or (len(marker) <= cap and within_budget()):
+                break
+            n -= 1
 
     def describe(self) -> dict:
         return {"adapter": self.name, "model": self.model, "context_tokens": self.context_tokens,

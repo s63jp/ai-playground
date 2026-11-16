@@ -152,13 +152,19 @@ gateway:
 adapters:
   scripted: {type: scripted}
   random:   {type: random}
+  # Local XPU prefill is the latency bottleneck of long sessions: per-call prompt time grows
+  # with history, and by ~80 actions an auto-probed 262k window let the request grow to
+  # 30k+ history tokens (3+ minutes per call). A pinned window bounds it: the trim drops
+  # oldest exchanges into a one-line-each digest and the request stays small all session.
+  # History, actions and evidence all remain in the database and the agent's memory files;
+  # nothing about the physics or the record loop depends on the in-prompt working set.
   lmstudio:
     type: openai_compat
     base_url: http://127.0.0.1:1234/v1
     model: lowkeyqwen3.52b
     api_key_env: LM_API_KEY
     temperature: 0.7
-    context_tokens: auto
+    context_tokens: 32768
   # The researcher's custom Unsloth Qwen 4B (Q8_0, qwen35 arch) on LM Studio. ~2 s per decision.
   lmstudio_unsloth4b:
     type: openai_compat
@@ -166,7 +172,7 @@ adapters:
     model: "unslothqen 4b"
     api_key_env: LM_API_KEY
     temperature: 0.7
-    context_tokens: auto
+    context_tokens: 32768
   lmstudio_hauhaucs4b:
     type: openai_compat
     base_url: http://127.0.0.1:1234/v1
@@ -191,6 +197,7 @@ adapters:
     model: qwen/qwen3.5-9b
     api_key_env: LM_API_KEY
     temperature: 0.7
+    context_tokens: 32768
   lmstudio_claude_distilled9b:
     type: openai_compat
     base_url: http://127.0.0.1:1234/v1

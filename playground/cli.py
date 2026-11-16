@@ -127,6 +127,63 @@ def cmd_memory(args):
     return 0
 
 
+def cmd_messages(args):
+    """Dump a session's whole transcript: every message and every action, in turn order.
+    With --out, writes a UTF-8 JSONL file (messages and actions annotated by kind); otherwise
+    prints a human-readable transcript. The database remains the authority; this is a read-only view."""
+    import io
+    import sys as _sys
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    cfg = _cfg(args)
+    db = _db(cfg)
+    sid = args.session_id
+    sess = db.q("SELECT * FROM sessions WHERE id=?", (sid,))
+    if not sess:
+        print(f"no session {sid}")
+        return 1
+    sess = sess[0]
+    messages = db.q("SELECT turn, role, content FROM messages WHERE session_id=? ORDER BY turn, id", (sid,))
+    actions = db.q("SELECT idx, turn, tool, category, args_json, success, error_code, result_json "
+                   "FROM actions WHERE session_id=? ORDER BY idx", (sid,))
+
+    def record(kind: str, row: dict) -> dict:
+        return {"kind": kind, "session_id": sid, **row}
+
+    if args.out:
+        path = args.out
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            for r in messages:
+                fh.write(json.dumps(record("message", dict(r)), ensure_ascii=False, default=str) + "\n")
+            for r in actions:
+                fh.write(json.dumps(record("action", dict(r)), ensure_ascii=False, default=str) + "\n")
+        print(f"wrote {len(messages)} messages and {len(actions)} actions for session {sid} to {path}")
+        return 0
+
+    print(f"session {sid}: agent {sess['agent_id']}  adapter {sess['adapter']}  model {sess['model']}"
+          f"  status {sess['status']}  end {sess['end_reason']}  actions {sess['action_count']}")
+    ev_by_turn: dict = {}
+    for r in actions:
+        ev_by_turn.setdefault(r["turn"], []).append(r)
+    for r in messages:
+        head = f"--- turn {r['turn']} [{r['role']}]"
+        print(head)
+        print(r["content"])
+        for a in ev_by_turn.get(r["turn"], []):
+            ok = "ok" if a["success"] else f"FAIL {a['error_code']}"
+            print(f"    action #{a['idx']} {a['tool']}  -> {ok}")
+    msg_turns = {r["turn"] for r in messages}
+    for turn in sorted(ev_by_turn):
+        if turn not in msg_turns:  # actions on turns with no stored message (tool-only turns)
+            for a in ev_by_turn[turn]:
+                ok = "ok" if a["success"] else f"FAIL {a['error_code']}"
+                print(f"--- turn {turn}")
+                print(f"    action #{a['idx']} {a['tool']}  -> {ok}")
+    return 0
+
+
 def cmd_benchmark(args):
     from .session.benchmark import run_benchmark
     cfg = _cfg(args)
@@ -403,6 +460,10 @@ def main(argv=None) -> int:
                                            "unfinished_goals)")
     s.add_argument("--reason", default=None)
     s.set_defaults(fn=cmd_memory)
+    s = sub.add_parser("messages", help="dump a session's full transcript (messages + actions)")
+    s.add_argument("session_id", type=int)
+    s.add_argument("--out", default=None, help="write a JSONL dump to this file instead of printing")
+    s.set_defaults(fn=cmd_messages)
     s = sub.add_parser("benchmark", help="Group A (experienced) vs Group B (fresh)")
     s.add_argument("--group-a", required=True)
     s.add_argument("--group-b", default=None)

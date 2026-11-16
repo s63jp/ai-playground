@@ -241,6 +241,20 @@ $PY -m playground verify-log 12      # recompute session 12's hash chain
 | `world.*` | | island, platforms, spire, blocks, rock, ring |
 | `database` | experiments/playground.db | SQLite file |
 
+### Prompt size and per-call latency
+
+A local model's per-call time grows with the request: by ~80 actions an auto-probed 262k
+window can let history grow past 30k tokens (several minutes per call on XPU). Mitigations,
+all recorded in the session's config hash:
+
+* **`context_tokens: 32768`** (pinned on the local adapters) bounds the whole request:
+  the history trim drops oldest exchanges first instead of growing into the window.
+* Dropped history is not lost: each dropped message is compressed into a one-line digest
+  carried inside the "earlier turns" marker (tool names, outcomes, agent's own words —
+  deterministic, no model-generated summary). The full record stays in the database.
+* **`playground messages <session_id>`** dumps any session's complete transcript
+  (messages + every action with arguments and full results); `--out FILE` writes JSONL.
+
 ---
 
 ## 9. Tests
