@@ -79,6 +79,11 @@ session:
   wrap_up_notice_steps: 8
   max_wait_seconds: 30.0
   idle_turn_limit: 3
+  loop_nudge: 4              # after N IDENTICAL failing calls in a row the runner tells the agent to change approach
+  # A repeated failed call is real behaviour (logged as a message row, visible to the agent's
+  # own history), but unbounded retry loops burn wall-clock on live models (measured
+  # 2026-11-16: a 4B cycling one out_of_reach pick_up for minutes). The nudge names the exact
+  # repeat; the streak resets on the next success. Set to 0 to disable.
 
 memory:
   root: experiments/agents

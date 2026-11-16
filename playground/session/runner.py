@@ -15,13 +15,32 @@ from typing import Any, Callable
 from ..agents.adapters import Adapter, AdapterError, ToolCall
 from ..agents.prompts import (BENCHMARK_SYSTEM, DEFAULT_PERSONALITY, REVIEW_BEFORE_STOP,
                               benchmark_opening, continue_nudge, exploration_opening, exploration_system,
-                              prompt_hash)
+                              loop_nudge, prompt_hash)
 from ..analysis.behaviour import store_classification
 from ..config import config_hash, resolve_path
 from ..interface.environment import Environment
 from ..interface.schema import SPECS
 from ..memory import MemoryStore
 from ..world.physics import PhysicsWorld
+
+def _failed_streak(results: list) -> tuple[int, str, str] | None:
+    """Length of the trailing run of IDENTICAL failing calls (same tool, same arguments),
+    or None when the last call succeeded. Successes reset the cycle."""
+    if not results:
+        return None
+    call, res = results[-1]
+    if res.get("success", True):
+        return None
+    tool, args = call.name, call.args if isinstance(call.args, str) else json.dumps(call.args or {}, sort_keys=True)
+    n = 0
+    for c, r in reversed(results):
+        if c.name == tool and not r.get("success", True) and \
+                (c.args if isinstance(c.args, str) else json.dumps(c.args or {}, sort_keys=True)) == args:
+            n += 1
+        else:
+            break
+    return (n, tool, args)
+
 
 _canonical_cache: dict[str, str] = {}
 
@@ -292,6 +311,18 @@ def run_session(cfg: dict, db, agent_id: str, adapter: Adapter, mode: str = "exp
                 break
             if env.phase == "closed":
                 break
+            # Loop-breaker (2026-11-16): after N IDENTICAL failing calls in a row, tell the agent
+            # directly. Repeating a failed call is real behaviour data — logged as a message row and
+            # counted in the session record — but unbounded repetition wastes real time on live models
+            # (measured: pick_up block_09 cycled ~4x/call-minute). The nudge names the exact repeat;
+            # the streak resets on the next success. 0/None disables.
+            loop_limit = s_cfg.get("loop_nudge", 4)
+            if loop_limit:
+                streak = _failed_streak(results)
+                if streak and streak[0] >= int(loop_limit) and streak[0] % int(loop_limit) == 0:
+                    n_i, tool, args = streak
+                    user_text = loop_nudge(n_i, tool, args)
+                    db.add_message(sid, turns, "user", user_text)
     except AdapterError as exc:
         error, end_reason = str(exc), "adapter_error"
     except KeyboardInterrupt:

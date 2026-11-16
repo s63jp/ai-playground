@@ -184,8 +184,23 @@ def continue_nudge(remaining: dict | None = None) -> str:
     return base
 
 
-REVIEW_BEFORE_STOP = (
-    "(You are about to end the session. If you want future sessions to carry on from where you are, record "
+LOOP_NUDGE = (
+    "(You have now repeated the exact same failing call {n} times in a row — {summary}. Repeating it will "
+    "produce the same result again. Change your approach instead: move so the action can succeed, look at "
+    "why it fails (observe_world, look_around, inspect_object), choose a different object or target, or if "
+    "the failure itself is the finding, record it with record_experiment and move on.)")
+
+
+def loop_nudge(n: int, tool: str, args: str) -> str:
+    return LOOP_NUDGE.format(n=n, summary=f"{tool}({_summarise(args)})")
+
+
+def _summarise(args: str) -> str:
+    a = args if len(args) <= 60 else args[:57] + "..."
+    return a or "no arguments"
+
+
+REVIEW_BEFORE_STOP = (    "(You are about to end the session. If you want future sessions to carry on from where you are, record "
     "any goals or open questions with set_goal before finishing; the diary itself is permanent. Call "
     "end_session when you are ready.)")
 
