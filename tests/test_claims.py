@@ -16,9 +16,9 @@ import inspect
 import numpy as np
 import pytest
 
-from playground.interface.schema import SPECS
 from playground.integrity import CLAIM_HELP, VERIFIERS
 from playground.integrity.claims import verify_claim
+from playground.interface.schema import SPECS
 from playground.world.mathutil import euler_deg_to_quat
 from playground.world.physics import PhysicsWorld
 from playground.world.spec import ObjectSpec
@@ -170,12 +170,10 @@ class TestClaimHelpMatchesSignatures:
 # =========================================================== verify_claim itself
 class TestVerifyClaimDirect:
     def test_wrong_names_raise_typeerror(self):
-        class W:
-            active: set = set()
         with pytest.raises(TypeError):
-            verify_claim("object_on", {"object_id": "x", "target_id": "y"}, W(), [])
+            verify_claim("object_on", {"object_id": "x", "target_id": "y"}, object(), [])
         with pytest.raises(TypeError):
-            verify_claim("object_on", {}, W(), [])
+            verify_claim("object_on", {}, object(), [])
 
 
 # =========================================================== Phase C/D: threaded
@@ -198,11 +196,12 @@ def _tilted_session87_stub(tilt_deg: float):
         ncon = 0
 
     class _W:
-        active = {"ring"}
-        held = None
-        d = _D()
-        oidx = {}
-        specs = {"ring": ring, "spire": spire, "platform_terrace": terrace}
+        def __init__(self_):
+            self_.active = {"ring"}
+            self_.held = None
+            self_.d = _D()
+            self_.oidx = {}
+            self_.specs = {"ring": ring, "spire": spire, "platform_terrace": terrace}
 
         def obj_pos(self_, oid):
             return np.array(ring.position)
