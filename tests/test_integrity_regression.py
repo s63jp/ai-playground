@@ -409,6 +409,63 @@ class TestFreeWillPrompts:
             assert enum is None or not (set(enum) & set(RESEARCHER_OVERLAYS)), (name, enum)
 
 
+# --------------------------------------------------- end-of-session diary capture
+class TestEndOfSessionDiary:
+    def _run(self, cfg, db, policy):
+        from playground.agents.adapters import PolicyAdapter
+        from playground.session.runner import run_session, memory_root
+        run_session(cfg, db, "probe_agent", PolicyAdapter(policy))
+        return memory_root(cfg) / "probe_agent"
+
+    def test_final_words_in_the_end_session_turn_are_diary_captured(self, cfg, db):
+        """An agent that says its final thoughts in the same turn it calls end_session
+        still gets a diary entry at the end of the session (user mandate 2026-11-16)."""
+        final_words = ("I am satisfied with my exploration. My final thoughts are about the shape of "
+                       "the island and the way water laps at the edges, which I will note next time.")
+
+        def policy(system, opening, tools):
+            yield ("say", final_words)
+            yield ("call", "end_session", {})
+
+        d = self._run(cfg, db, policy)
+        diary = json.loads((d / "state.json").read_text(encoding="utf-8"))["diary"]
+        assert diary, "end-of-session diary must not stay empty when the agent spoke"
+        auto = [y for y in diary if "[auto-captured]" in y["text"]]
+        assert len(auto) == 1 and auto[0]["author"] == "auto"
+        assert final_words[:60] in auto[0]["text"]
+
+    def test_agent_wrote_diary_already_not_duplicated(self, cfg, db):
+        """When the agent diarized the same closing words itself, no auto-capture duplicate."""
+
+        def policy(system, opening, tools):
+            yield ("call", "write_diary", {"text": "I am satisfied with my exploration. My final " +
+                                           "thoughts are written here for good."})
+            yield ("say", "I am satisfied with my exploration. My final thoughts are written here for good.")
+            yield ("call", "end_session", {})
+
+        d = self._run(cfg, db, policy)
+        diary = json.loads((d / "state.json").read_text(encoding="utf-8"))["diary"]
+        assert len(diary) == 1  # the agent's own entry; no auto duplicate
+        assert diary[0]["author"] == "agent"
+
+    def test_time_limit_sessions_still_allow_diary_writes(self, cfg, db):
+        """Budget-ended sessions are unaffected: the wrapup notice lets agents diarize, and
+        the scripted reference agent's own wrap-up entries survive unchanged."""
+        written = []
+
+        def policy(system, opening, tools):
+            while True:
+                written.append(True)
+                yield ("say", "thinking out loud, not acting")
+                yield ("call", "write_diary", {"text": "wrap-up note before time runs out"})
+                yield ("call", "end_session", {})
+                break
+
+        d = self._run(cfg, db, policy)
+        diary = json.loads((d / "state.json").read_text(encoding="utf-8"))["diary"]
+        assert any(y.get("author") == "agent" for y in diary)
+
+
 # ------------------------------------------ researcher ops over the dashboard API
 class TestResearcherApi:
     @pytest.fixture

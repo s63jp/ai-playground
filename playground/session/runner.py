@@ -312,21 +312,38 @@ def finish_session(cfg: dict, db, env: Environment, adapter: Adapter, turns: int
     _unregister_session_stop(sid)   # every finished session (loop, external, stopped) drops its stop signal
     resumable = end_reason in ("adapter_error", "interrupted", "runner_error")
     
-    # Auto-capture agent's last words when session ends without memory being written
-    # This ensures agents that only produce text (no tool calls) still have their thoughts preserved
-    if end_reason == "agent_stopped" and env.mode == "exploration" and not resumable:
-        # Get the last assistant messages (their final thoughts before stopping)
+    # Auto-capture the agent's last words when the session ends and the final
+    # words are not already in the diary.
+    # - agent_stopped (text-only stop / idle limit / external done): the last
+    #   turns' words ARE the final thoughts; capture up to three.
+    # - agent_ended (the agent called end_session): only words said in the same
+    #   turn as the end_session call count as final thoughts; older narration
+    #   is stale and is not captured.
+    if (end_reason in ("agent_stopped", "agent_ended") and env.mode == "exploration"
+            and not resumable):
         all_msgs = db.messages(sid)
-        assistant_msgs = [m["content"] for m in all_msgs if m["role"] == "assistant"]
-        last_messages = assistant_msgs[-3:] if len(assistant_msgs) >= 3 else assistant_msgs
-        if last_messages:
-            combined = " ".join(m.strip() for m in last_messages if m and m.strip())
+        assistant_msgs = [m for m in all_msgs if m["role"] == "assistant"]
+        if end_reason == "agent_ended":
+            last_end = db.q("SELECT turn FROM actions WHERE session_id=? AND tool='end_session' "
+                            "ORDER BY idx DESC LIMIT ?", (sid, 1))
+            end_turn = last_end[0].get("turn") if last_end else None
+            final_source = [m["content"].strip() for m in assistant_msgs
+                            if end_turn is not None and m.get("turn") == end_turn
+                            and (m.get("content") or "").strip()]
+        else:
+            texts = [m["content"] for m in assistant_msgs]
+            final_source = [t.strip() for t in (texts[-3:] if len(texts) >= 3 else texts) if t and t.strip()]
+        if final_source:
+            combined = " ".join(final_source)
             if combined and len(combined) > 20:  # Only capture if there's meaningful content
-                # Truncate if too long
-                if len(combined) > 500:
-                    combined = combined[:497] + "..."
-                auto_text = f"[auto-captured] Session ended ({end_reason}). Final thoughts: {combined}"
-                env.memory.add_diary(env.session_number, env.world.time, auto_text, author="auto")
+                # Skip when the agent already wrote these words down themselves
+                # (e.g. a scripted wrap-up diary entry) — no duplicate capture.
+                if not any(combined[:60] in (e.get("text") or "") for e in env.memory.state["diary"]):
+                    # Truncate if too long
+                    if len(combined) > 500:
+                        combined = combined[:497] + "..."
+                    auto_text = f"[auto-captured] Session ended ({end_reason}). Final thoughts: {combined}"
+                    env.memory.add_diary(env.session_number, env.world.time, auto_text, author="auto")
     
     env.note("session_finished", end_reason=end_reason, error=error)
     env._flush_only()
