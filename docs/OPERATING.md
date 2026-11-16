@@ -214,6 +214,12 @@ the start, memory reads, programs from earlier sessions run). Benchmarks always 
 memory (`experiments/benchmark_memory/run_NNNN/`), so an agent's real memory is never changed by a
 benchmark (tested). The comparison reports differences in both directions and makes no significance claim.
 
+**Task budgets are per-task, not from the CLI:** `benchmark` and `ablate` ignore `--max-steps` /
+`--minutes`, because every task defines its own step limit and wall-clock ceiling (e.g. `five_towers`
+140 actions, `spire_climbing` 80 actions + 30 min) so tasks are comparable across groups. The CLI
+accepts the `--max-steps` flag on these commands but it does nothing there — it is only meaningful for
+`explore` and `run-agents`.
+
 ---
 
 ## 7. Integrity: what each record means
