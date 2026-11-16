@@ -8,12 +8,17 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from playground.ml.data import (generate_climb_dataset, generate_jump_dataset)
 from playground.ml.datasets import columns_for
+
+# Repo-relative static root: tests must never hardcode a developer's machine path (the Nov 16 2026
+# CI failure) — resolve from this file so the suite runs identically on Windows and the CI checkout.
+STATIC = Path(__file__).resolve().parents[1] / "playground" / "dashboard" / "static"
 
 
 def ml_job_wait(client, job_id: str, timeout: float = 90.0) -> dict:
@@ -139,8 +144,7 @@ class TestUiContract:
     the tab renders dead (the lost-providers incident of Nov 15 2026). Guard the contract statically."""
 
     def test_every_tab_loader_referenced_by_showtab_is_defined(self):
-        root = "<repo>/playground/dashboard/static"
-        with open(f"{root}/app.js", encoding="utf-8") as f:
+        with open(STATIC / "app.js", encoding="utf-8") as f:
             src = f.read()
         for fn in ("loadMemory", "loadAnalytics", "loadCompare", "loadBench", "loadNn", "loadLab",
                    "loadInfra", "loadProviders", "loadMonitor", "loadResources"):
@@ -152,14 +156,12 @@ class TestUiContract:
         node = shutil.which("node")
         if not node:
             pytest.skip("node not available")
-        out = subprocess.run([node, "--check",
-                              "<repo>/playground/dashboard/static/app.js"],
+        out = subprocess.run([node, "--check", str(STATIC / "app.js")],
                              capture_output=True, text=True)
         assert out.returncode == 0, out.stderr
 
     def test_generate_form_has_engine_kinds(self):
-        with open("<repo>/playground/dashboard/static/index.html",
-                  encoding="utf-8") as f:
+        with open(STATIC / "index.html", encoding="utf-8") as f:
             html = f.read()
         for marker in ('nn-gen-kind', 'value="jump"', 'value="climb"', 'value="throw"'):
             assert marker in html

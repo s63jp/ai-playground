@@ -11,6 +11,7 @@ Tests:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import time
 from pathlib import Path
@@ -441,3 +442,51 @@ class TestSessionEndReasonPaths:
         assert snapshot.exists()
         snapshot_state = json.loads((snapshot / "state.json").read_text(encoding="utf-8"))
         assert len(snapshot_state["notes"]) == 2
+
+
+# =============================================================== _write_atomic resilience
+
+class TestWriteAtomicResilience:
+    """_write_atomic must survive Windows replace races: os.replace raises PermissionError while ANY
+    handle is open on the destination (an in-process reader mid-turn, or a Defender/indexer scan of the
+    freshly written target). The Nov 16 2026 full-suite run hit exactly this on unfinished_goals.md with
+    concurrency=2 (session ended runner_error instead of step_limit). POSIX never raises, so CI never
+    saw it — but the store must be robust locally too. The bounded retry is that robustness."""
+
+    def test_survives_transient_permission_errors(self, tmp_path, monkeypatch):
+        from playground.memory.store import _write_atomic
+
+        target = tmp_path / "unfinished_goals.md"
+        target.write_text("old", encoding="utf-8")
+        real_replace = os.replace
+        calls = {"n": 0}
+
+        def flaky_replace(src, dst):
+            calls["n"] += 1
+            if calls["n"] <= 3:
+                raise PermissionError(5, "Access is denied")
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", flaky_replace)
+        _write_atomic(target, "new")
+        assert target.read_text(encoding="utf-8") == "new"
+        assert calls["n"] == 4, "retry must re-attempt replace, not give up or skip the original call"
+
+    def test_raises_after_retry_bound_if_genuinely_stuck(self, tmp_path, monkeypatch):
+        from playground.memory.store import _write_atomic
+
+        def always_denied(src, dst):
+            raise PermissionError(5, "Access is denied")
+
+        monkeypatch.setattr(os, "replace", always_denied)
+        with pytest.raises(PermissionError):
+            _write_atomic(tmp_path / "unfinished_goals.md", "new")
+
+    def test_write_is_visible_after_immediate_success(self, tmp_path):
+        from playground.memory.store import _write_atomic
+
+        target = tmp_path / "diary.md"
+        _write_atomic(target, "entry\n")
+        # No stale temp files left behind on the success path.
+        assert target.read_text(encoding="utf-8") == "entry\n"
+        assert list(tmp_path.glob("*.tmp")) == []

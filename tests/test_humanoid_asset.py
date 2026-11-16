@@ -61,12 +61,17 @@ class TestHumanoidAsset:
         assert abs(after - before) > 0.01, "motor produced no joint motion"
 
     def test_head_has_three_drivable_hinges(self, model):
-        data = mujoco.MjData(model)
-        for name, ctrl in (("head_pitch", 1.0), ("head_yaw", 1.0), ("head_roll", 1.0)):
+        # One FRESH MjData per hinge. Driving all three cumulatively in one data lets the earlier
+        # phases' coupled drift (pitch/yaw residual velocities, gyroscopic and pendulum terms) swamp
+        # the next hinge's own actuator response — head_roll measured ~0.0008 rad in the WRONG
+        # direction on CI, under the 1e-3 threshold. In isolation each head motor drives its hinge
+        # ~0.006 rad in 40 steps (with ~6x margin), identically on any MuJoCo build.
+        for name in ("head_pitch", "head_yaw", "head_roll"):
+            data = mujoco.MjData(model)
             adr = model.jnt_qposadr[model.joint(name).id]
             before = float(data.qpos[adr])
-            data.ctrl[model.actuator(name).id] = ctrl
+            data.ctrl[model.actuator(name).id] = 1.0
             for _ in range(40):
                 mujoco.mj_step(model, data)
-            assert abs(float(data.qpos[adr]) - before) > 1e-3, f"{name} did not move"
-            data.ctrl[model.actuator(name).id] = 0.0
+            moved = float(data.qpos[adr]) - before
+            assert abs(moved) > 1e-3, f"{name} did not move (delta {moved})"

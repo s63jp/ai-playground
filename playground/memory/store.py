@@ -50,15 +50,29 @@ class MemoryError_(Exception):
         self.code, self.message, self.details = code, message, details
 
 
+_REPLACE_RETRY_BACKOFF_S = (0.0, 0.005, 0.01, 0.02, 0.04, 0.08, 0.16, 0.32)
+
+
 def _write_atomic(path: Path, text: str) -> None:
     """Write-or-replace that is safe under concurrency: a unique temp file per writer (two sessions for
-    the same agent used to collide on the shared '<file>.tmp' name and crash with PermissionError) and a
-    per-path lock so the rename sequence is serialised within the process."""
+    the same agent used to collide on the shared '<file>.tmp' name and crash with PermissionError), a
+    per-path lock so the rename sequence is serialised within the process, and a bounded retry on
+    PermissionError — on Windows os.replace fails with Access denied while ANY handle is open on the
+    destination (an in-process reader mid-turn, or a Defender/indexer scan of the freshly written
+    target). Those locks are transient (the Nov 16 2026 suite hit one on unfinished_goals.md with
+    concurrency=2), so retrying resolves them; POSIX replace never raises here."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with _path_lock(path):
         tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
         tmp.write_text(text, encoding="utf-8", newline="\n")
-        os.replace(tmp, path)
+        for backoff in _REPLACE_RETRY_BACKOFF_S:
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                if backoff:
+                    time.sleep(backoff)
+        os.replace(tmp, path)  # retries exhausted: let the genuine error surface
 
 
 _path_locks: dict[str, threading.Lock] = {}
