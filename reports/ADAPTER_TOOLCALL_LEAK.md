@@ -72,3 +72,33 @@ The environment never executed anything from the leaked markup — `write_diary`
 `climb`, `walk_to` in the same session were real, schema-validated tool calls. This is a
 provider-side parsing gap (LM Studio + GGUF preset) meeting an adapter that only reads
 structured `tool_calls`.
+
+## Addendum, 2026-11-16: the nemotron-3 shape leaks PAST the dashboard sanitiser
+
+**Seen live** (agent_008, session 79 s4, `nvidia/nemotron-3-nano-4b` via LM Studio): the
+"Agent's words" panel showed 14 identical `"/>"`-shaped fragments — the leftover tail of
+the model's own tool-call template.
+
+This model's text-written calls have **two** markup parts per call:
+
+```
+<function=move>
+<parameter=direction>
+east
+</function>
+<tool_call>          ← the close tag, emitted as plain TEXT after </function>
+```
+
+`parse_embedded_tool_calls` already recovers the calls (fix 1), and the dashboard
+sanitiser stripped the `<function=…>…</function>` block — but nothing stripped the
+trailing close tag, so every markup-only turn rendered as that fragment.
+
+**Measured in the database:** 24 message rows contain the stray close tag —
+sessions 49–50 (agent_012, `nemotron4b`: 4 rows) and sessions 79–84 (agent_008,
+`nemotron-3-nano-4b`: 20 rows, incl. the still-running session 82). So the lfm-2-era
+sessions carried it too; it was hidden behind the larger `<function=…>…</function>`
+block which the sanitiser then stripped whole — the nemotron-3 rows have short param
+value tails, no.
+
+**Fixed (display-side, same commit policy as fix 2):** the sanitiser now also strips a
+bare `<tool_call>` / `

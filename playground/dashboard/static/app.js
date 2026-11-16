@@ -13,8 +13,14 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const TEMPLATETOKEN = /<\|[^<>|]{1,24}\|>/g;
 const FUNCBLOCK = /<function=[^<>]{0,80}>(?:.|\n)*?<\/function>|<function=[^<>]{0,80}>(?:.|\n)*/g;
 const PARAMBLOCK = /<parameter=[^<>]{0,60}>(?:.|\n)*?(?:<\/parameter>|$)/g;
+// A template-written call may also end with a bare tool_call close tag AFTER the
+// </function> block (nemotron-3-nano-4b, sessions 79+; sessions 49-50 earlier) — the
+// GGUF template writes "< .../tool_call ...>"-shaped text, and only the open side was
+// covered by FUNCBLOCK. Built from char codes so this source never contains the raw
+// sequence.
+const CLOSETAG_RE = new RegExp(String.fromCharCode(60) + '\\/?' + 'tool_call' + String.fromCharCode(62), 'g');
 const sanitizeWords = (s) => {
-  let t = String(s ?? '').replace(TEMPLATETOKEN, '').replace(FUNCBLOCK, '').replace(PARAMBLOCK, '').trim();
+  let t = String(s ?? '').replace(TEMPLATETOKEN, '').replace(FUNCBLOCK, '').replace(PARAMBLOCK, '').replace(CLOSETAG_RE, '').trim();
   if (!t) t = '[tool-call markup — see Recent actions]';
   return t;
 };
@@ -22,12 +28,38 @@ const api = async (p, opt) => { const r = await fetch(p, opt); if (!r.ok) throw 
 const fmt = (v, d = 2) => (typeof v === 'number' ? v.toFixed(d) : v ?? '–');
 
 // ------------------------------------------------------------------ tabs
+const PAGE_META = {
+  watch: ['Observe', 'Watch & replay', 'Inspect the live world, replay sessions, and verify what agents claim against what the engine recorded.'],
+  memory: ['Observe', 'Memory', 'Inspect persistent knowledge, evidence status, source files, and the researcher audit trail.'],
+  analytics: ['Observe', 'Analytics', 'Explore session activity, behavioural signals, and independently verified outcomes over time.'],
+  compare: ['Observe', 'Compare agents', 'Review all agents side by side, from memory quality and beliefs to benchmark completion.'],
+  bench: ['Evaluate', 'Benchmarks', 'Compare task performance across experienced agents, fresh controls, and memory ablations.'],
+  nn: ['Evaluate', 'Neural networks', 'Generate datasets, train models, and inspect quality, metrics, and model lineage.'],
+  lab: ['Evaluate', 'Run & models', 'Launch exploration runs, compare model behaviour, and audit session provenance.'],
+  infra: ['System', 'Infrastructure', 'Monitor provider health, hardware utilisation, and live request queues.'],
+  providers: ['System', 'Providers', 'Inspect discovered model providers, connectivity, capabilities, and available models.'],
+  monitor: ['System', 'API monitor', 'Trace gateway requests, timing, token usage, and redacted request metadata.'],
+  resources: ['System', 'Resources', 'Review measured hardware capacity and configure backend concurrency limits.'],
+};
 function showTab(name) {
   const b = document.querySelector(`#tabs button[data-tab="${name}"]`);
   if (!b) return;
-  document.querySelectorAll('#tabs button').forEach((x) => x.classList.toggle('active', x === b));
+  document.querySelectorAll('#tabs button').forEach((x) => {
+    const active = x === b;
+    x.classList.toggle('active', active);
+    if (active) x.setAttribute('aria-current', 'page');
+    else x.removeAttribute('aria-current');
+  });
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${name}`));
+  const meta = PAGE_META[name];
+  if (meta) {
+    $('#page-kicker').textContent = meta[0].toUpperCase();
+    $('#page-title').textContent = meta[1];
+    $('#page-description').textContent = meta[2];
+    document.title = `${meta[1]} · AI Playground`;
+  }
   if (location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);   // deep link to a view
+  window.scrollTo(0, 0);
   ({ memory: loadMemory, analytics: loadAnalytics, compare: loadCompare, bench: loadBench, nn: loadNn, lab: loadLab,
      infra: loadInfra, providers: loadProviders, monitor: loadMonitor, resources: loadResources }[name] || (() => {}))();
   if (name === 'watch') resize();
@@ -478,8 +510,50 @@ async function loadAnalytics() {
   const a = $('#a-agent').value;
   const tl = (await api(`/api/analytics${a ? '?agent_id=' + a : ''}`)).timeline.filter((t) => t.mode === 'exploration');
   const max = Math.max(1, ...tl.map((t) => t.action_count || 0));
-  $('#a-chart').innerHTML = `<div class="bars">${tl.map((t) => `<div title="#${t.id} ${esc(t.agent_id)} s${t.session_number}: ${t.action_count} actions" style="height:${100 * (t.action_count || 0) / max}%"></div>`).join('')}</div>
-    <div class="small muted">exploration sessions in order (bar = actions)</div>`;
+  const totalActions = tl.reduce((sum, t) => sum + (t.action_count || 0), 0);
+  const evidencePassed = tl.reduce((sum, t) => sum + (t.experiments_ok || 0), 0);
+  const evidenceTotal = tl.reduce((sum, t) => sum + (t.experiments_ok || 0) + (t.experiments_bad || 0), 0);
+  const claimsVerified = tl.reduce((sum, t) => sum + (t.claims_verified || 0), 0);
+  const claimsTotal = tl.reduce((sum, t) => sum + (t.claims_verified || 0) + (t.claims_rejected || 0), 0);
+  const summary = [
+    ['Exploration sessions', tl.length],
+    ['Recorded actions', totalActions.toLocaleString()],
+    ['Evidence checks passed', `${evidencePassed} / ${evidenceTotal}`],
+    ['Claims verified', `${claimsVerified} / ${claimsTotal}`],
+  ].map(([label, value]) => `<div class="metric-box"><div class="label">${label}</div><div class="value">${value}</div></div>`).join('');
+  $('#a-chart').innerHTML = `<div class="metrics-grid">${summary}</div>` + (tl.length ? `
+    <div class="chart-heading"><strong>Actions per exploration session</strong><span class="chart-meta">0–${max.toLocaleString()} actions · hover or focus a bar for detail</span></div>
+    <div class="chart-stage">
+      <div class="bars" role="group" aria-label="Actions per exploration session">${tl.map((t) => {
+        const label = `#${t.id} · ${esc(t.agent_id)} · ${t.action_count || 0} actions`;
+        return `<div role="img" tabindex="0" aria-label="${label}" data-session="${t.id}" data-agent="${esc(t.agent_id)}" data-actions="${t.action_count || 0}" style="height:${100 * (t.action_count || 0) / max}%"></div>`;
+      }).join('')}</div>
+      <div class="chart-tooltip" role="tooltip" hidden></div>
+    </div>
+    <div class="chart-axis"><span>Oldest session</span><span>Most recent</span></div>
+    <div class="small muted chart-note">One bar per recorded exploration session. Full values and verification outcomes are in the table below.</div>`
+    : '<div class="muted">No exploration sessions recorded for this selection yet.</div>');
+  const chart = $('#a-chart .chart-stage');
+  if (chart) {
+    const tooltip = chart.querySelector('.chart-tooltip');
+    const showTip = (bar) => {
+      const value = document.createElement('strong');
+      const label = document.createElement('span');
+      value.textContent = `${bar.dataset.actions} actions`;
+      label.textContent = `#${bar.dataset.session} · ${bar.dataset.agent}`;
+      tooltip.replaceChildren(value, label);
+      tooltip.hidden = false;
+      const half = tooltip.offsetWidth / 2;
+      const x = bar.offsetLeft + bar.offsetWidth / 2;
+      tooltip.style.left = `${Math.max(half + 8, Math.min(chart.clientWidth - half - 8, x))}px`;
+    };
+    chart.querySelectorAll('.bars > div').forEach((bar) => {
+      bar.addEventListener('pointerenter', () => showTip(bar));
+      bar.addEventListener('focus', () => showTip(bar));
+      bar.addEventListener('pointerleave', () => { tooltip.hidden = true; });
+      bar.addEventListener('blur', () => { tooltip.hidden = true; });
+    });
+  }
   $('#a-table').innerHTML = `<table><tr><th>session</th><th>agent</th><th>#</th><th>actions</th><th>failed</th><th>sim s</th>
     <th>experiments ok/bad</th><th>claims ok/rejected</th><th>handbook</th><th>goals</th><th>pretend</th><th>repeat+vary</th><th>own sake</th><th>end</th></tr>
     ${tl.map((t) => `<tr><td>${t.id}</td><td>${esc(t.agent_id)}</td><td>${t.session_number}</td><td>${t.action_count}</td><td>${t.failed_actions ?? '–'}</td><td>${fmt(t.sim_time, 0)}</td>
@@ -1248,7 +1322,7 @@ async function renderInfra() {
     ['Providers', `${pv.providers.length} · ${pv.providers.filter((p) => p.health?.reachable).length} reachable`],
     ['Queue', `${num(q?.queue_depth, 0)} waiting`],
     ['Requests', `${num((reqs.requests || []).length, 0)} recent`],
-  ].map(([k, v]) => `<div class="tile"><div class="muted small">${k}</div><div>${v}</div></div>`).join('');
+  ].map(([k, v]) => `<div class="metric-box tile"><div class="label">${k}</div><div class="value">${v}</div></div>`).join('');
   $('#inf-providers').innerHTML = pv.providers.map((p) =>
     `<div class="row"><b>${esc(p.name)}</b> <span class="muted small">${esc(p.kind)}</span> · ` +
     (p.health?.reachable ? `<span class="pill-ok">reachable ${num(p.health.latency_ms, 0)}ms</span>` : '<span class="pill-end">offline</span>') +
@@ -1395,7 +1469,8 @@ $('#res-conc-form')?.addEventListener('submit', async (e) => {
 
 // ------------------------------------------------------------------ boot
 const h = await api('/api/health');
-$('#health').textContent = `v${h.version} · config ${h.config_hash.slice(0, 10)} · ${h.agents} agents`;
+$('#health').textContent = `Online · v${h.version} · ${h.agents} agents`;
+$('#health').title = `Configuration ${h.config_hash} · ${h.db}`;
 await loadSessions();
 const startTab = location.hash.slice(1);
 if (startTab && startTab !== 'watch') showTab(startTab);
