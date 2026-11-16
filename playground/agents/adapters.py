@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -38,6 +39,98 @@ class Turn:
 
 class AdapterError(Exception):
     pass
+
+
+# ---------------------------------------------------------------------------
+# Embedded tool-call recovery (reports/ADAPTER_TOOLCALL_LEAK.md).
+# Some models (liquid/lfm2-24b-a2b, nemotron4b behind LM Studio) write their
+# function-call template as plain message text instead of structured tool_calls:
+# assistant role markers followed by <function=name> / <parameter=...> blocks.
+# The harness only ever executes calls the API returns as structured tool_calls,
+# so those turns become "no tool was called", the three-strike idle rule ends
+# the session, and an attempted end_session never registers (measured: 9 of
+# agent_010's 10 sessions on lfm2-24b ended after 1-6 actions). When a turn
+# carries NO structured calls, the helper below recovers the calls the model
+# unambiguously asked for. The environment still validates every name and
+# argument against the registered schemas, so recovery cannot widen what the
+# model can do — the worst case is the ordinary tool-error result. Provenance
+# stays honest without new bookkeeping: the raw text is kept in `messages`
+# (what the model claimed) and the recovered calls appear as ordinary,
+# schema-validated rows in `actions` (what actually ran).
+# ---------------------------------------------------------------------------
+
+_MAX_RECOVERED_CALLS = 12
+
+_FUNC_RE = re.compile(r"<function=([A-Za-z_][A-Za-z0-9_.]{0,59})>(.*?)</function>", re.S)
+_PARAM_RE = re.compile(r"<parameter=([A-Za-z_][A-Za-z0-9_.]{0,59})>(.*?)(?:</parameter>|\Z)", re.S)
+
+# The second supported shape wraps a JSON tool-call object in two fenced markers.
+# Assembled from characters so the source never embeds the raw sequence itself.
+_BQ = chr(96)
+_TC_OPEN = _BQ + "antml:tool_calls" + _BQ
+_TC_CLOSE = _BQ + "/antml:tool_calls" + _BQ
+_TC_BLOCK_RE = re.compile(re.escape(_TC_OPEN) + r"(.*?)" + re.escape(_TC_CLOSE), re.S)
+
+
+def _parse_bool(raw: str) -> Any:
+    stripped = raw.strip().lower()
+    if stripped == "true":
+        return True
+    if stripped == "false":
+        return False
+    return raw
+
+
+def _recover_parameter_calls(text: str) -> list[ToolCall]:
+    out: list[ToolCall] = []
+    for fmatch in _FUNC_RE.finditer(text):
+        args: dict[str, Any] = {}
+        for pmatch in _PARAM_RE.finditer(fmatch.group(2)):
+            raw = pmatch.group(2)
+            stripped = raw.strip()
+            try:
+                value = json.loads(stripped)
+            except json.JSONDecodeError:
+                value = _parse_bool(stripped)
+            args[pmatch.group(1)] = value
+        out.append(ToolCall(id=f"call_{uuid.uuid4().hex[:12]}", name=fmatch.group(1),
+                            args=(json.dumps(args) if args else None)))
+        if len(out) >= _MAX_RECOVERED_CALLS:
+            return out
+    return out
+
+
+def _recover_marker_blocks(text: str) -> list[ToolCall]:
+    out: list[ToolCall] = []
+    for block in _TC_BLOCK_RE.findall(text):
+        try:
+            payload = json.loads(block)
+        except json.JSONDecodeError:
+            continue
+        items = payload if isinstance(payload, list) else [payload]
+        for item in items:
+            if (isinstance(item, dict) and isinstance(item.get("name"), str)
+                    and item["name"].strip() and len(out) < _MAX_RECOVERED_CALLS):
+                out.append(ToolCall(id=f"call_{uuid.uuid4().hex[:12]}", name=item["name"].strip(),
+                                    args=(json.dumps(item["arguments"])
+                                          if item.get("arguments") is not None else None)))
+        if len(out) >= _MAX_RECOVERED_CALLS:
+            break
+    return out
+
+
+def parse_embedded_tool_calls(text: str) -> list[ToolCall]:
+    """Tool calls the model wrote as text markup, or [] when there are none.
+
+    Only fully-formed shapes are recovered: a `<function=...>` block must be
+    closed by `</function>` and a marker block must be valid JSON. Unterminated
+    or malformed markup stays plain text, so the turn degrades to exactly the
+    pre-recovery behaviour.
+    """
+    recovered = _recover_parameter_calls(text)
+    if recovered:
+        return recovered
+    return _recover_marker_blocks(text)
 
 
 class Adapter:
@@ -234,6 +327,14 @@ class OpenAICompatAdapter(Adapter):
             fn = tc.get("function", {})
             calls.append(ToolCall(id=tc.get("id") or f"call_{uuid.uuid4().hex[:12]}", name=fn.get("name", ""),
                                   args=fn.get("arguments")))
+        if not calls:
+            # Structured tool_calls absent: recover calls the model wrote as text
+            # markup (its GGUF preset's template, or fenced JSON blocks) so an
+            # attempted action - including end_session - does what it asked.
+            content_text = msg.get("content") or ""
+            if not content_text.strip():
+                content_text = msg.get("reasoning_content") or ""
+            calls = parse_embedded_tool_calls(content_text)
         keep: dict[str, Any] = {"role": "assistant", "content": msg.get("content") or ""}
         if calls:
             keep["tool_calls"] = [{"id": c.id, "type": "function",
