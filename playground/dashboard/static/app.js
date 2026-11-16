@@ -823,7 +823,9 @@ function pollJob(jobId) {
         nnJobPoll = null;
         $('#nn-job').innerHTML = `<span class="bad">Job ${esc(jobId)}: error</span><pre class="small">${esc(j.error)}</pre>`;
       } else {
-        $('#nn-job').innerHTML = `<span class="muted">Job ${esc(jobId)}: ${esc(j.status)}</span>`;
+        const p = j.progress;
+        $('#nn-job').innerHTML = `<span class="muted">Job ${esc(jobId)}: ${esc(j.status)}`
+          + (p && p.done != null ? ` · ${p.done}/${p.of} rows` : '') + '</span>';
       }
     } catch (e) {
       clearInterval(nnJobPoll);
@@ -869,6 +871,7 @@ document.getElementById('nn-train-form')?.addEventListener('submit', async (e) =
 // Generate-dataset form handler: builds training data by running the real world, into the selected registry.
 document.getElementById('nn-gen-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
+  const kind = $('#nn-gen-kind')?.value || 'throw';
   const name = $('#nn-gen-name').value.trim();
   const n = parseInt($('#nn-gen-n').value, 10) || 1500;
   const seed = parseInt($('#nn-gen-seed').value, 10) || 7;
@@ -877,10 +880,10 @@ document.getElementById('nn-gen-form')?.addEventListener('submit', async (e) => 
     return;
   }
   try {
-    $('#nn-gen-status').textContent = 'Submitting...';
+    $('#nn-gen-status').textContent = 'Submitting…';
     const r = await api('/api/ml/generate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, n, seed, scope: nnSel.scope, owner: nnSel.owner })
+      body: JSON.stringify({ kind, name, n, seed, scope: nnSel.scope, owner: nnSel.owner })
     });
     $('#nn-gen-status').textContent = `Job ${r.job_id} started`;
     pollJob(r.job_id);
@@ -1151,6 +1154,179 @@ $('#lc-toggle')?.addEventListener('click', () => {
       lcState.es = null; btn.textContent = 'Start';
     }
   };
+});
+
+// ------------------------------------------------------------------ Infrastructure: overview, providers, monitor, resources
+// Every value rendered here passes through esc() (app.js header XSS policy); numeric fields are
+// server-side enums or numbers and are formatted before interpolation.
+const num = (v, d = 2) => (typeof v === 'number' && isFinite(v) ? (+v).toFixed(d) : '–');
+const kvRows = (obj) => Object.entries(obj || {}).map(([k, v]) =>
+  `<tr><td class="muted small">${esc(String(k))}</td><td>${typeof v === 'number' ? num(v, 1)
+  : (v === null || v === undefined || typeof v === 'object' ? '–' : esc(String(v)))}</td></tr>`).join('');
+const reqRow = (r) => `<tr><td class="mono small">${esc(r.request_id?.slice(0, 8))}…</td>` +
+  `<td class="small"><button class="btn small mon-open" data-id="${esc(r.request_id)}">${esc(`${r.provider || ''}/${r.model || ''}`)}</button></td>` +
+  `<td class="small">${esc(r.agent || '–')}</td><td>${esc(r.status || '–')}</td>` +
+  `<td>${r.http_status ?? '–'}</td><td>${num(r.latency_ms, 1)}ms</td><td>${r.total_tokens ?? '–'}</td></tr>`;
+
+async function renderInfra() {
+  const [pv, res, q] = await Promise.all([
+    api('/api/gateway/providers?models=false'),
+    api('/api/gateway/resources'),
+    api('/api/gateway/queue'),
+  ]);
+  let reqs = { requests: [] };
+  try { reqs = await api('/api/gateway/requests?limit=12'); } catch (e) { /* monitor off */ }
+  const gpu = (res.gpus || [])[0] || {};
+  $('#inf-tiles').innerHTML = [
+    ['CPU', `${num(res.cpu, 0)}%`],
+    ['RAM', `${num(res.memory?.percent, 0)}%`],
+    ['GPU', gpu.name ? `${esc(String(gpu.name))} · ${num(gpu.utilization_percent ?? gpu.utilization, 0)}%` : 'n/a'],
+    ['Providers', `${pv.providers.length} · ${pv.providers.filter((p) => p.health?.reachable).length} reachable`],
+    ['Queue', `${num(q?.queue_depth, 0)} waiting`],
+    ['Requests', `${num((reqs.requests || []).length, 0)} recent`],
+  ].map(([k, v]) => `<div class="tile"><div class="muted small">${k}</div><div>${v}</div></div>`).join('');
+  $('#inf-providers').innerHTML = pv.providers.map((p) =>
+    `<div class="row"><b>${esc(p.name)}</b> <span class="muted small">${esc(p.kind)}</span> · ` +
+    (p.health?.reachable ? `<span class="pill-ok">reachable ${num(p.health.latency_ms, 0)}ms</span>` : '<span class="pill-end">offline</span>') +
+    ` · ${p.default_models?.length ?? 0} model(s)</div>`).join('');
+  $('#inf-hw').innerHTML = `<table>${kvRows({ platform: res.platform, cpu_percent: res.cpu })}` +
+    `</table><div class="small muted">GPU: ${esc(JSON.stringify(res.gpus?.[0] ?? {})).slice(0, 300)}</div>`;
+  $('#inf-queue').innerHTML = (q?.queued || []).length
+    ? q.queued.map((w) => `<div class="row small">#${w.seq} ${esc(w.model || '?')} for ${esc(w.agent || '–')} (prio ${w.priority})</div>`).join('')
+    : '<span class="muted small">Queue empty.</span>';
+  $('#inf-recent').innerHTML = (reqs.requests || []).length
+    ? `<table><tr><th>id</th><th>provider/model</th><th>agent</th><th>status</th><th>http</th><th>ms</th><th>tok</th></tr>${reqs.requests.map(reqRow).join('')}</table>`
+    : '<span class="muted small">No gateway requests yet.</span>';
+  $('#inf-updated').textContent = `updated ${new Date().toLocaleTimeString()}`;
+}
+
+let infraTimer = null;
+async function loadInfra() {
+  await renderInfra();
+  if (infraTimer) clearInterval(infraTimer);
+  infraTimer = setInterval(() => { if ($('#tab-infra')?.classList.contains('active')) renderInfra(); }, 5000);
+}
+
+// -- Provider catalogue (LM Studio and friends land here; models via the per-provider detail).
+function providerMeta(p) {
+  return [
+    ['kind', p.kind], ['base_url', p.base_url], ['key', (p.key_present ? 'present' : 'none')],
+    ['api key env', p.api_key_env], ['models', p.default_models?.length ?? 0], ['enabled', String(p.enabled)],
+  ];
+}
+async function loadProviders() {
+  const el = $('#pv-list');
+  try {
+    $('#pv-refresh').onclick = loadProviders;
+    const r = await api('/api/gateway/providers?models=false');
+    el.innerHTML = r.providers.length
+      ? r.providers.map((p) => `<div class="row"><button class="btn small pv-open" data-name="${esc(p.name)}">open</button> ` +
+        `<b>${esc(p.name)}</b> <span class="muted small">${esc(p.kind)} · ${esc(p.base_url || '')}</span> ` +
+        (p.health?.reachable ? `<span class="pill-ok">reachable ${num(p.health.latency_ms, 0)}ms</span>` : '<span class="pill-end">offline</span>') +
+        ` · ${p.default_models?.length ?? 0} model(s)</div>`).join('')
+      : '<span class="muted">No providers configured (config-derived: adapters in playground config).</span>';
+    document.querySelectorAll('.pv-open').forEach((b) => b.onclick = async () => {
+      const name = b.dataset.name;
+      $('#pv-detail-card').style.display = 'block';
+      $('#pv-detail').innerHTML = '<span class="muted">Loading…</span>';
+      try {
+        const [d, m] = await Promise.all([
+          api(`/api/gateway/providers/${encodeURIComponent(name)}`),
+          api(`/api/gateway/providers/${encodeURIComponent(name)}/models`),
+        ]);
+        $('#pv-detail').innerHTML = `<table>${kvRows(Object.fromEntries(providerMeta(d)))}</table>` +
+          `<h4 class="small">Models on the server (${(m.models || []).length}, ${m.loaded?.length ?? 0} loaded)</h4>` +
+          ((m.models || []).length
+            ? `<table><tr><th>id</th><th>state</th><th>ctx</th></tr>` +
+              m.models.map((mo) => { const lo = (m.loaded || []).find((x) => (x.id || x) === mo.id) || {};
+                return `<tr><td class="mono small">${esc(mo.id)}</td><td>${esc(mo.state || lo.state || 'not loaded')}</td><td>${mo.context ?? lo.context ?? '–'}</td></tr>`; }).join('') + '</table>'
+            : '<span class="muted small">No models found at the provider endpoint.</span>');
+      } catch (e) {
+        $('#pv-detail').innerHTML = `<span class="bad">${esc(String(e))}</span>`;
+      }
+    });
+    $('#pv-status').textContent = `${r.providers.length} provider(s), ` +
+      `${r.providers.filter((p) => p.health?.reachable).length} reachable`;
+  } catch (e) {
+    el.innerHTML = `<span class="bad">${esc(String(e))}</span>`;
+  }
+}
+
+// -- API monitor: gateway request history with filters and per-request detail.
+async function loadMonitor() {
+  const btn = $('#mon-refresh');
+  if (btn.dataset.wired) return;
+  btn.dataset.wired = '1';
+  btn.onclick = async () => {
+    const p = new URLSearchParams();
+    if ($('#mon-f-provider').value) p.set('provider', $('#mon-f-provider').value);
+    if ($('#mon-f-model').value) p.set('model', $('#mon-f-model').value);
+    if ($('#mon-f-agent').value) p.set('agent', $('#mon-f-agent').value);
+    if ($('#mon-f-status').value) p.set('status', $('#mon-f-status').value);
+    if ($('#mon-f-failed').checked) p.set('failed', 'true');
+    p.set('limit', '200');
+    try {
+      const r = await api(`/api/gateway/requests?${p}`);
+      $('#mon-stats').textContent = `${(r.requests || []).length} request(s)` +
+        (r.stats ? ` · ${esc(JSON.stringify(r.stats)).slice(0, 120)}` : '');
+      $('#mon-table').innerHTML = (r.requests || []).length
+        ? `<table><tr><th>id</th><th>provider/model</th><th>agent</th><th>status</th><th>http</th><th>ms</th><th>tok</th></tr>${r.requests.map(reqRow).join('')}</table>`
+        : '<span class="muted">No requests match those filters.</span>';
+      document.querySelectorAll('.mon-open').forEach((b) => b.onclick = async () => {
+        try {
+          const d = await api(`/api/gateway/requests/${encodeURIComponent(b.dataset.id)}`);
+          $('#mon-detail-card').querySelector('h3').textContent = `Request ${d.request_id}`;
+          $('#mon-detail').innerHTML =
+            `<table>${kvRows(Object.fromEntries(Object.entries(d).filter(([, v]) => typeof v !== 'object' || v === null)))}</table>` +
+            `<div class="small muted">request/response bodies are redacted+truncated by the gateway on capture.</div>`;
+        } catch (e) { $('#mon-detail').innerHTML = `<span class="bad">${esc(String(e))}</span>`; }
+      });
+    } catch (e) {
+      $('#mon-table').innerHTML = `<span class="bad">${esc(String(e))}</span>`;
+    }
+  };
+}
+
+// -- Resources: measured hardware + live concurrency limits (also rendered into the infra tab).
+async function loadResources() {
+  const [res, lim, q] = await Promise.all([
+    api('/api/gateway/resources'),
+    api('/api/gateway/concurrency'),
+    api('/api/gateway/queue'),
+  ]);
+  $('#res-hw').innerHTML = `<table>${kvRows({ platform: res.platform, cpu_percent: res.cpu,
+    memory: res.memory?.percent ?? res.memory, gpus: (res.gpus || []).length })}
+    </table>` + (res.gpus || []).map((g) =>
+    `<div class="small muted">${esc(String(g.name))}: util ${num(g.utilization_percent ?? g.utilization, 0)}%` +
+    (g.total_memory ? ` · VRAM ${num((g.used_memory ?? 0), 1)}/${num(g.total_memory, 1)}GB` : '') + '</div>').join('');
+  $('#rc-global').value = lim.max_concurrent ?? 0;
+  $('#rc-provider').value = lim.provider_default ?? 0;
+  $('#rc-model').value = lim.model_default ?? 0;
+  $('#rc-agent').value = lim.agent_default ?? 0;
+  $('#rc-queue').value = lim.queue_max ?? 0;
+  $('#rc-priority').value = lim.default_priority ?? 5;
+  const ov = Object.entries(lim.per_provider || {}).map(([k, v]) => `${k}=${v}`).join(', ')
+    + Object.entries(lim.per_model || {}).map(([k, v]) => ` model:${k}=${v}`).join(', ');
+  $('#rc-overrides').textContent = ov ? `overrides: ${ov}` : 'no per-provider/model overrides';
+  $('#res-queue').innerHTML = (q?.queued || []).length
+    ? q.queued.map((w) => `<div class="row small">#${w.seq} ${esc(w.model || '?')} for ${esc(w.agent || '–')} (prio ${w.priority})</div>`).join('')
+    : '<span class="muted small">Queue empty.</span>';
+}
+$('#res-conc-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('/api/gateway/concurrency', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        max_concurrent: parseInt($('#rc-global').value, 10) || 0,
+        provider_default: parseInt($('#rc-provider').value, 10) || 0,
+        model_default: parseInt($('#rc-model').value, 10) || 0,
+        agent_default: parseInt($('#rc-agent').value, 10) || 0,
+        queue_max: parseInt($('#rc-queue').value, 10) || 0,
+        default_priority: parseInt($('#rc-priority').value, 10) || 5,
+      }) });
+    $('#rc-status').textContent = 'applied.';
+    loadResources();
+  } catch (err) { $('#rc-status').innerHTML = `<span class="bad">${esc(String(err))}</span>`; }
 });
 
 // ------------------------------------------------------------------ boot

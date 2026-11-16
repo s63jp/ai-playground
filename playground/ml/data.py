@@ -18,6 +18,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
+import numpy as np
+
 from ..config import config_hash
 from ..world.physics import ActionError, PhysicsWorld
 from . import MLError
@@ -150,6 +152,207 @@ def _manifest(cfg: dict, source: str, rows: list[dict], **extra) -> dict:
     return {"source": source, "rows": len(rows), "columns": sorted(ALL_COLUMNS),
             "rows_sha256": hashlib.sha256(blob).hexdigest(), "physics_config_hash": config_hash(cfg),
             "created_at": time.time(), **extra}
+
+
+def _behaviour_manifest(cfg: dict, source: str, kind: str, rows: list[dict], **extra) -> dict:
+    """Manifest for an engine-generated behaviour dataset. Carries `kind` + the DatasetSpec vocabulary,
+    so training routes through the same columns as a log-built dataset of that kind (vocab_from_manifest)."""
+    from .datasets import columns_for
+    ins, tgts = columns_for(kind)
+    m = _manifest(cfg, source, rows, **extra)
+    m["kind"] = kind
+    m["inputs"] = sorted(ins)
+    m["targets"] = sorted(tgts)
+    return m
+
+
+def _row(record: dict) -> dict:
+    """Rounded row dict, matching the rounding build_dataset() applies to log rows."""
+    return {k: (round(v, 6) if isinstance(v, float) else v) for k, v in record.items()}
+
+
+def _prepared_state(cfg: dict, build) -> dict:
+    """A settled engine checkpoint: the same recipe _Site.prepare uses, parameterised by the caller."""
+    w = PhysicsWorld(cfg)
+    build(w)
+    w.setup_finish()
+    w.settle(max_time=1.0)
+    return w.get_state()
+
+
+# --------------------------------------------------------------------------- engine jump dataset
+JUMP_SPOT = (-2.5, -2.1)                       # open ground (same spot as the HVE jump tests)
+# Every jump sample varies exactly what the jump row's inputs describe: what is carried (mass) and
+# what it stands on at take-off (stacked blocks -> take-off feet height). The engine is deterministic,
+# so this (mass x platform) grid is the full, honest sample space of the jump row's inputs.
+# The ring is deliberately absent: it is the island's ritual object (the around-a-block rule) and
+# destabilises prepared scenes; carried loads stay plain bodies (blocks 5 kg, rock 12 kg).
+JUMP_CARRIED = ([None, "block_01", "rock"], [0.5, 0.3, 0.2])
+JUMP_STACK_IDS = ("block_01", "block_04")      # distinct ids: blocks 0.25 m half-height each
+JUMP_STACK_N = (0, 1, 2)                       # blocks under the feet: 0.0 m / 0.5 m / 1.0 m
+
+
+def _place_stack(w, ids: tuple[str, ...], x: float, y: float, n: int) -> None:
+    """Stack n distinct block ids at (x, y). setup_place() positions one id, so stacking needs
+    a different id per level (all island blocks share the same half-height)."""
+    if not ids or n <= 0:
+        return
+    hz = w.half_extent_z(ids[0])
+    for k in range(min(n, len(ids))):
+        w.setup_place(ids[k], [x, y, (2 * k + 1) * hz + 0.002])
+
+
+def _jump_site(w, x: float, y: float, stack_ids: tuple[str, ...], stack_n: int,
+               carried: str | None) -> None:
+    for other in sorted(w.active):
+        if w.specs[other].movable and other != stack_ids[0] and other != carried \
+                and other not in stack_ids:
+            w.setup_remove(other)
+    _place_stack(w, stack_ids, x, y, stack_n)
+    if stack_n:
+        # Stage the platform's own settle BEFORE anything stands on it: spawning the agent and
+        # placeables together shoves objects around (a settle collision once threw the ring 5 m).
+        w.setup_finish()
+        w.settle(max_time=0.8)
+    w.setup_agent(x, y)
+    w.setup_finish()
+    w.settle(max_time=1.0)
+    if carried:
+        # Only now, everything already at rest: place the carried object beside the agent and
+        # collect it. Spawning it before the stage settles let collisions fling it out of reach
+        # or off the island ('object_lost').
+        w.setup_place(carried, [x - w.hw - 0.4, y, w.half_extent_z(carried) + 0.002])
+        w.setup_finish()
+        w.settle(max_time=0.3)
+        w.pick_up(carried)
+        w.settle(max_time=0.2)
+
+
+def generate_jump_dataset(cfg: dict, n: int, seed: int = 0,
+                          progress: Callable[[int, int], None] | None = None) -> dict:
+    """Run `n` real jumps in the engine, varying carried load and take-off platform, and return
+    {"manifest": ..., "rows": [...]} in the log-built jump dataset's own row schema."""
+    if not (1 <= n <= 200_000):
+        raise MLError("invalid_argument", "n must be between 1 and 200000.")
+    from .datasets import _jump_row
+    rnd = random.Random(seed)
+    w = PhysicsWorld(cfg)
+    w._recording = True
+    ready: dict[tuple, dict] = {}
+    rows: list[dict] = []
+    failed = 0
+    t0 = time.perf_counter()
+    for i in range(n):
+        carried = rnd.choices(JUMP_CARRIED[0], weights=JUMP_CARRIED[1])[0]
+        stack_n = int(rnd.choice(JUMP_STACK_N))
+        key = (carried, stack_n)
+        if key not in ready:
+            try:
+                ready[key] = _prepared_state(
+                    cfg, lambda w2, s=JUMP_STACK_IDS, k=stack_n, c=carried: _jump_site(w2, *JUMP_SPOT, s, k, c))
+            except ActionError:
+                failed += 1            # this site variant refused to build; skip that sample
+                continue
+        w.set_state(ready[key])
+        w.events.clear()
+        try:
+            r = w.jump(wait="landing")
+        except ActionError:
+            failed += 1
+            continue
+        row = _jump_row({}, r)
+        if row is None:          # jump never left its support -> engine record without an apex
+            failed += 1
+            continue
+        rows.append(_row(row))
+        if progress and (i + 1) % 50 == 0:
+            progress(i + 1, n)
+    manifest = _behaviour_manifest(
+        cfg, "engine_jumps", "jump", rows, seed=seed, requested=n, failed=failed,
+        jump_spot=list(JUMP_SPOT), seconds=round(time.perf_counter() - t0, 2))
+    return {"manifest": manifest, "rows": rows}
+
+
+# --------------------------------------------------------------------------- engine climb dataset
+CLIMB_SPOT = (-9.5, 2.0)                       # open ground west of the terrace
+CLIMB_LEDGES = (("block_02",), ("block_02", "block_03"))   # 0.5 m ledge, 1.0 m stacked ledge
+CLIMB_CARRIED = ([None, "block_06"], [0.6, 0.4])
+CLIMB_OFFSET_RANGE = (0.05, 0.35)              # gap between agent and the ledge's west face, m
+CLIMB_JITTER_DEG = 20.0                        # heading error: some rays miss the ledge entirely
+
+
+def _climb_site(w, x: float, y: float, stack_ids: tuple[str, ...], ledge_dx: float,
+                carried: str | None) -> None:
+    for other in sorted(w.active):
+        if w.specs[other].movable and other != stack_ids[0] and other != carried \
+                and other not in stack_ids:
+            w.setup_remove(other)
+    _place_stack(w, stack_ids, x + 2 * w.hw + ledge_dx, y, len(stack_ids))
+    w.setup_finish()
+    w.settle(max_time=0.8)          # the ledge settles before the agent spawns near it
+    w.setup_agent(x, y)
+    w.setup_finish()
+    w.settle(max_time=1.0)
+    if carried:
+        # Behind the agent (west), away from the climb direction, so it neither blocks the
+        # ledge ray nor changes the climb geometry; placed only once everything is at rest.
+        w.setup_place(carried, [x - w.hw - 0.4, y, w.half_extent_z(carried) + 0.002])
+        w.setup_finish()
+        w.settle(max_time=0.3)
+        w.pick_up(carried)
+        w.settle(max_time=0.2)
+
+
+def generate_climb_dataset(cfg: dict, n: int, seed: int = 0,
+                           progress: Callable[[int, int], None] | None = None) -> dict:
+    """Run `n` real climbs in the engine against prepared block ledges (single and stacked), varying
+    ledge height, standing gap, heading jitter and carried load, and return rows in the log-built
+    climb dataset's own schema (success / height_gained targets)."""
+    if not (1 <= n <= 200_000):
+        raise MLError("invalid_argument", "n must be between 1 and 200000.")
+    from .datasets import _climb_row
+    rnd = random.Random(seed)
+    w = PhysicsWorld(cfg)
+    w._recording = True
+    ready: dict[tuple, dict] = {}
+    rows: list[dict] = []
+    failed = 0
+    t0 = time.perf_counter()
+    for i in range(n):
+        stack_ids = CLIMB_LEDGES[int(rnd.randrange(len(CLIMB_LEDGES)))]
+        carried = rnd.choices(CLIMB_CARRIED[0], weights=CLIMB_CARRIED[1])[0]
+        ledge_dx = round(rnd.uniform(*CLIMB_OFFSET_RANGE), 2)
+        jitter = math.radians(rnd.uniform(-CLIMB_JITTER_DEG, CLIMB_JITTER_DEG))
+        d = np.array([math.cos(jitter), math.sin(jitter)])
+        key = (stack_ids, carried, ledge_dx)
+        if key not in ready:
+            try:
+                ready[key] = _prepared_state(
+                    cfg, lambda w2, s=tuple(stack_ids), c=carried, dx=ledge_dx: _climb_site(w2, *CLIMB_SPOT, s, dx, c))
+            except ActionError:
+                failed += 1            # this site variant refused to build; skip that sample
+                continue
+        w.set_state(ready[key])
+        w.events.clear()
+        try:
+            r = w.climb(d)
+        except ActionError:
+            failed += 1            # ray missed the ledge (gap/jitter) or the mount was refused
+            continue
+        # The action-record layer stamps a completed climb's result with success=1 before it lands in
+        # the log; the raw engine dict doesn't carry it. Give the row builder the same view.
+        r.setdefault("success", 1)
+        row = _climb_row({}, r)
+        if row is None:
+            failed += 1
+            continue
+        rows.append(_row(row))
+        if progress and (i + 1) % 50 == 0:
+            progress(i + 1, n)
+    manifest = _behaviour_manifest(
+        cfg, "engine_climbs", "climb", rows, seed=seed, requested=n, failed=failed,
+        climb_spot=list(CLIMB_SPOT), seconds=round(time.perf_counter() - t0, 2))
+    return {"manifest": manifest, "rows": rows}
 
 
 def dataset_from_session_events(db, session_ids: list[int]) -> dict:

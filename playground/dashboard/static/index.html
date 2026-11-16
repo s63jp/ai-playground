@@ -178,10 +178,11 @@
         <div id="nn-datasets"></div>
       </div>
       <div class="card">
-        <h3>Generate dataset <span class="muted small">(runs the real MuJoCo world)</span></h3>
+        <h3>Generate dataset <span class="muted small">(runs the real MuJoCo world — no log history needed)</span></h3>
         <form id="nn-gen-form" class="form-row">
-          <label>Name <input type="text" id="nn-gen-name" placeholder="my_throws" maxlength="40"></label>
-          <label>Throws <input type="number" id="nn-gen-n" value="1500" min="10" max="20000"></label>
+          <label>Kind <select id="nn-gen-kind"><option value="throw">throw</option><option value="jump">jump</option><option value="climb">climb</option></select></label>
+          <label>Name <input type="text" id="nn-gen-name" placeholder="my_dataset" maxlength="40"></label>
+          <label>Rows <input type="number" id="nn-gen-n" value="1500" min="10" max="20000"></label>
           <label>Seed <input type="number" id="nn-gen-seed" value="7"></label>
           <button type="submit" class="btn">Generate</button>
           <span id="nn-gen-status" class="muted small"></span>

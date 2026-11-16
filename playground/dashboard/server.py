@@ -503,19 +503,25 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
 
     @app.post("/api/ml/generate")
     def ml_generate(body: dict = Body(...)):
-        """Generate a throw dataset by running the real MuJoCo world, saved to the chosen registry.
+        """Generate a dataset by running the real MuJoCo world, saved to the chosen registry.
 
-        This is what lets a researcher build training data from the dashboard (audit 2026-11-13);
-        previously only the CLI could. Runs in a background job because N can be large.
+        kind: throw (default; force/angle -> flight outcomes), jump (carried load x take-off
+        platform -> apex), climb (ledge x gap x load -> height gained). Each generator emits rows
+        in the same schema as that behaviour's log-built datasets. Background job (N can be large).
         """
-        from ..ml.data import generate_throw_dataset
+        from ..ml.data import generate_climb_dataset, generate_jump_dataset, generate_throw_dataset
         from ..ml.registry import NAME_RE
         from ..ml import MLError
         name = body.get("name")
         if not name or not NAME_RE.match(name):
             raise HTTPException(400, "name must be 1-40 chars of letters, digits, '_' or '-'.")
+        kind = str(body.get("kind") or "throw")
+        gens = {"throw": generate_throw_dataset, "jump": generate_jump_dataset,
+                "climb": generate_climb_dataset}
+        if kind not in gens:
+            raise HTTPException(400, f"unknown engine kind '{kind}'; available: {sorted(gens)}")
         try:
-            n = int(body.get("n", 1500))
+            n = int(body.get("n", 1500) if body.get("n") is not None else 1500)
             seed = int(body.get("seed", 7))
         except (TypeError, ValueError):
             raise HTTPException(400, "n and seed must be integers.") from None
@@ -529,15 +535,23 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
                 raise HTTPException(409, "A training, evaluation or generation job is already running.")
             ml_running["busy"] = True
         job_id = str(uuid.uuid4())[:8]
-        ml_jobs[job_id] = {"status": "queued", "kind": "generate", "dataset": name, "n": n}
+        ml_jobs[job_id] = {"status": "queued", "kind": "generate", "dataset": name, "n": n,
+                           "dataset_kind": kind}
 
         def run_generate():
+            def prog(done, of):
+                ml_jobs[job_id]["progress"] = {"done": done, "of": of}
             try:
                 ml_jobs[job_id]["status"] = "running"
-                ds = generate_throw_dataset(cfg, n, seed=seed)
+                ds = gens[kind](cfg, n, seed=seed, progress=prog)
                 info = reg.save_dataset(name, ds)
                 ml_jobs[job_id]["status"] = "done"
-                ml_jobs[job_id]["result_summary"] = {**info, "scope": scope, "owner": owner}
+                ml_jobs[job_id]["result_summary"] = {**info, "scope": scope, "owner": owner,
+                                                     "requested": n,
+                                                     "failed": ds["manifest"].get("failed", 0)}
+            except MLError as e:
+                ml_jobs[job_id]["status"] = "error"
+                ml_jobs[job_id]["error"] = str(getattr(e, "message", e))
             except Exception as e:  # noqa: BLE001
                 ml_jobs[job_id]["status"] = "error"
                 ml_jobs[job_id]["error"] = str(e)
@@ -929,7 +943,11 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
     @app.post("/api/ml/build-behaviour")
     def ml_build_behaviour(body: dict = Body(...)):
         """Build a named behaviour dataset (climb/jump/locomotion/manipulation/placement/affordance) from
-        the recorded log and save it to the chosen registry (audit 2026-11-13). Background job."""
+        the recorded log and save it to the chosen registry (audit 2026-11-13). Background job.
+
+        The log is read and the dataset built at submit time: an empty result is refused here with a
+        400 (nothing actionable was recorded) instead of writing a 0-row dataset artifact.
+        """
         from ..ml.datasets import DATASETS, build_dataset
         from ..ml.registry import NAME_RE
         name = body.get("name")
@@ -946,6 +964,15 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
             rows = db.q("SELECT id FROM sessions WHERE agent_id=? ORDER BY id", (owner,))
         else:
             rows = db.q("SELECT id FROM sessions ORDER BY id")
+        actions: list = []
+        for r in rows:
+            actions.extend(db.actions(r["id"], limit=10**6))
+        ds = build_dataset(actions, kind)
+        if not ds["rows"]:
+            raise HTTPException(
+                400, f"the action log has 0 usable '{kind}' actions for {scope}/{owner} — nothing to build. "
+                     f"Run sessions that use the '{kind}' behaviour first, or build an engine dataset "
+                     f"instead (throws, jumps and climbs can be generated without any log history).")
         with ml_lock:
             if ml_running["busy"]:
                 raise HTTPException(409, "A training, evaluation or generation job is already running.")
@@ -956,10 +983,6 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
         def run_build():
             try:
                 ml_jobs[job_id]["status"] = "running"
-                actions = []
-                for r in rows:
-                    actions.extend(db.actions(r["id"], limit=10**6))
-                ds = build_dataset(actions, kind)
                 import hashlib as _hl
                 ds["manifest"]["rows_sha256"] = _hl.sha256(
                     json.dumps(ds["rows"], sort_keys=True).encode()).hexdigest()
