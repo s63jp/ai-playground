@@ -228,8 +228,8 @@ TOOLS: list[dict] = [
           "tower, object_on, agent_on, height_reached, block_count, juggle, structure.",
           {"type": STR, "params": {"type": "object"}, "description": STR}, ["type"], program_ok=False),
     _tool("end_session", "memory", "Finish for now. Your memory files are kept; the island is reset. "
-          "Set continue_next_session=true if you have unfinished experiments or open questions and would "
-          "like another session (with this same memory) to carry on, rather than treating this as the end.",
+          "If you want a follow-up session with this same memory, set continue_next_session=true; "
+          "otherwise the session simply ends.",
           {"reason": STR, "continue_next_session": {"type": "boolean",
            "description": "True if you want to resume exploring in a follow-up session."}},
           program_ok=False),
