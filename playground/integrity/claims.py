@@ -83,13 +83,13 @@ def find_structures(world) -> list[dict]:
     return out
 
 
-def verify_tower(world, events, min_blocks: int = 5, count: int = 1, **_) -> dict:
+def verify_tower(world, events, min_blocks: int = 5, count: int = 1) -> dict:
     towers = [t for t in find_towers(world) if t["height_blocks"] >= int(min_blocks)]
     return {"verified": len(towers) >= int(count), "measured": {"towers": towers, "qualifying": len(towers)},
             "criteria": f"at least {count} column(s) of {min_blocks}+ blocks at rest"}
 
 
-def verify_object_on(world, events, object: str = "", surface: str = "", **_) -> dict:
+def verify_object_on(world, events, *, object: str, surface: str) -> dict:
     if object not in world.active:
         return {"verified": False, "measured": {"in_world": False}, "criteria": f"{object} at rest on {surface}"}
     on = world.support_graph().get(object, [])
@@ -100,14 +100,16 @@ def verify_object_on(world, events, object: str = "", surface: str = "", **_) ->
             "criteria": f"{object} at rest and in supporting contact with {surface}"}
 
 
-def verify_agent_on(world, events, surface: str = "", **_) -> dict:
+def verify_agent_on(world, events, *, surface: str) -> dict:
     return {"verified": bool(world.grounded and surface in world.support),
             "measured": {"standing_on": list(world.support), "feet_height": round(world.feet(), 3)},
             "criteria": f"body standing on {surface}"}
 
 
-def verify_height_reached(world, events, object: str = "", min_height: float | None = None,
-                          target: float | None = None, tolerance: float = 0.25, **_) -> dict:
+def verify_height_reached(world, events, *, object: str, min_height: float | None = None,
+                          target: float | None = None, tolerance: float = 0.25) -> dict:
+    if min_height is None and target is None:
+        raise TypeError("a height_reached claim needs 'min_height' or 'target'")
     flights = [e["data"] for e in events if e["type"] == "flight_end" and e["data"].get("object") == object
                and e["data"].get("kind") == "throw"]
     peaks = [f["max_height"] for f in flights]
@@ -123,14 +125,14 @@ def verify_height_reached(world, events, object: str = "", min_height: float | N
             "criteria": f"a throw of {object} peaking at or above {min_height} m"}
 
 
-def verify_block_count(world, events, at_least: int = 13, **_) -> dict:
+def verify_block_count(world, events, at_least: int = 13) -> dict:
     n = sum(1 for o in world.active if world.specs[o].kind == "block")
     appeared = [e["data"].get("object") for e in events if e["type"] == "object_appeared"]
     return {"verified": n >= int(at_least), "measured": {"blocks_in_world": n, "appeared_this_session": appeared},
             "criteria": f"at least {at_least} blocks present in the world"}
 
 
-def verify_juggle(world, events, objects: list[str] | None = None, cycles: int = 1, **_) -> dict:
+def verify_juggle(world, events, *, objects: list[str], cycles: int = 1) -> dict:
     """Count genuine throw-and-catch tosses from physics events and simulation time.
 
     A toss counts only if the object was released, stayed in the air for at least
@@ -183,7 +185,7 @@ def verify_juggle(world, events, objects: list[str] | None = None, cycles: int =
 
 
 def verify_structure(world, events, objects: list[str] | None = None, min_objects: int = 2,
-                     min_levels: int = 1, **_) -> dict:
+                     min_levels: int = 1) -> dict:
     structs = find_structures(world)
     want = set(objects or [])
     hits = [s for s in structs if s["count"] >= int(min_objects) and s["levels"] >= int(min_levels)
@@ -200,13 +202,22 @@ VERIFIERS: dict[str, Callable[..., dict]] = {
 }
 
 CLAIM_HELP = {
-    "tower": "params: min_blocks (default 5), count (default 1)",
-    "object_on": "params: object, surface (an object id, e.g. 'spire')",
-    "agent_on": "params: surface",
-    "height_reached": "params: object, and either min_height or target (+ optional tolerance)",
-    "block_count": "params: at_least",
-    "juggle": "params: objects (list of ids), cycles",
-    "structure": "params: min_objects, min_levels, optional objects (list of ids that must be part of it)",
+    "tower": ("params: min_blocks (optional, default 5), count (optional, default 1). "
+              "Asserts count+ column(s) of at least min_blocks blocks resting on one another at rest."),
+    "object_on": ("params: object, surface (both required object ids). "
+                  "Asserts <object> is at rest and in supporting contact with <surface>."),
+    "agent_on": ("params: surface (required object id). Asserts the body is standing on <surface>."),
+    "height_reached": ("params: object (required id), and exactly one of min_height or target "
+                       "(tolerance optional, default 0.25). Asserts a throw of <object> peaked "
+                       "at or above min_height, or within tolerance of target."),
+    "block_count": ("params: at_least (optional, default 13). "
+                    "Asserts at_least or more blocks exist in the world."),
+    "juggle": ("params: objects (required list of object ids), cycles (optional, default 1). "
+               "Asserts cycles unbroken toss(es) of every listed object, each airborne "
+               ">= 0.2 s and caught before touching anything."),
+    "structure": ("params: min_objects (optional, default 2), min_levels (optional, default 1), "
+                  "objects (optional list of ids that must all be part of the structure). "
+                  "Asserts a connected resting structure meeting those."),
 }
 
 

@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ..integrity import CLAIM_HELP
+
 NUM = {"type": "number"}
 STR = {"type": "string"}
 BOOL = {"type": "boolean"}
@@ -216,17 +218,24 @@ TOOLS: list[dict] = [
           "Change a goal's status. A goal marked completed can carry a claim, which is checked independently.",
           {"goal_id": STR, "status": {"type": "string", "enum": ["active", "paused", "completed", "abandoned"]},
            "note": STR,
-           "claim": {"type": "object", "description": "Optional: {\"type\": ..., \"params\": {...}} as for "
-                                                      "claim_achievement."}},
+           "claim": {"type": "object", "description": "Optional: {\"type\": ..., \"params\": {...}}. Give "
+                                                      "params the exact parameter names documented for "
+                                                      "claim_achievement; unknown names are rejected, "
+                                                      "never ignored."}},
           ["goal_id", "status"], program_ok=False),
     _tool("assign_meaning", "memory",
           "Give an object, or a group of objects, a name or meaning of your own.",
           {"target": {"anyOf": [STR, {"type": "array", "items": STR}]}, "meaning": STR}, ["target", "meaning"],
           program_ok=False),
     _tool("claim_achievement", "memory",
-          "State that you have achieved something and have it checked against the physical record. Types: "
-          "tower, object_on, agent_on, height_reached, block_count, juggle, structure.",
-          {"type": STR, "params": {"type": "object"}, "description": STR}, ["type"], program_ok=False),
+          "State that you have achieved something and have it checked against the physical record. Give "
+          "params a dict with exactly the parameter names the type expects (checked strictly: wrong or "
+          "unknown names are rejected as invalid_argument, never ignored). Types and their exact params: "
+          + "; ".join(f"{k}: {v}" for k, v in CLAIM_HELP.items()),
+          {"type": STR, "params": {"type": "object", "description": "Keys must match the parameter names "
+                                    "listed for the chosen type in this description; used verbatim by "
+                                    "the independent verifier."}, "description": STR},
+          ["type"], program_ok=False),
     _tool("end_session", "memory", "Finish for now. Your memory files are kept; the island is reset. "
           "If you want a follow-up session with this same memory, set continue_next_session=true; "
           "otherwise the session simply ends.",
