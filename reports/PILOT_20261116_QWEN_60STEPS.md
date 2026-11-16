@@ -26,16 +26,19 @@ Comparison is descriptive only (2 agents, single sessions — no significance cl
    specific to `liquid/lfm2-24b-a2b` (33 leaked turns across sessions 32–41) and
    `nemotron4b` (4, sessions 49–50); the recovery parser (commit 0e1e2c8) is in place for
    them, untested against a live endpoint yet.
-3. **Neither model did science in these sessions.** 0 experiments recorded across all four
-   sessions; behaviour categories came out `activity_for_its_own_sake` 33–35, near-zero
-   `self_directed_goals`. The 9B agents *explored and manipulated* (21–26 physical actions;
-   failures were honest competence errors: `out_of_reach` ×6 each, `not_holding`,
-   `nothing_to_climb`, `blocked`) but never reached the record/cite-evidence loop.
-   Hypothesis for the next iteration: 60 actions may simply be too short to reach
-   hypothesis→experiment→citation behaviour on top of exploration; or the tool descriptions
-   never pull attention to the record loop without `idle` prompts. Worth one longer
-   (no-cap, 60-min) session with the 9B to separate those.
-4. **Memory reads: 0** in all four sessions (`counters.memory_reads`). The briefing itself
+3. **The record loop works — it is an action-budget phenomenon.** The system has recorded
+   experiments before, and on these same models: agent_002 on `qwen/qwen3.5-9b` recorded
+   15 experiment/discovery records across its longer, uncapped sessions 11–13 (61–66
+   actions each), and agent_001 recorded 9 items on `unslothqen 4b` (sessions 3–5, 33–47
+   actions). The same 9B recorded **nothing** under the 60-step cap (sessions 53–54,
+   47/57 actions). Combined with the earlier 2B runs, the differentiator is session
+   length, not model or interface: reaching the hypothesis → `record_experiment` →
+   evidence-check loop takes tens of actions, and a 60-step cap that also spends turns on
+   exploration reaches it only by luck. The evidence gate did its job in those longer
+   sessions, too: agent_002 requested `confirmed` six times and was granted it **never** —
+   `hypothesis` twice (no checked evidence), `probable` three times (one checked
+   experiment each). Claiming is not knowing, by construction.
+4. **Memory reads: 0** in the four pilot sessions (`counters.memory_reads`). The briefing itself
    loads memory at session start, but no in-session recall was made by either model.
 
 ## Validity notes
