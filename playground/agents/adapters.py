@@ -412,7 +412,13 @@ class OpenAICompatAdapter(Adapter):
                                    "function": {"name": c.name, "arguments": c.args if isinstance(c.args, str)
                                                 else json.dumps(c.args or {})}} for c in calls]
         self.messages.append(keep)
-        return Turn(text=msg.get("content") or "", tool_calls=calls, usage=data.get("usage") or {}, raw=None)
+        usage = dict(data.get("usage") or {})
+        if calls and not msg.get("tool_calls"):
+            # Counter for cross-model comparisons (reports/ADAPTER_TOOLCALL_LEAK.md, fix 3):
+            # how often this model tried to act by writing template text instead of
+            # structured tool_calls. The runner sums usage ints into the session summary.
+            usage["tool_calls_recovered_from_text"] = len(calls)
+        return Turn(text=msg.get("content") or "", tool_calls=calls, usage=usage, raw=None)
 
 
 class AnthropicAdapter(Adapter):

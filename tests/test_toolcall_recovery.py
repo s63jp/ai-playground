@@ -133,3 +133,17 @@ def test_adapter_without_markup_behaves_as_before():
     turn = _canned_adapter("I will climb the terrace.").step("go", [])
     assert turn.tool_calls == []
     assert turn.text == "I will climb the terrace."
+    assert "tool_calls_recovered_from_text" not in turn.usage
+
+
+# --------------------------------------------------------------------------- leak counter (fix 3)
+def test_recovered_calls_are_counted_in_usage():
+    turn = _canned_adapter(LEAK_SAMPLE).step("go", [])
+    assert turn.usage.get("tool_calls_recovered_from_text") == 1
+
+
+def test_structured_calls_are_not_counted_as_recovered():
+    structured = [{"id": "c1", "type": "function",
+                   "function": {"name": "observe_world", "arguments": "{}"}}]
+    turn = _canned_adapter("note", tool_calls=structured).step("go", [])
+    assert "tool_calls_recovered_from_text" not in turn.usage
