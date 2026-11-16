@@ -10,7 +10,10 @@ from typing import Any, Callable
 
 import numpy as np
 
+from ..world.mathutil import quat_to_mat
+
 MIN_TOSS_TIME = 0.2      # a throw followed by a grab sooner than this is not a toss
+_GEOM_EPS = 1e-6         # metres: slop for near-flush geometry decisions
 
 
 def _at_rest(world, oid: str) -> bool:
@@ -195,10 +198,198 @@ def verify_structure(world, events, objects: list[str] | None = None, min_object
                         + (f" containing {sorted(want)}" if want else "")}
 
 
+# ------------------------------------------------------------------ threaded
+def _obj_pose(world, oid: str) -> tuple[np.ndarray, np.ndarray]:
+    """Centre and quaternion of any known object, movable or structural."""
+    s = world.specs[oid]
+    if s.movable:
+        return world.obj_pos(oid), world.obj_quat(oid)
+    return np.array(s.position, dtype=float), np.array(s.rotation, dtype=float)
+
+
+def _torus_dims(spec) -> tuple[float, float, int]:
+    return (float(spec.dimensions["major_radius"]), float(spec.dimensions["tube_radius"]),
+            int(spec.properties.get("segments", 16)))
+
+
+def _support_along(shape: str, dims: dict, quat, n: np.ndarray) -> float:
+    """Max of (p·n) over the shape centred at its origin, in world orientation quat."""
+    R = quat_to_mat(quat)
+    if shape == "box":
+        nl = R.T @ n
+        return float((abs(nl[0]) * dims["x"] + abs(nl[1]) * dims["y"] + abs(nl[2]) * dims["z"]) / 2)
+    if shape == "sphere":
+        return float(dims["radius"])
+    a = R[:, 2]                                   # torus axis: the tube sweeps a circle around it
+    return float(dims["major_radius"] * math.sqrt(max(0.0, 1.0 - (n @ a) ** 2)) + dims["tube_radius"])
+
+
+def _project_box(c: np.ndarray, quat, dims: dict):
+    R = quat_to_mat(quat)
+    h = np.array([dims["x"], dims["y"], dims["z"]], dtype=float) / 2
+
+    def proj(x: np.ndarray) -> np.ndarray:
+        return c + R @ np.clip(R.T @ (x - c), -h, h)
+    return proj
+
+
+def _project_ball(c: np.ndarray, r: float):
+    def proj(x: np.ndarray) -> np.ndarray:
+        v = x - c
+        d = float(np.linalg.norm(v))
+        return c + v if d <= r else c + v * (r / d)
+    return proj
+
+
+def _project_capsule(a: np.ndarray, b: np.ndarray, r: float):
+    ab = b - a
+    dd = float(ab @ ab)
+
+    def proj(x: np.ndarray) -> np.ndarray:
+        t = 0.0 if dd < 1e-18 else float(np.clip((x - a) @ ab / dd, 0.0, 1.0))
+        e = a + t * ab
+        v = x - e
+        d = float(np.linalg.norm(v))
+        return e + v if d <= r else e + v * (r / d)
+    return proj
+
+
+def _plane_gap(proj_a, p0: np.ndarray, n: np.ndarray, max_iter: int = 800) -> float:
+    """Distance from p0 to solid(A) ∩ {x : (x − p0)·n = 0}, where p0 lies on that plane.
+
+    Dykstra's alternating projection between A and the plane converges to the exact
+    nearest point when the two convex sets intersect; callers pre-check that.
+    """
+    x, p, q = p0.copy(), np.zeros(3), np.zeros(3)
+    z = x
+    for _ in range(max_iter):
+        y = proj_a(x + p)
+        p = x + p - y
+        z = y + q
+        z = z - ((z - p0) @ n) * n
+        q = y + q - z
+        if float(np.linalg.norm(z - y)) < 1e-12:
+            break
+        x = z
+    return float(np.linalg.norm(z - p0))
+
+
+def _torus_capsules(c: np.ndarray, quat, major: float, tube: float, segments: int
+                    ) -> list[tuple[np.ndarray, np.ndarray]]:
+    """The engine's torus collision geometry: capsule centre segments in world coordinates."""
+    R = quat_to_mat(quat)
+    pts = [c + R @ np.array([major * math.cos(2 * math.pi * k / segments),
+                             major * math.sin(2 * math.pi * k / segments), 0.0])
+           for k in range(segments)]
+    return [(pts[k], pts[(k + 1) % segments]) for k in range(segments)]
+
+
+def _aperture_gap(world, oid: str, p0: np.ndarray, n: np.ndarray) -> float | None:
+    """Nearest distance from p0 to the given object's solid cross-section at the plane
+    through p0 with normal n; None when the solid does not meet the plane at all."""
+    c, quat = _obj_pose(world, oid)
+    s = world.specs[oid]
+    depth = float((c - p0) @ n)
+    if s.shape == "box":
+        if abs(depth) > _support_along("box", s.dimensions, quat, n):
+            return None
+        return _plane_gap(_project_box(c, quat, s.dimensions), p0, n)
+    if s.shape == "sphere":
+        r = float(s.dimensions["radius"])
+        if abs(depth) >= r:
+            return None
+        disc = c - depth * n
+        return max(0.0, float(np.linalg.norm(disc - p0)) - math.sqrt(r * r - depth * depth))
+    major, tube, segments = _torus_dims(s)
+    best = None
+    for a, b in _torus_capsules(c, quat, major, tube, segments):
+        da, db = float((a - p0) @ n), float((b - p0) @ n)
+        min_depth = 0.0 if da * db < 0 else min(abs(da), abs(db))
+        if min_depth > tube:
+            continue
+        g = _plane_gap(_project_capsule(a, b, tube), p0, n)
+        best = g if best is None else min(best, g)
+    return best
+
+
+def _contacts_between(world, a: str, b: str) -> int:
+    """Contact points between two known objects in the current engine state."""
+    d = world.d
+    if not d.ncon:
+        return 0
+    oi = world.geom_oidx[d.contact.geom[:d.ncon]]
+    ia, ib = world.oidx[a], world.oidx[b]
+    return sum(1 for i in range(d.ncon)
+               if (int(oi[i, 0]), int(oi[i, 1])) in ((ia, ib), (ib, ia)))
+
+
+def verify_threaded(world, events, *, object: str, target: str) -> dict:
+    """Independent check of {target} passing through the aperture of {object}.
+
+    An aperture is a torus's hole. The relationship holds when the target's solid
+    reaches the aperture plane (the plane through the ring's centre, normal to the
+    ring's axis) within the ring's clear hole, and its material extends beyond that
+    plane on both sides; the ring must be present, free and at rest. Geometry is
+    taken from the engine state and the collision-geometry shapes (a settled torus is
+    its capsule segments; the clear hole's radius is major·cos(pi/segments) − tube),
+    so it works for any orientation — a tilted ring is evaluated in its own plane.
+    The distance query is exact convex geometry (Dykstra projection); it does not
+    assume the ring is horizontal and uses no object-specific constants.
+    """
+    def fail(measured: dict, why: str) -> dict:
+        return {"verified": False, "measured": measured,
+                "criteria": f"{object} threaded on {target}: {why}"}
+
+    if object not in world.specs or target not in world.specs:
+        unknown = [x for x in (object, target) if x not in world.specs]
+        return fail({}, f"unknown object id(s) {unknown}")
+    so, st = world.specs[object], world.specs[target]
+    if so.shape != "torus":
+        return fail({"shape": so.shape}, f"{object} is a {so.shape}; a threaded claim needs "
+                                         "an object with an aperture (a torus)")
+    o_in = (not so.movable) or object in world.active
+    t_in = (not st.movable) or target in world.active
+    if not o_in or not t_in:
+        return fail({"in_world": {"object": o_in, "target": t_in}}, "not present in the world")
+    if world.held in (object, target):
+        return fail({"held": True}, "held by the body")
+    rest_o = True if not so.movable else _at_rest(world, object)
+    rest_t = True if not st.movable else _at_rest(world, target)
+    if not (rest_o and rest_t):
+        return fail({"at_rest": {"object": rest_o, "target": rest_t}}, "not sufficiently stationary")
+
+    po, qo = _obj_pose(world, object)
+    n = quat_to_mat(qo)[:, 2]                       # the aperture faces along the torus axis
+    major, tube, segments = _torus_dims(so)
+    r_aperture = major * math.cos(math.pi / segments) - tube   # clear hole of the capsule ring
+    gap = _aperture_gap(world, target, po, n)
+    c, quat = _obj_pose(world, target)
+    depth = float((c - po) @ n)
+    sup = _support_along(st.shape, st.dimensions, quat, n)
+    lo, hi = depth - sup, depth + sup
+    occupied = gap is not None and gap <= r_aperture + _GEOM_EPS
+    through = hi > _GEOM_EPS and lo < -_GEOM_EPS
+    measured = {
+        "aperture_inner_radius": round(r_aperture, 4),
+        "cross_section_gap": None if gap is None else round(gap, 4),
+        "target_extent_along_axis": [round(lo, 4), round(hi, 4)],
+        "axis": [round(float(v), 3) for v in n],
+        "aperture_occupied": bool(occupied),
+        "target_through_the_plane": bool(through),
+        "contacts_with_target": _contacts_between(world, object, target),
+        "object_speed": round(world.obj_speed(object), 4),
+        "target_speed": None if not st.movable else round(world.obj_speed(target), 4),
+    }
+    return {"verified": bool(occupied and through), "measured": measured,
+            "criteria": f"{object} threaded on {target}: {target}'s material reaches the aperture "
+                        f"plane within {round(r_aperture, 3)} m of the ring centre and extends "
+                        f"beyond it on both sides, with the ring at rest"}
+
+
 VERIFIERS: dict[str, Callable[..., dict]] = {
     "tower": verify_tower, "object_on": verify_object_on, "agent_on": verify_agent_on,
     "height_reached": verify_height_reached, "block_count": verify_block_count,
-    "juggle": verify_juggle, "structure": verify_structure,
+    "juggle": verify_juggle, "structure": verify_structure, "threaded": verify_threaded,
 }
 
 CLAIM_HELP = {
@@ -218,6 +409,10 @@ CLAIM_HELP = {
     "structure": ("params: min_objects (optional, default 2), min_levels (optional, default 1), "
                   "objects (optional list of ids that must all be part of the structure). "
                   "Asserts a connected resting structure meeting those."),
+    "threaded": ("params: object, target (both required object ids; object must be a torus, i.e. "
+                 "have an aperture). Asserts target passes through object's aperture: its material "
+                 "reaches the aperture plane inside the clear hole and extends beyond the plane on "
+                 "both sides, with the ring at rest (works while the ring is tilted)."),
 }
 
 
