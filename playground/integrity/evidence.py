@@ -179,3 +179,30 @@ def check_claim_limits(measurements: dict, world_limits: dict) -> list[str]:
         if any(w in k for w in ("speed", "velocity")) and abs(val) > world_limits.get("max_speed", 60.0):
             problems.append(f"claimed {name}={val} exceeds any speed attainable in this world")
     return problems
+
+
+def evidence_outcome(verification: dict | None, supported: Any = None) -> dict:
+    """Classify a recorded experiment into the canonical outcome vocabulary.
+
+    Deliberately separates two things that must never be conflated:
+
+    - ``evidence_check``: did the mechanical integrity check (measurement values
+      present in the engine's action log and physically plausible) pass?
+    - ``scientific``: what does the recorded result (as read by the agent) mean
+      for the hypothesis — supported / contradicted / inconclusive.
+
+    A passed evidence check never implies the scientific claim is true, and a
+    failed or contradicted check keeps the experiment inconclusive at most.
+    """
+    v = verification or {}
+    verdict = v.get("verdict")
+    check = "passed" if v.get("verified") else "failed"
+    # 'contradicted' means the engine's own record contradicts what the agent
+    # said happened: the record itself cannot support any conclusion.
+    scientific = "inconclusive"
+    if v.get("verified") and verdict != "contradicted":
+        if supported is True:
+            scientific = "supported"
+        elif supported is False:
+            scientific = "contradicted"
+    return {"submitted": True, "evidence_check": check, "scientific": scientific, "verdict": verdict}

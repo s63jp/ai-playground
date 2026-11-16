@@ -30,8 +30,8 @@ from playground.world.physics import ActionError, PhysicsWorld
 class TestPromptSelection:
     """Verify prompt selection is recorded per session."""
 
-    def test_default_prompt_is_free_agency_v2(self, cfg, db):
-        """Default exploration prompt should be free_agency_v2."""
+    def test_default_prompt_is_free_agency_v3(self, cfg, db):
+        """Default exploration prompt is the strictly non-directive free_agency_v3."""
         seen = {}
 
         def policy(system, opening, tools):
@@ -40,7 +40,8 @@ class TestPromptSelection:
 
         run_session(cfg, db, "agent_001", PolicyAdapter(policy))
         assert seen["system"].startswith("You are an autonomous AI agent")
-        assert "You have no assigned mission." in seen["system"]
+        assert "You have no assigned mission, and no objective is waiting for you." in seen["system"]
+        assert "You may:" not in seen["system"]  # no activity menu
 
     def test_prompt_id_and_hash_recorded_in_session_started_event(self, cfg, db):
         """The session_started event should record prompt_id and system_prompt_hash."""
@@ -53,8 +54,8 @@ class TestPromptSelection:
 
         assert "prompt_id" in started
         assert "system_prompt_hash" in started
-        assert started["prompt_id"] == "free_agency_v2"
-        expected_hash = prompt_hash(exploration_system("free_agency_v2"))
+        assert started["prompt_id"] == "free_agency_v3"
+        expected_hash = prompt_hash(exploration_system("free_agency_v3"))
         assert started["system_prompt_hash"] == expected_hash
 
     def test_brief_v1_prompt_recorded_correctly(self, cfg, db):

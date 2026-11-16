@@ -326,7 +326,7 @@ def finish_session(cfg: dict, db, env: Environment, adapter: Adapter, turns: int
                 if len(combined) > 500:
                     combined = combined[:497] + "..."
                 auto_text = f"[auto-captured] Session ended ({end_reason}). Final thoughts: {combined}"
-                env.memory.add_diary(env.session_number, env.world.time, auto_text)
+                env.memory.add_diary(env.session_number, env.world.time, auto_text, author="auto")
     
     env.note("session_finished", end_reason=end_reason, error=error)
     env._flush_only()

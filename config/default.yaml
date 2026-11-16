@@ -94,9 +94,11 @@ memory:
 agents:
   count: 13
   id_format: "agent_{:03d}"
-  # Personality/agency text for free exploration. free_agency_v2 = researcher prompt (Nov 2026, default);
-  # brief_v1 = original project-brief personality. Each session records the id + hash it used.
-  exploration_prompt: free_agency_v2
+  # Personality/agency text for free exploration. free_agency_v3 = strictly non-directive
+  # default (Nov 2026, no activity menu, no productivity nudges). free_agency_v2 = researcher
+  # prompt kept for A/B; brief_v1 = original project-brief personality. Each session records
+  # the id + hash it used.
+  exploration_prompt: free_agency_v3
 
 database: experiments/playground.db
 

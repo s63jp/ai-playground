@@ -392,19 +392,72 @@ async function loadMemory() {
   const a = $('#m-agent').value;
   memData = await api(`/api/agents/${a}/memory`);
   const s = memData.stats;
-  $('#m-stats').textContent = `${s.sessions_completed} sessions · ${s.discoveries_total} handbook entries (${s.discoveries.confirmed} confirmed, ${s.discoveries.probable} probable, ${s.discoveries.hypothesis} hypotheses, ${s.discoveries.disproven} disproven) · ${s.experiments_verified}/${s.experiments} experiments pass the evidence check`;
-  $('#m-items').innerHTML = memData.items.map((i) => `<div class="row"><span class="mono">${i.id}</span>
+  $('#m-stats').textContent = `${s.sessions_completed} sessions · ${s.discoveries_total} handbook entries `
+    + `(${s.discoveries.confirmed} confirmed, ${s.discoveries.probable} probable, ${s.discoveries.hypothesis} hypotheses, `
+    + `${s.discoveries.disproven} disproven, ${s.discoveries.unverified ?? 0} unverified, ${s.discoveries.challenged} challenged`
+    + (s.records_removed ? `, ${s.records_removed} removed` : '')
+    + `) · ${s.experiments_verified}/${s.experiments} experiments pass the evidence check (a pass is not a proof)`;
+  // Rendering follows this file's established convention: every interpolated
+  // value passes through esc() (innerHTML is only used to compose the layout;
+  // no raw record text reaches the DOM unescaped).
+  const disc = Object.fromEntries(memData.discoveries.map((d) => [d.id, d]));
+  const exps = Object.fromEntries(memData.experiments.map((e) => [e.id, e]));
+  $('#m-items').innerHTML = memData.items.map((i) => {
+    const d = i.kind === 'discovery' ? disc[i.id] : null;
+    const e = i.kind === 'experiment' ? exps[i.id] : null;
+    let extra = '';
+    if (d) {
+      const ev = (d.evidence || []).map((id) => {
+        const x = exps[id];
+        if (!x) return id;
+        const sup = x.supported === true ? 'supports' : x.supported === false ? 'contradicts' : 'read by agent only';
+        return `${id} (${sup})`;
+      });
+      const ch = (d.history || []).filter((h) => h.kind === 'challenge')
+        .map((h) => `challenge by ${esc(h.by ?? 'researcher')}: “${esc(h.reason || '')}”`);
+      const last = [...(d.history || [])].reverse().find((h) => h.to && h.from !== undefined && h.kind !== 'challenge');
+      const overlayNote = (d.status === 'challenged' || d.status === 'unverified') && d.evidence_status
+        ? `<span class="pill ${esc(d.evidence_status)}" title="fresh evidence would grant this, but only a researcher resolves the overlay">evidence would grant: ${esc(d.evidence_status)}</span>` : '';
+      extra = `<div class="small muted">origin: ${esc(d.agent_id || a)} in session ${esc(d.created_session)}${d.session_id ? ` (db #${esc(d.session_id)})` : ''}`
+        + ` · requested: ${esc(d.requested_status || '—')}`
+        + ` ${overlayNote}</div>`
+        + `<div class="small muted">evidence: ${ev.map(esc).join(', ') || 'none'}</div>`
+        + `<div class="small muted">status reason: ${esc(d.status_reason || '—')}</div>`
+        + `<div class="small muted">challenge record: ${ch.length ? ch.join(' · ') : 'none'}</div>`
+        + `<div class="small muted">last status change: ${last ? `${esc(last.from || 'new')} → <b>${esc(last.to)}</b> by ${esc(last.by || 'verification system')}${last.at ? ' at ' + new Date(last.at * 1000).toLocaleString() : ''}` : 'unchanged'}</div>`;
+    } else if (e) {
+      const o = e.outcome || {};
+      const oc = e.verification || {};
+      extra = `<div class="small muted">agent: ${esc(e.agent_id || a)} · session ${esc(e.session)}${e.session_id ? ` (db #${esc(e.session_id)})` : ''}`
+        + `${e.discovery_id ? ` · tests <b>${esc(e.discovery_id)}</b>` : ''}</div>`
+        + `<div class="small muted">evidence check: <b class="pill ${o.evidence_check === 'passed' ? 'confirmed' : 'disproven'}">${esc(o.evidence_check ?? (oc.verified ? 'passed' : 'failed'))}</b>`
+        + ` (${esc(oc.verdict || '—')}) · scientific conclusion: <b>${esc(o.scientific ?? 'inconclusive')}</b> — these are separate things</div>`
+        + `<div class="small muted">conditions: ${esc(e.conditions || '—')}</div>`
+        + `<div class="small muted">observed: ${esc(String(e.actual_result || '—')).slice(0, 220)}</div>`
+        + `<div class="small muted">cited actions: ${esc((e.action_refs || []).join(', ')) || '—'}${(e.action_refs || []).length ? ' (engine-checked)' : ''}</div>`;
+    }
+    return `<div class="row"><span class="mono">${i.id}</span>
     <span class="pill ${i.status || ''}">${i.kind}${i.status ? ': ' + i.status : ''}</span> ${esc((i.text || '').slice(0, 180))}
-    ${i.flags && i.flags.challenged ? '<span class="warn small">challenged</span>' : ''}
+    ${i.flags && i.flags.challenged ? '<span class="warn small">challenged</span>' : ''}${extra}
     <div>${i.kind === 'discovery' ? `<button class="btn" data-op="challenge" data-id="${i.id}">challenge</button>
-      <button class="btn" data-op="mark_unverified" data-id="${i.id}">mark unverified</button>` : ''}
-      <button class="btn" data-op="remove" data-id="${i.id}">remove</button></div></div>`).join('');
+      <button class="btn" data-op="mark_unverified" data-id="${i.id}">mark unverified</button>
+      ${i.status === 'challenged' ? `<button class="btn" data-op="resolve_challenge" data-id="${i.id}">resolve challenge</button>` : ''}
+      ${i.status === 'unverified' ? `<button class="btn" data-op="reverify" data-id="${i.id}">re-verify</button>` : ''}` : ''}
+      <button class="btn" data-op="remove" data-id="${i.id}">remove</button></div></div>`;
+  }).join('');
   $('#m-items').querySelectorAll('button').forEach((b) => b.onclick = async () => {
-    const reason = prompt(`Reason for ${b.dataset.op} ${b.dataset.id}?`); if (reason === null) return;
-    await api(`/api/agents/${a}/memory/${b.dataset.id}/${b.dataset.op}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }) });
+    const reason = prompt(`Reason for ${b.dataset.op} ${b.dataset.id}?`);
+    if (reason === null) return;
+    try {
+      const r = await api(`/api/agents/${a}/memory/${b.dataset.id}/${b.dataset.op}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }) });
+      if (r && r.error) alert(`Researcher action failed: ${r.error}`);
+    } catch (err) {
+      // Backend rejections (unknown item bad status, ...) must be visible, not silent.
+      alert(`Researcher action failed: ${err && err.message ? err.message : err}`);
+    }
     loadMemory();
   });
-  $('#m-audit').innerHTML = memData.audit.map((x) => `<div class="row small">${new Date(x.ts * 1000).toLocaleString()} · ${esc(x.actor)} · <b>${esc(x.op)}</b> ${esc(x.item_id)} ${esc(x.reason || '')}</div>`).join('') || '<span class="muted">no researcher interventions</span>';
+  $('#m-audit').innerHTML = memData.audit.map((x) => `<div class="row small">${new Date(x.ts * 1000).toLocaleString()} · ${esc(x.actor)} · <b>${esc(x.op)}</b> ${esc(x.item_id)} ${esc(x.reason || '')}</div>`).join('') || '<span class="muted">no researcher interventions recorded in this agent\'s audit trail</span>';
   renderFile();
 }
 $('#m-agent').onchange = loadMemory;
@@ -420,7 +473,7 @@ async function loadAnalytics() {
     <th>experiments ok/bad</th><th>claims ok/rejected</th><th>handbook</th><th>goals</th><th>pretend</th><th>repeat+vary</th><th>own sake</th><th>end</th></tr>
     ${tl.map((t) => `<tr><td>${t.id}</td><td>${esc(t.agent_id)}</td><td>${t.session_number}</td><td>${t.action_count}</td><td>${t.failed_actions ?? '–'}</td><td>${fmt(t.sim_time, 0)}</td>
     <td>${t.experiments_ok ?? '–'}/${t.experiments_bad ?? '–'}</td><td>${t.claims_verified ?? '–'}/${t.claims_rejected ?? '–'}</td>
-    <td>${t.discoveries ? Object.entries(t.discoveries).map(([k, v]) => v ? `${v} ${k}` : '').filter(Boolean).join(', ') : '–'}</td>
+    <td><span title="frozen snapshot taken when each session closed; open the Memory tab for current statuses">${t.discoveries ? Object.entries(t.discoveries).map(([k, v]) => v ? `${v} ${k}` : '').filter(Boolean).join(', ') : '–'}</span></td>
     <td>${t.behaviour?.self_directed_goals ?? '–'}</td><td>${t.behaviour?.pretend_play ?? '–'}</td><td>${t.behaviour?.repetition_with_variation ?? '–'}</td><td>${t.behaviour?.activity_for_its_own_sake ?? '–'}</td><td>${t.end_reason ?? ''}</td></tr>`).join('')}</table>`;
 }
 $('#a-agent').onchange = loadAnalytics;
@@ -435,7 +488,7 @@ async function loadCompare() {
     <td>${r.discoveries.hypothesis}</td><td>${r.discoveries.disproven}</td><td>${r.experiments_verified}/${r.experiments}</td><td>${r.memory_quality ?? '–'}</td>
     <td>${r.mistakes}</td><td>${r.programs}</td><td>${r.claims_verified}/${r.claims}</td><td>${r.behaviour.self_directed_goals}</td><td>${r.behaviour.pretend_play}</td>
     <td>${r.behaviour.repetition_with_variation}</td><td>${r.behaviour.activity_for_its_own_sake}</td><td>${r.benchmark_completion_rate ?? '–'}</td></tr>`).join('')}</table>
-    <div class="small muted">memory quality = share of recorded experiments whose claims agree with the engine's measurements.</div>`;
+    <div class="small muted">memory quality = share of recorded experiments whose cited evidence passed the engine's integrity check (a check that confirms the actions were real and the numbers traced — not that the claim itself is true).</div>`;
   $('#c-disc').innerHTML = rows.map((r) => `<div class="row"><b>${esc(r.agent_id)}</b>${r.discovery_statements.map((d) => `<div class="small">
     <span class="pill ${d.status}">${d.status}</span> ${esc(d.statement)}</div>`).join('') || ' <span class="muted">nothing yet</span>'}</div>`).join('');
 }

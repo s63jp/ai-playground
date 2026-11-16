@@ -289,9 +289,12 @@ class TestSessionLifecycle:
         briefing = "----- handbook.md -----\nD-001 the spire is 6m tall"
         opening = exploration_opening("agent_001", 3, briefing, 60.0, None)
         assert "reference only" in opening
-        assert "not to write a report" in opening
-        # The actionable instruction is the LAST thing the model reads, after the memory block.
-        assert opening.index("saved memory") < opening.index("end_session")
+        # Free-will contract (Nov 2026): the opening gives no assigned objective
+        # and no productivity mandate — what to do is entirely the agent's choice.
+        assert "no assigned objective" in opening
+        assert "your job" not in opening.lower()
+        # The situation note is the LAST thing the model reads, after the memory block.
+        assert opening.index("end of saved memory") < opening.index("end_session")
 
     def test_happy_end_session_records_continuation_request(self, make_env):
         env = make_env()

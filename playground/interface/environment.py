@@ -252,9 +252,9 @@ class Environment:
                 result["repeat_of_action"] = first
                 result["repeat_notice"] = (
                     f"This is the same observation as action {first}, and the world has not changed since "
-                    f"(repeated {self._repeat_obs_streak}x). Observing again will keep returning this. To "
-                    f"learn something new, act on it: move somewhere, pick up or move an object, run an "
-                    f"experiment, or record what you have found and decide what to investigate next.")
+                    f"(repeated {self._repeat_obs_streak}x). Observing again without doing anything will "
+                    f"keep returning this. What you do next is your choice: any tool that acts on the world "
+                    f"or records memory will change what a later observation returns.")
             else:
                 self._obs_seen[sig] = idx
                 self._repeat_obs_streak = 0
@@ -518,16 +518,23 @@ class Environment:
     def _t_record_experiment(self, a: dict, turn) -> dict:
         refs = sorted({int(r) for r in a["action_refs"]})
         cited = {r: self.db.action(self.sid, r) for r in refs}
-        fields = {k: a.get(k) for k in ("question", "hypothesis", "action_description", "expected_result",
-                                        "actual_result", "measurements", "supported", "needs_followup",
-                                        "conclusion")}
+        fields = {k: a.get(k) for k in ("question", "hypothesis", "action_description", "conditions",
+                                        "expected_result", "actual_result", "measurements", "supported",
+                                        "needs_followup", "conclusion")}
         fields["action_refs"] = refs
+        did = (a.get("discovery_id") or "").strip() or None
+        if did is not None:
+            probe = self.memory.get_discovery(did)
+            if probe is None:
+                raise ToolError("unknown_discovery",
+                                f"There is no handbook entry '{did}' to associate with this experiment.")
+            fields["discovery_id"] = probe["id"]
         ver = verify_experiment(fields, cited)
         limits = check_claim_limits(fields.get("measurements") or {}, {"max_height": 60.0, "max_speed": 60.0})
         if limits:
             ver["issues"].extend(limits)
             ver.update({"verified": False, "verdict": "implausible", "level": None})
-        e = self.memory.add_experiment(self.session_number, self.world.time, fields, ver)
+        e = self.memory.add_experiment(self.session_number, self.world.time, fields, ver, session_id=self.sid)
         self.db.add_record(self.agent_id, "experiment", e, session_id=self.sid, key=e["id"],
                            action_idx=self._cur_idx, t=self.world.time)
         if ver["verdict"] in ("contradicted", "implausible", "invalid_references"):
@@ -541,7 +548,11 @@ class Environment:
                 "evidence_check": {"verdict": ver["verdict"], "counts_as_evidence": ver["verified"],
                                    "matched_measurements": ver["matches"],
                                    "contradicted_measurements": ver["contradictions"],
-                                   "not_found_in_cited_actions": ver["unmatched"], "issues": ver["issues"]}}
+                                   "not_found_in_cited_actions": ver["unmatched"], "issues": ver["issues"]},
+                "outcome": e.get("outcome"),
+                "note": "outcome separates the mechanical evidence check from your scientific claim: a passed "
+                        "check records that your cited actions really produced the numbers, not that the "
+                        "hypothesis is true; discovery status still depends on what the evidence shows."}
 
     def _discovery_result(self, d: dict, requested: str | None) -> dict:
         self.db.add_record(self.agent_id, "discovery",
@@ -558,12 +569,14 @@ class Environment:
         if not a["statement"].strip():
             raise ToolError("invalid_argument", "The statement is empty.")
         d = self.memory.add_discovery(self.session_number, a["statement"], a["status"],
-                                      [str(x) for x in a.get("experiment_ids") or []], a.get("category"))
+                                      [str(x) for x in a.get("experiment_ids") or []], a.get("category"),
+                                      session_id=self.sid)
         return self._discovery_result(d, a["status"])
 
     def _t_update_discovery(self, a: dict, turn) -> dict:
         d = self.memory.update_discovery(self.session_number, a["discovery_id"], a.get("status"),
-                                         [str(x) for x in a.get("add_experiment_ids") or []], a.get("note"))
+                                         [str(x) for x in a.get("add_experiment_ids") or []], a.get("note"),
+                                         session_id=self.sid)
         return self._discovery_result(d, a.get("status"))
 
     def _t_record_mistake(self, a: dict, turn) -> dict:
@@ -578,10 +591,13 @@ class Environment:
         if not a["title"].strip():
             raise ToolError("invalid_argument", "The goal needs a title.")
         g = self.memory.add_goal(self.session_number, self.world.time, a["title"], a.get("description"),
-                                 kind=a.get("kind"), next_step=a.get("next_step"))
+                                 kind=a.get("kind"), next_step=a.get("next_step"),
+                                 origin="agent", reason=a.get("reason"), session_id=self.sid)
         self.db.add_record(self.agent_id, "goal", {"id": g["id"], "title": g["title"], "status": "active",
                                                    "description": g["description"], "kind": g["kind"],
-                                                   "next_step": g["next_step"], "event": "set"},
+                                                   "next_step": g["next_step"], "origin": g["origin"],
+                                                   "reason": (g["history"][0] or {}).get("reason"),
+                                                   "event": "set"},
                            session_id=self.sid, key=g["id"], action_idx=self._cur_idx, t=self.world.time)
         self.note("goal_set", id=g["id"], title=g["title"], kind=g["kind"])
         return {"goal_id": g["id"], "status": "active", "kind": g["kind"], "saved": True}

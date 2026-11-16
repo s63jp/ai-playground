@@ -179,9 +179,12 @@ TOOLS: list[dict] = [
           "record is checked against what those actions actually measured.",
           {"question": {**STR, "description": "What you wanted to find out."},
            "hypothesis": STR, "action_description": {**STR, "description": "What you did."},
+           "conditions": {**STR, "description": "Experimental conditions: starting positions, held objects, "
+                            "settings that differed between trials."},
            "expected_result": STR, "actual_result": STR,
            "measurements": {"type": "object", "description": "Named numeric results, e.g. {\"max_height\": 3.1}."},
            "action_refs": {"type": "array", "items": INT},
+           "discovery_id": {**STR, "description": "Optional handbook entry (D-…) this experiment tests."},
            "supported": {**BOOL, "description": "Whether the result supports the hypothesis."},
            "needs_followup": BOOL, "conclusion": STR},
           ["question", "hypothesis", "actual_result", "action_refs", "supported"], program_ok=False),
@@ -204,6 +207,7 @@ TOOLS: list[dict] = [
           "it is: a question you want answered, a hypothesis you want to test, or a thing you want to "
           "build or do. 'next_step' is the very next action you intend to take towards it.",
           {"title": STR, "description": STR,
+           "reason": {**STR, "description": "Why you are setting this goal now (optional)."},
            "kind": {"type": "string", "enum": ["question", "hypothesis", "build", "explore", "objective"],
                     "description": "What sort of goal this is. Default: objective."},
            "next_step": {**STR, "description": "The next concrete action you plan to take towards it."}},

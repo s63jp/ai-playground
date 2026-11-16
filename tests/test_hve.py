@@ -428,11 +428,17 @@ class TestMemoryAdministration:
         m = env.memory
         m.challenge(did, "suspicious")
         assert m.get_discovery(did)["flags"]["challenged"]
+        assert m.get_discovery(did)["status"] == "challenged"
         m.mark_unverified(did, "re-test")
-        assert m.get_discovery(did)["status"] == "hypothesis"
+        assert m.get_discovery(did)["status"] == "unverified"
         assert "Marked unverified" in (m.dir / "handbook.md").read_text(encoding="utf-8")
         m.remove_item(did, "ablation")
-        assert m.get_discovery(did) is None
+        # Removed discoveries are tombstoned, not silently discarded: the record
+        # stays in discoveries.json and the audit trail retains the action.
+        tomb = m.get_discovery(did)
+        assert tomb is not None and tomb["flags"]["removed"]
+        assert tomb["flags"]["removal_reason"] == "ablation"
+        assert tomb["history"][-1]["to"] == "removed"
         ops = [r["op"] for r in env.db.q("SELECT op FROM memory_audit ORDER BY id")]
         assert ops == ["challenge", "mark_unverified", "remove"]
         with pytest.raises(Exception):
@@ -523,11 +529,14 @@ class TestSessions:
             yield ("call", "end_session", {})
         run_session(cfg, db, "a1", PolicyAdapter(policy))
         s = seen["system"]
-        # Default is the researcher's free-agency prompt, verbatim (PERSONALITY_FREE_AGENCY_V2).
+        # Default is the strictly non-directive free-agency personality (v3): it
+        # states agency and the honesty rules, without steering any activity.
         assert s.startswith("You are an autonomous AI agent inhabiting a simulated physical world.")
-        assert "You have no assigned mission." in s and "You decide what happens next." in s
+        assert "You have no assigned mission, and no objective is waiting for you." in s
+        assert "You decide what happens next." in s
         assert "Never claim to have accomplished something without evidence from the environment." in s
         import re as _re
+        assert not _re.search(r"You may:", s)  # no activity menu
         for leak in ("ring", "the ring", "jump-throw", "take-off", "momentum", "generate", "velocity"):
             pat = _re.compile(rf"\b{_re.escape(leak)}\b", _re.I)        # whole words: "exploring" is fine
             assert not pat.search(s) and not pat.search(seen["opening"]), leak

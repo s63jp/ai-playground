@@ -20,12 +20,25 @@ import time
 from pathlib import Path
 from typing import Any
 
-STATUSES = ("confirmed", "probable", "hypothesis", "disproven")
+from ..integrity.evidence import evidence_outcome
+
+AGENT_STATUSES = ("hypothesis", "probable", "confirmed", "disproven")
+# Evidence statuses an agent may request and the verification system may grant.
+# "unverified" and "challenged" are authoritative researcher overlays: only a
+# researcher action may set or clear them, and agent evidence can never clear
+# one by itself (the original claim and its full history stay intact either
+# way; fresh evidence is recorded as evidence_status until someone authorised
+# resolves the overlay).
+STATUSES = AGENT_STATUSES + ("unverified", "challenged")
+RESEARCHER_OVERLAYS = ("unverified", "challenged")
+GOAL_ORIGINS = ("agent", "assigned", "derived_from_discovery", "carried_forward")
 STATUS_TITLES = {
     "confirmed": "Verified discoveries (at least two independently checked supporting experiments)",
     "probable": "Probable explanations (some checked evidence; repeat before relying on them)",
     "hypothesis": "Untested hypotheses (no checked evidence yet; do not treat these as facts)",
     "disproven": "Disproven theories (tested and contradicted by a checked experiment)",
+    "unverified": "Marked unverified by the researcher (earlier evidence no longer counts; fresh work is recorded but not reinstated until the researcher re-verifies)",
+    "challenged": "Challenged by the researcher (kept for scrutiny; evidence is recorded but nothing becomes confirmed until the researcher resolves the challenge)",
 }
 GOAL_OPEN = ("active", "paused")
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_\-]{0,47}$")
@@ -210,7 +223,8 @@ class MemoryStore:
         out = [f"# Handbook: {a}\n", gen,
                "_Status is granted by an evidence check against the physics log, not by the author._\n"]
         for st in STATUSES:
-            items = [d for d in self.discoveries["items"] if d["status"] == st]
+            items = [d for d in self.discoveries["items"]
+                     if d["status"] == st and not d.get("flags", {}).get("removed")]
             out.append(f"\n## {STATUS_TITLES[st]}\n")
             if not items:
                 out.append("_None._\n")
@@ -223,8 +237,16 @@ class MemoryStore:
                                " Re-test before relying on it.\n")
                 if d.get("flags", {}).get("marked_unverified"):
                     out.append("  - Marked unverified by the researcher: earlier evidence no longer counts.\n")
+                if d.get("evidence_status") and d["status"] in RESEARCHER_OVERLAYS:
+                    out.append(f"  - Fresh evidence currently supports '{d.get('evidence_status')}' "
+                               f"({d.get('evidence_status_reason') or 'no detail'}), but the authoritative status "
+                               "stays as shown until the researcher resolves it.\n")
                 for n in d.get("notes", []):
                     out.append(f"  - note (session {n['session']}): {n['text']}\n")
+        skipped = sum(1 for d in self.discoveries["items"] if d.get("flags", {}).get("removed"))
+        if skipped:
+            out.append(f"\n_{skipped} removed by the researcher (tombstoned; history kept in discoveries.json and "
+                       "the audit trail)_\n")
         out.append("\n## Working notes (the agent's own, unverified)\n")
         if not self.state["notes"]:
             out.append("_None._\n")
@@ -258,7 +280,15 @@ class MemoryStore:
             out.append("_None._\n")
         for g in open_goals:
             label = f"[{g['status']}]" + (f" [{g['kind']}]" if g.get("kind") and g["kind"] != "objective" else "")
-            out.append(f"- **{g['id']}** {label} {g['title']} (set in session {g['origin_session']})\n")
+            origin = g.get("origin") or "agent"
+            origin_label = {"agent": "you", "assigned": "an external task", "derived_from_discovery": "a discovery",
+                            "carried_forward": "an earlier session"}.get(origin, origin)
+            out.append(f"- **{g['id']}** {label} {g['title']} (set in session {g['origin_session']}, "
+                       f"by {origin_label})\n")
+            for h in g["history"]:
+                if h.get("reason"):
+                    out.append(f"  - why (session {h['session']}): {h['reason']}\n")
+                    break
             if g.get("description"):
                 out.append(f"  - {g['description']}\n")
             if g.get("next_step"):
@@ -325,8 +355,13 @@ class MemoryStore:
             lines = []
             for e in exps:
                 v = e.get("verification", {})
+                oc = e.get("outcome") or {}
+                check = oc.get("evidence_check") or v.get("verdict", "n/a")
+                sci = oc.get("scientific") or ("the agent calls it supported" if e.get("supported") is True else
+                                               "the agent says it does not support" if e.get("supported") is False
+                                               else "n/a")
                 lines.append(f"- {e['id']} (session {e['session']}): {e.get('hypothesis') or e.get('question')} -> "
-                             f"{e.get('actual_result')} [evidence check: {v.get('verdict', 'n/a')}]")
+                             f"{e.get('actual_result')} [evidence check: {check}; scientific conclusion: {sci}]")
             block = "----- experiments.json (most recent) -----\n" + "\n".join(lines)
             if fits(block):
                 optional.append(block)
@@ -349,8 +384,11 @@ class MemoryStore:
         return "\n\n".join(core + optional)
 
     # ------------------------------------------------------------ agent-side writes
-    def add_diary(self, session: int, t: float, text: str) -> dict:
-        e = {"id": self._next("Y"), "session": session, "t": round(t, 2), "text": text.strip()}
+    def add_diary(self, session: int, t: float, text: str, author: str = "agent") -> dict:
+        # Diary entries are immutable history; 'author' records who wrote the line
+        # ("agent" for tool calls, "auto" for session-runner auto-captures).
+        e = {"id": self._next("Y"), "session": session, "t": round(t, 2), "text": text.strip(),
+             "author": author if author in ("agent", "auto") else "agent"}
         self.state["diary"].append(e)
         self.save()
         return e
@@ -361,11 +399,19 @@ class MemoryStore:
         self.save()
         return n
 
-    def add_experiment(self, session: int, t: float, fields: dict, verification: dict) -> dict:
+    def add_experiment(self, session: int, t: float, fields: dict, verification: dict,
+                       session_id: int | None = None) -> dict:
         n = self.experiments["next_id"]
         self.experiments["next_id"] = n + 1
         e = {"id": f"E-{n:03d}", "session": session, "t": round(t, 2), **fields, "verification": verification,
+             # evidence_outcome separates the mechanical evidence check from any
+             # scientific conclusion: passing the check never implies the claim
+             # itself is true; inconclusive stays inconclusive.
+             "outcome": evidence_outcome(verification, fields.get("supported")),
+             "agent_id": self.agent_id, "created_at": round(time.time(), 3),
              "author": self._prov(session)}
+        if session_id is not None:
+            e["session_id"] = session_id
         self.experiments["items"].append(e)
         self.save()
         return e
@@ -376,10 +422,19 @@ class MemoryStore:
     def get_discovery(self, did: str) -> dict | None:
         return next((d for d in self.discoveries["items"] if d["id"] == did), None)
 
-    def _resolve_experiments(self, ids: list[str]) -> list[dict]:
+    def _resolve_experiments(self, ids: list[str], strict_removed: bool = True) -> list[dict]:
         out, missing = [], []
         for i in ids:
             e = self.get_experiment(str(i))
+            if e is not None and e.get("flags", {}).get("removed"):
+                # Researcher-removed evidence no longer counts; citing it fresh is an error.
+                if strict_removed:
+                    raise MemoryError_("experiment_removed",
+                                       f"Experiment {e['id']} was removed by the researcher and can no longer "
+                                       "be cited as evidence.",
+                                       known=[x["id"] for x in self.experiments["items"]
+                                              if not x.get("flags", {}).get("removed")][-20:])
+                continue
             (out if e else missing).append(e or i)
         if missing:
             raise MemoryError_("unknown_experiment", f"Unknown experiment id(s): {', '.join(map(str, missing))}.",
@@ -387,9 +442,11 @@ class MemoryStore:
         return out
 
     def add_discovery(self, session: int, statement: str, requested: str, experiment_ids: list[str],
-                      category: str | None = None) -> dict:
-        if requested not in STATUSES:
-            raise MemoryError_("invalid_status", f"status must be one of: {', '.join(STATUSES)}.")
+                      category: str | None = None, session_id: int | None = None) -> dict:
+        if requested not in AGENT_STATUSES:
+            raise MemoryError_("invalid_status",
+                               f"status must be one of: {', '.join(AGENT_STATUSES)}. "
+                               "'unverified' and 'challenged' are researcher states, not choices an agent makes.")
         exps = self._resolve_experiments(experiment_ids or [])
         granted, reason = evaluate_status(requested, exps, self.mcfg)
         n = self.discoveries["next_id"]
@@ -397,21 +454,27 @@ class MemoryStore:
         d = {"id": f"D-{n:03d}", "statement": statement.strip(), "category": category, "status": granted,
              "requested_status": requested, "status_reason": reason, "evidence": [e["id"] for e in exps],
              "created_session": session, "updated_session": session, "flags": {}, "notes": [],
+             "agent_id": self.agent_id, "created_at": round(time.time(), 3),
              "author": self._prov(session),
              "history": [{"session": session, "from": None, "to": granted, "requested": requested,
                           "reason": reason, "by": "agent"}]}
+        if session_id is not None:
+            d["session_id"] = session_id
         self.discoveries["items"].append(d)
         self.save()
         return d
 
     def update_discovery(self, session: int, did: str, requested: str | None = None,
-                         add_experiment_ids: list[str] | None = None, note: str | None = None) -> dict:
+                         add_experiment_ids: list[str] | None = None, note: str | None = None,
+                         session_id: int | None = None) -> dict:
         d = self.get_discovery(did)
         if d is None:
             raise MemoryError_("unknown_discovery", f"There is no discovery '{did}'.",
                                known=[x["id"] for x in self.discoveries["items"]])
-        if requested is not None and requested not in STATUSES:
-            raise MemoryError_("invalid_status", f"status must be one of: {', '.join(STATUSES)}.")
+        if requested is not None and requested not in AGENT_STATUSES:
+            raise MemoryError_("invalid_status",
+                               f"status must be one of: {', '.join(AGENT_STATUSES)}. "
+                               "'unverified' and 'challenged' are set or cleared only by the researcher.")
         new = self._resolve_experiments(add_experiment_ids or [])
         for e in new:
             if e["id"] not in d["evidence"]:
@@ -422,16 +485,33 @@ class MemoryStore:
         if d.get("flags", {}).get("marked_unverified"):
             # Evidence recorded before the researcher's reset no longer counts.
             cut = d["flags"].get("unverified_at_experiment", 0)
-            exps = [e for e in exps if int(e["id"].split("-")[1]) > cut]
+            exps = [e for e in exps if int(e["id"].split("-")[1]) > cut
+                    and not e.get("flags", {}).get("removed")]
         req = requested or d.get("requested_status") or d["status"]
-        granted, reason = evaluate_status(req, exps, self.mcfg)
-        if granted != d["status"] or requested:
-            d["history"].append({"session": session, "from": d["status"], "to": granted, "requested": req,
-                                 "reason": reason, "by": "agent"})
-        d.update({"status": granted, "requested_status": req, "status_reason": reason, "updated_session": session})
-        if granted in ("confirmed", "disproven") and new:
-            d["flags"].pop("challenged", None)
-            d["flags"].pop("challenge_reason", None)
+        req_basis = req if req in AGENT_STATUSES else "hypothesis"
+        granted, reason = evaluate_status(req_basis, exps, self.mcfg)
+        if session_id is not None:
+            d["session_id"] = session_id
+        d["updated_session"] = session
+        if d["status"] in RESEARCHER_OVERLAYS:
+            # The authoritative state is the researcher's. Record what the fresh
+            # evidence would support, but never change the status and never clear
+            # the researcher's overlay from the agent side.
+            d["evidence_status"], d["evidence_status_reason"] = granted, reason
+            if requested is not None:
+                d["requested_status"] = requested
+            d["history"].append({"session": session, "from": d["status"], "to": d["status"],
+                                 "requested": requested, "requested_status": granted,
+                                 "reason": f"fresh evidence checked; would support '{granted}', status remains "
+                                           f"'{d['status']}' until a researcher resolves it",
+                                 "by": "agent"})
+        else:
+            if granted != d["status"] or requested:
+                d["history"].append({"session": session, "from": d["status"], "to": granted, "requested": req,
+                                     "reason": reason, "by": "agent"})
+            d.update({"status": granted, "requested_status": req, "status_reason": reason})
+            d.pop("evidence_status", None)
+            d.pop("evidence_status_reason", None)
         self.save()
         return d
 
@@ -445,12 +525,20 @@ class MemoryStore:
         return m
 
     def add_goal(self, session: int, t: float, title: str, description: str | None,
-                 kind: str | None = None, next_step: str | None = None) -> dict:
+                 kind: str | None = None, next_step: str | None = None,
+                 origin: str = "agent", reason: str | None = None,
+                 session_id: int | None = None) -> dict:
+        if origin not in GOAL_ORIGINS:
+            raise MemoryError_("invalid_origin", f"origin must be one of: {', '.join(GOAL_ORIGINS)}.")
         g = {"id": self._next("G"), "title": title.strip(), "description": (description or "").strip() or None,
              "kind": kind or "objective", "next_step": (next_step or "").strip() or None,
-             "origin_session": session, "status": "active", "verification": None,
-             "author": self._prov(session),
-             "history": [{"session": session, "t": round(t, 2), "status": "active", "note": "goal set"}]}
+             "origin": origin, "origin_session": session, "status": "active", "verification": None,
+             "agent_id": self.agent_id, "author": self._prov(session),
+             "history": [{"session": session, "t": round(t, 2), "status": "active",
+                          "origin": origin, "reason": (reason or "").strip() or None,
+                          "note": f"goal set by {origin}"}]}
+        if session_id is not None:
+            g["session_id"] = session_id
         self.state["goals"].append(g)
         self.save()
         return g
@@ -518,10 +606,16 @@ class MemoryStore:
         out = []
         for d in self.discoveries["items"]:
             out.append({"id": d["id"], "kind": "discovery", "status": d["status"], "text": d["statement"],
-                        "session": d["created_session"], "evidence": d["evidence"], "flags": d.get("flags", {})})
+                        "session": d["created_session"], "evidence": d["evidence"], "flags": d.get("flags", {}),
+                        "agent_id": self.agent_id,
+                        "evidence_status": d.get("evidence_status"),
+                        "history_len": len(d.get("history", []))})
         for e in self.experiments["items"]:
             out.append({"id": e["id"], "kind": "experiment", "status": e["verification"].get("verdict"),
-                        "text": e.get("hypothesis") or e.get("question"), "session": e["session"]})
+                        "text": e.get("hypothesis") or e.get("question"), "session": e["session"],
+                        "agent_id": self.agent_id, "evidence_check": e.get("verification")
+                        and e["verification"].get("verified"),
+                        "outcome": e.get("outcome")})
         for key, kind, field in (("mistakes", "mistake", "what"), ("goals", "goal", "title"),
                                  ("diary", "diary", "text"), ("notes", "note", "text")):
             for x in self.state[key]:
@@ -537,8 +631,17 @@ class MemoryStore:
                         "session": None, "version": n.get("version")})
         return out
 
-    def remove_item(self, item_id: str, reason: str | None = None, actor: str = "researcher") -> dict:
-        """Remove one memory item of any kind. Returns the removed item."""
+    def remove_item(self, item_id: str, reason: str | None = None, actor: str = "researcher",
+                    tombstone: bool = True) -> dict:
+        """Remove one memory item of any kind.
+
+        Discoveries and experiments are tombstoned (kept in their JSON files with
+        a `flags.removed` marker) so the scientific record is never silently
+        discarded — the handbook simply stops listing them. Other kinds (notes,
+        diary, mistakes, goals, programs, networks) are deleted outright; the
+        audit trail still records the deletion. Synthetic copies (benchmarks and
+        ablations) pass tombstone=False for a genuine hard remove.
+        """
         prefix = item_id.split("-", 1)[0]
         removed = None
         if prefix == "P":
@@ -566,18 +669,38 @@ class MemoryStore:
             if coll is not None:
                 for i, x in enumerate(coll):
                     if x["id"] == item_id:
-                        removed = coll.pop(i)
+                        if prefix in ("D", "E") and tombstone:
+                            # Keep the record: an append-only tombstone preserves
+                            # the original claim, its evidence links and history.
+                            x["flags"] = {**x.get("flags", {}), "removed": True, "removed_by": actor,
+                                          "removed_at": round(time.time(), 3)}
+                            if reason:
+                                x["flags"]["removal_reason"] = reason
+                            if prefix == "D":
+                                x["history"].append({"session": None, "from": x["status"], "to": "removed",
+                                                     "requested": None,
+                                                     "reason": f"removed by {actor}: {reason or 'no reason given'}",
+                                                     "by": actor})
+                            removed = {**x, "_tombstoned": True}
+                        else:
+                            removed = coll.pop(i)
                         break
         if removed is None:
             raise MemoryError_("unknown_item", f"There is no memory item '{item_id}' for {self.agent_id}.")
         if prefix == "E":
-            # A discovery cannot keep a status that rested on evidence which no longer exists.
+            # A discovery cannot keep a status that rested on evidence which no
+            # longer counts. The tombstoned id stays in the evidence list (the
+            # citation is history); evaluation simply ignores removed evidence.
             for d in self.discoveries["items"]:
+                if d.get("flags", {}).get("removed"):
+                    continue
                 if item_id in d["evidence"]:
-                    d["evidence"].remove(item_id)
-                    exps = [e for e in (self.get_experiment(i) for i in d["evidence"]) if e]
+                    exps = [e for e in (self.get_experiment(i) for i in d["evidence"])
+                            if e and not e.get("flags", {}).get("removed")]
                     granted, why = evaluate_status(d.get("requested_status") or d["status"], exps, self.mcfg)
-                    if granted != d["status"]:
+                    if d["status"] in RESEARCHER_OVERLAYS:
+                        d["evidence_status"], d["evidence_status_reason"] = granted, why
+                    elif granted != d["status"]:
                         d["history"].append({"session": None, "from": d["status"], "to": granted,
                                              "reason": f"evidence {item_id} removed; {why}", "by": actor})
                         d["status"], d["status_reason"] = granted, why
@@ -591,12 +714,60 @@ class MemoryStore:
             raise MemoryError_("unknown_discovery", f"There is no discovery '{did}'.")
         before = json.loads(json.dumps(d))
         last = max([int(e["id"].split("-")[1]) for e in self.experiments["items"]] or [0])
-        d["history"].append({"session": None, "from": d["status"], "to": "hypothesis",
-                             "reason": reason or "marked unverified by researcher", "by": actor})
-        d["status"] = "hypothesis"
-        d["status_reason"] = "marked unverified by the researcher; needs fresh evidence"
-        d["flags"].update({"marked_unverified": True, "unverified_at_experiment": last})
+        now = round(time.time(), 3)
+        h = d["history"]
+        h.append({"session": None, "from": before["status"], "to": "unverified",
+                  "requested": None, "reason": reason or "marked unverified by researcher",
+                  "by": actor, "at": now, "kind": "mark_unverified"})
+        d["status"] = "unverified"
+        d["status_reason"] = "marked unverified by the researcher; earlier evidence no longer counts, " \
+                             "fresh work is recorded but the discovery is not reinstated until re-verification"
+        d["flags"].update({"marked_unverified": True, "unverified_at_experiment": last, "unverified_by": actor,
+                           "unverified_at": now})
         self._audit(actor, "mark_unverified", did, before, d, reason)
+        self.save()
+        return d
+
+    def reverify(self, did: str, reason: str | None = None, actor: str = "researcher",
+                 status: str | None = None) -> dict:
+        """Researcher action: end an 'unverified' overlay.
+
+        By default the resulting authoritative status is what the fresh evidence
+        (recorded after the unverified cutoff) currently supports; the researcher
+        may also pin an explicit status. Every unverified-then-reverified cycle
+        stays in the discovery's history.
+        """
+        d = self.get_discovery(did)
+        if d is None:
+            raise MemoryError_("unknown_discovery", f"There is no discovery '{did}'.")
+        if d["status"] != "unverified":
+            raise MemoryError_("not_unverified",
+                               f"Discovery '{did}' is '{d['status']}', not 'unverified'; nothing to re-verify.")
+        if status is not None and status not in AGENT_STATUSES:
+            raise MemoryError_("invalid_status",
+                               f"status must be one of: {', '.join(AGENT_STATUSES)}.")
+        before = json.loads(json.dumps(d))
+        exps = [self.get_experiment(i) for i in d["evidence"]]
+        if d.get("flags", {}).get("marked_unverified"):
+            cut = d["flags"].get("unverified_at_experiment", 0)
+            exps = [e for e in exps if e and int(e["id"].split("-")[1]) > cut
+                    and not e.get("flags", {}).get("removed")]
+        granted, why = evaluate_status(d.get("requested_status") or "hypothesis", exps, self.mcfg)
+        target = status or granted
+        now = round(time.time(), 3)
+        d["flags"] = {k: v for k, v in d.get("flags", {}).items()
+                      if k not in ("marked_unverified", "unverified_at_experiment", "unverified_by",
+                                   "unverified_at", "unverified_prev_status")}
+        d["history"].append({"session": None, "from": "unverified", "to": target,
+                             "requested": None, "reason": reason or
+                             f"re-verified by researcher; fresh evidence supports '{granted}'",
+                             "by": actor, "at": now, "kind": "reverify",
+                             "evidence_status": granted})
+        d["status"] = target
+        d["status_reason"] = f"re-verified by researcher ({reason or 'no reason given'}); {why}"
+        d.pop("evidence_status", None)
+        d.pop("evidence_status_reason", None)
+        self._audit(actor, "reverify", did, before, d, reason)
         self.save()
         return d
 
@@ -605,8 +776,92 @@ class MemoryStore:
         if d is None:
             raise MemoryError_("unknown_discovery", f"There is no discovery '{did}'.")
         before = json.loads(json.dumps(d))
-        d["flags"].update({"challenged": True, "challenge_reason": reason})
+        now = round(time.time(), 3)
+        f = d["flags"]
+        if d["status"] != "challenged":
+            f["challenge_prev_status"] = before["status"]
+        f.update({"challenged": True, "challenge_reason": reason, "challenge_by": actor, "challenge_at": now})
+        f["challenge_count"] = int(f.get("challenge_count", 0)) + 1
+        d["history"].append({"session": None, "from": before["status"], "to": "challenged",
+                             "requested": None, "reason": reason, "by": actor, "at": now,
+                             "kind": "challenge"})
+        d["status"] = "challenged"
+        d["status_reason"] = f"challenged by {actor}: {reason}"
         self._audit(actor, "challenge", did, before, d, reason)
+        self.save()
+        return d
+
+    def resolve_challenge(self, did: str, reason: str | None = None, actor: str = "researcher",
+                          status: str | None = None) -> dict:
+        """Researcher action: end a 'challenged' overlay.
+
+        Default outcome: the discovery returns to the status the (fresh) evidence
+        currently supports — which may be weaker than the challenged claim. The
+        researcher may pin any explicit evidence status. The challenge record,
+        its reason and the outcome stay in the history for good.
+        """
+        d = self.get_discovery(did)
+        if d is None:
+            raise MemoryError_("unknown_discovery", f"There is no discovery '{did}'.")
+        if d["status"] != "challenged":
+            raise MemoryError_("not_challenged", f"Discovery '{did}' is '{d['status']}', not 'challenged'.")
+        if status is not None and status not in AGENT_STATUSES:
+            raise MemoryError_("invalid_status", f"status must be one of: {', '.join(AGENT_STATUSES)}.")
+        before = json.loads(json.dumps(d))
+        exps = [e for e in (self.get_experiment(i) for i in d["evidence"])
+                if e and not e.get("flags", {}).get("removed")]
+        granted, why = evaluate_status(d.get("requested_status") or
+                                       (d.get("flags", {}).get("challenge_prev_status") or "hypothesis"),
+                                       exps, self.mcfg)
+        target = status or (d.get("evidence_status") if d.get("evidence_status") in AGENT_STATUSES else granted)
+        now = round(time.time(), 3)
+        f = d["flags"]
+        d["flags"] = {k: v for k, v in f.items()
+                      if k not in ("challenged", "challenge_reason", "challenge_by", "challenge_at",
+                                   "challenge_prev_status", "challenge_count")}
+        d["history"].append({"session": None, "from": "challenged", "to": target,
+                             "requested": None, "reason": reason or
+                             f"challenge resolved by researcher; evidence supports '{granted}'",
+                             "by": actor, "at": now, "kind": "resolve_challenge",
+                             "evidence_status": granted})
+        d["status"] = target
+        d["status_reason"] = f"challenge resolved by researcher ({reason or 'no reason given'}); {why}"
+        d.pop("evidence_status", None)
+        d.pop("evidence_status_reason", None)
+        self._audit(actor, "resolve_challenge", did, before, d, reason)
+        self.save()
+        return d
+
+    def set_status(self, did: str, status: str, reason: str | None = None,
+                   actor: str = "researcher") -> dict:
+        """Researcher action: explicitly set the authoritative status of a discovery.
+
+        The only way a status becomes 'confirmed'/'disproven' outside the evidence
+        rule or 'unverified'/'challenged' outside the overlay methods — and it is
+        always recorded in the discovery's history and the audit trail.
+        """
+        d = self.get_discovery(did)
+        if d is None:
+            raise MemoryError_("unknown_discovery", f"There is no discovery '{did}'.")
+        if status not in STATUSES:
+            raise MemoryError_("invalid_status", f"status must be one of: {', '.join(STATUSES)}.")
+        before = json.loads(json.dumps(d))
+        now = round(time.time(), 3)
+        f = d["flags"]
+        if status in AGENT_STATUSES:
+            d["flags"] = {k: v for k, v in f.items()
+                          if k not in ("challenged", "challenge_reason", "challenge_by", "challenge_at",
+                                       "challenge_prev_status", "challenge_count", "marked_unverified",
+                                       "unverified_at_experiment", "unverified_by", "unverified_at",
+                                       "unverified_prev_status")}
+            d.pop("evidence_status", None)
+            d.pop("evidence_status_reason", None)
+        d["history"].append({"session": None, "from": before["status"], "to": status,
+                             "requested": None, "reason": reason or "status set by researcher",
+                             "by": actor, "at": now, "kind": "set_status"})
+        d["status"] = status
+        d["status_reason"] = f"status set by researcher ({reason or 'no reason given'})"
+        self._audit(actor, "set_status", did, before, d, reason)
         self.save()
         return d
 
@@ -619,22 +874,30 @@ class MemoryStore:
         shutil.copytree(self.dir, dest_dir, ignore=shutil.ignore_patterns("session_history", "audit.log", "*.tmp"))
         other = MemoryStore(dest_root, self.agent_id, self.cfg, db=db)
         for item in remove_ids or []:
-            other.remove_item(item, reason=reason, actor="benchmark")
+            # Ablation copies are synthetic workspaces: genuinely hard-remove
+            # (no tombstones) so benchmark agents never see the removed items.
+            other.remove_item(item, reason=reason, actor="benchmark", tombstone=False)
         other.save()
         return other
 
     def stats(self) -> dict:
         by = {s: 0 for s in STATUSES}
-        for d in self.discoveries["items"]:
+        items = self.discoveries["items"]
+        for d in items:
+            if d.get("flags", {}).get("removed"):
+                continue
             by[d["status"]] += 1
         exps = self.experiments["items"]
+        removed = sum(1 for x in items if x.get("flags", {}).get("removed")) + \
+            sum(1 for e in exps if e.get("flags", {}).get("removed"))
         return {"agent_id": self.agent_id, "sessions_completed": self.state["sessions_completed"],
-                "discoveries": by, "discoveries_total": len(self.discoveries["items"]),
+                "discoveries": by, "discoveries_total": len(items),
                 "experiments": len(exps),
                 "experiments_verified": sum(1 for e in exps if e["verification"].get("verified")),
                 "experiments_contradicted": sum(1 for e in exps if e["verification"].get("verdict") == "contradicted"),
                 "mistakes": len(self.state["mistakes"]), "diary_entries": len(self.state["diary"]),
                 "goals_open": sum(1 for g in self.state["goals"] if g["status"] in GOAL_OPEN),
                 "goals_total": len(self.state["goals"]), "programs": len(self.list_programs()),
-                "challenged": sum(1 for d in self.discoveries["items"] if d.get("flags", {}).get("challenged")),
+                "challenged": by["challenged"],
+                "records_removed": removed,
                 "networks": len(self.list_networks())}

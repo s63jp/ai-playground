@@ -182,16 +182,28 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
     def memory_op(agent_id: str, item_id: str, op: str, body: dict = Body(default={})):
         m = mem(agent_id)
         reason = body.get("reason")
+        status = body.get("status")
+        actor = body.get("actor") or "researcher"
         try:
             if op == "remove":
-                return {"removed": m.remove_item(item_id, reason)}
+                return {"removed": m.remove_item(item_id, reason, actor=actor)}
             if op == "challenge":
-                return {"discovery": m.challenge(item_id, reason or "challenged from the dashboard")}
+                return {"discovery": m.challenge(item_id, reason or "challenged from the dashboard", actor=actor)}
             if op == "mark_unverified":
-                return {"discovery": m.mark_unverified(item_id, reason)}
+                return {"discovery": m.mark_unverified(item_id, reason, actor=actor)}
+            if op == "resolve_challenge":
+                return {"discovery": m.resolve_challenge(item_id, reason, actor=actor,
+                                                        status=status)}
+            if op == "reverify":
+                return {"discovery": m.reverify(item_id, reason, actor=actor, status=status)}
+            if op == "set_status":
+                if not status:
+                    raise HTTPException(400, "set_status needs a 'status' in the body")
+                return {"discovery": m.set_status(item_id, status, reason, actor=actor)}
         except MemoryError_ as e:
             raise HTTPException(400, e.message) from None
-        raise HTTPException(400, "op must be remove, challenge or mark_unverified")
+        raise HTTPException(400, "op must be remove, challenge, mark_unverified, resolve_challenge, "
+                                 "reverify or set_status")
 
     @app.get("/api/sessions")
     def sessions(agent_id: str | None = None, mode: str | None = None, limit: int = 200):

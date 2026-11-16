@@ -87,7 +87,12 @@ the browser with three.js, from recorded frames.
   act as steps, the terrace needs a step to reach, objects can be caught in flight. One deliberately hidden
   **world rule** is described only in `docs/RESEARCHER_NOTES.md`.
 * **The agent cannot certify itself.** Memory statuses are granted by an evidence check against the engine's
-  action log, and achievements are verified from the world state and the physics event stream.
+  action log, never by the author. Agents may request `hypothesis / probable / confirmed / disproven`;
+  `unverified` and `challenged` are researcher-only overlays set or cleared through researcher actions
+  (challenge / mark unverified / resolve challenge / re-verify / set status), each recorded in the
+  discovery's history and the immutable audit trail. Removed discoveries and experiments are tombstoned
+  (kept on disk, excluded from the handbook), never silently deleted. Achievements are verified from the
+  world state and the physics event stream.
 
 ---
 

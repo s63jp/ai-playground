@@ -39,7 +39,7 @@ def test_dashboard_and_api(cfg, db):
 def test_external_agent_drives_a_session_over_http(cfg, db):
     c = TestClient(create_app(cfg, db))
     r = c.post("/api/agent/sessions", json={"agent_id": "hermes_001", "max_steps": 20}).json()
-    assert "You have no assigned mission." in r["system_prompt"] and len(r["tools"]) > 30
+    assert "You have no assigned mission, and no objective is waiting for you." in r["system_prompt"] and len(r["tools"]) > 30
     sid = r["session_id"]
     assert c.post(f"/api/agent/sessions/{sid}/call", json={"tool": "observe_world"}).json()["success"]
     bad = c.post(f"/api/agent/sessions/{sid}/call", json={"tool": "fly", "args": {}}).json()
