@@ -148,7 +148,8 @@ cd <repo root>          # wherever the repo is cloned
 .venv/Scripts/python.exe scripts/xpu_stress.py --procs 4 --epochs 60
 
 # Stress test under LM Studio load
-# First: lms load "unslothqen 4b" -y
+# First: load a small model into LM Studio:  lms load <model> -y
+# (or set LMS_LOAD_MODEL so scripts/xpu_stress.py loads one itself)
 .venv/Scripts/python.exe scripts/xpu_stress.py --under-load --procs 3 --epochs 30
 
 # Run training tests

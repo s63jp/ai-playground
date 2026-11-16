@@ -108,9 +108,15 @@ def start_lmstudio_load(seconds: int = 120):
     # First ensure model is loaded
     status = check_lmstudio_status()
     if not status.get("loaded"):
-        print("Loading LM Studio model...")
-        subprocess.run([lms, "load", "unslothqen 4b", "-y"], capture_output=True, timeout=120)
-        time.sleep(2)
+        model = os.environ.get("LMS_LOAD_MODEL", "").strip()
+        if model:
+            print(f"Loading LM Studio model {model!r}...")
+            subprocess.run([lms, "load", model, "-y"], capture_output=True, timeout=120)
+            time.sleep(2)
+        else:
+            print("LM Studio has no model loaded and LMS_LOAD_MODEL is unset; run "
+                  "`lms load <model> -y` yourself or set LMS_LOAD_MODEL before a "
+                  "true under-load stress.")
     
     # Start the load generator
     print(f"Starting GPU load generator for {seconds}s...")

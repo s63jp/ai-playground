@@ -1,11 +1,14 @@
 """Keep LM Studio generating on the GPU for N seconds (to test XPU training under GPU contention)."""
+import os
 import sys
 import time
 
 import httpx
 
 secs = float(sys.argv[1]) if len(sys.argv) > 1 else 180
-model = sys.argv[2] if len(sys.argv) > 2 else "unslothqen 4b"
+model = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("LMS_LOAD_MODEL", "").strip()
+if not model:
+    sys.exit("usage: gpu_load_lmstudio.py <seconds> <model>   (or set LMS_LOAD_MODEL)")
 end = time.time() + secs
 n = toks = 0
 while time.time() < end:
