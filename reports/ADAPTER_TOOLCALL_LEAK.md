@@ -52,22 +52,19 @@ no-tool turn:
   no tool calls, nothing in `messages`) — consistent with the same model spending its
   reply budget inside reasoning/template output.
 
-## Suggested fixes (in priority order)
+## Suggested fixes (status, 2026-11-16)
 
-1. **Fallback parser in `OpenAICompatAdapter`**: after a no-tool turn whose text contains
-   `<function=…>` / `<parameter=…>` (or `<tool_call>` variants), parse the embedded calls
-   like any other tool call. An attempted `end_session` then behaves as one. Log the
-   recovery as `adapter.tool_call_recovered` so provenance is honest.
-2. **Sanitise what is stored**: strip template tokens (`<|start|>`, `<|end|>`,
-   `<|im_start|>` …) from anything written to `messages` / "say" so the dashboard shows
-   the agent's words, the template's. Keep the raw content in the DB row for the audit
-   trail (raw is evidence; the dashboard view renders it clean).
-3. **Measure it**: count template-leak turns per session (a gateway/monitor counter)
-   so cross-model comparisons include "how often model X tried to call tools as text".
-4. **Idle accounting**: today a no-tool turn counts against 3 even when the model
-   immediately afterwards acts again (rule is cumulative-per-streak but resets only on
-   a tool-calling turn in `session/runner.py:284`). With a fallback parser in place this
-   matters less, but consider treating a turn with *any* tool-attempt markup as acted.
+1. ~~**Fallback parser**~~ — **DONE** (commit `0e1e2c8`): fully-formed `<function=…>` and
+   fenced-JSON blocks are recovered as schema-validated calls when the API returns none;
+   `reasoning_content` fallback for empty completions; 14 HVE tests.
+2. ~~**Sanitise what is stored**~~ — **DONE, display-side** (commit `34df7f1`): the dashboard's
+   "Agent's words" strips template tokens and markup before rendering (with a pointer to
+   Recent actions when nothing clean remains); the database keeps raw content verbatim.
+   Display-only by choice: raw is evidence, the DB is the authority.
+3. **Measure it** — open: count template-leak turns per session as a gateway/monitor counter
+   so cross-model comparisons include "how often model X tries to call tools as text".
+4. ~~**Idle accounting**~~ — **MOOT for the leaking models**: with recovery in place, a turn
+   with embedded tool markup becomes an acted turn and no longer counts as idle.
 
 ## Not a defect in the harness
 
