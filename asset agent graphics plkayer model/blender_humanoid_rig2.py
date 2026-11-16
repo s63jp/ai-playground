@@ -193,6 +193,12 @@ print("Head created...")
 
 # === SAVE AS BLEND ===
 import os
-os.makedirs("<home>/Projects/<other-project>/assets", exist_ok=True)
-bpy.ops.wm.save_as_mainfile(filepath="<home>/Projects/<other-project>/assets/humanoid_rigged.blend")
-print(f"Saved rigged humanoid to: <home>/Projects/<other-project>/assets/humanoid_rigged.blend")
+try:                    # Blender sets __file__ for `blender --python` runs
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:       # pasted into the text editor: fall back to cwd
+    _HERE = os.getcwd()
+OUT_DIR = os.environ.get("ASSET_OUT_DIR") or os.path.normpath(os.path.join(_HERE, "..", "assets"))
+os.makedirs(OUT_DIR, exist_ok=True)
+blend_path = os.path.join(OUT_DIR, "humanoid_rigged.blend")
+bpy.ops.wm.save_as_mainfile(filepath=blend_path)
+print(f"Saved rigged humanoid to: {blend_path}")

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Debug script to test export queries step by step."""
-import sqlite3
 import json
+import sqlite3
+from pathlib import Path
 
-db_path = "<repo>/experiments/playground.db"
+db_path = Path(__file__).resolve().parents[1] / "experiments" / "playground.db"
 adapter = "lmstudio_claude_distilled9b"
 mode_filter = "exploration"
 

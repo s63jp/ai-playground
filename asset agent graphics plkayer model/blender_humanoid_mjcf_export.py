@@ -113,11 +113,20 @@ def export_to_mujoco():
     
     # Export to XML file
     xml_str = ET.tostring(tree, encoding='unicode')
-    with open("<home>/Projects/<other-project>/assets/humanoid_mujoco.xml", "w") as f:
+
+    import os
+    try:                # Blender sets __file__ for `blender --python` runs
+        _HERE = os.path.dirname(os.path.abspath(__file__))
+    except NameError:   # pasted into the text editor: fall back to cwd
+        _HERE = os.getcwd()
+    out_dir = os.environ.get("ASSET_OUT_DIR") or os.path.normpath(os.path.join(_HERE, "..", "assets"))
+    os.makedirs(out_dir, exist_ok=True)
+    xml_path = os.path.join(out_dir, "humanoid_mujoco.xml")
+    with open(xml_path, "w") as f:
         f.write(xml_str)
     
     print(f"✓ Generated MuJoCo XML export to:")
-    print(f"  <home>/Projects/<other-project>/assets/humanoid_mujoco.xml")
+    print(f"  {xml_path}")
 
 if __name__ == "__main__":
     export_to_mujoco()

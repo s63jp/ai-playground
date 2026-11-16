@@ -3,7 +3,7 @@
 All commands are run from the project folder with the project's Python:
 
 ```bash
-cd <repo>
+cd /path/to/ai-playground      # wherever you cloned the repo
 PY=.venv/Scripts/python.exe
 ```
 

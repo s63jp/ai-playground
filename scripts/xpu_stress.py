@@ -82,8 +82,9 @@ except BaseException as e:
 
 def check_lmstudio_status():
     """Check if LM Studio has a model loaded and its status."""
+    import os
     import shutil
-    lms = shutil.which("lms") or "<home>/.lmstudio/bin/lms"
+    lms = shutil.which("lms") or os.path.expanduser("~/.lmstudio/bin/lms")
     try:
         p = subprocess.run([lms, "ps"], capture_output=True, text=True, timeout=10)
         output = p.stdout.strip()
@@ -100,8 +101,9 @@ def check_lmstudio_status():
 
 def start_lmstudio_load(seconds: int = 120):
     """Start the GPU load generator in background."""
+    import os
     import shutil
-    lms = shutil.which("lms") or "<home>/.lmstudio/bin/lms"
+    lms = shutil.which("lms") or os.path.expanduser("~/.lmstudio/bin/lms")
     
     # First ensure model is loaded
     status = check_lmstudio_status()

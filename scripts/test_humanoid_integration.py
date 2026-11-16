@@ -4,10 +4,11 @@ Run: .venv/Scripts/python.exe scripts/test_humanoid_integration.py
 The same checks live in the pytest suite as tests/test_humanoid_asset.py.
 """
 import sys
+from pathlib import Path
 
 import mujoco
 
-XML_PATH = "<repo>/assets/humanoid_mujoco.xml"
+XML_PATH = str(Path(__file__).resolve().parents[1] / "assets" / "humanoid_mujoco.xml")
 
 
 def run() -> bool:

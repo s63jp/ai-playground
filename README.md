@@ -139,7 +139,8 @@ ai-playground/
 Requirements: Python 3.11+ (3.13 used here). No GPU required.
 
 ```bash
-cd <repo>
+git clone https://github.com/s63jp/ai-playground.git
+cd ai-playground                      # or wherever you cloned it
 uv venv --python 3.13 .venv          # or: python -m venv .venv
 uv pip install --python .venv/Scripts/python.exe -r requirements.txt
 .venv/Scripts/python.exe -m playground init      # creates experiments/playground.db + 13 agent folders

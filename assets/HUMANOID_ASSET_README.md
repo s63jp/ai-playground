@@ -18,8 +18,8 @@ The exported XML as first shipped **did not load** — mujoco rejected it on the
 3. **Layout lying along -Y**: limbs extended sideways (legs/arms along -Y and a `-0.5` root offset).
    The figure now stands along +Z: legs below the torso, arms hanging at the sides, head above, feet on
    a ground plane — a 1.6 m standing figure matching the island's agent body (0.44 × 1.6 m box).
-4. **Wrong absolute path**: `meshdir="<home>/Projects/<other-project>/assets/meshes/"`
-   pointed at a different project. Removed (the asset uses no mesh files) — the XML is portable.
+4. **Wrong absolute path**: `meshdir` pointed into an unrelated local project. Removed (the asset
+   uses no mesh files) — the XML is portable.
 5. **Joint damping** (1.5) added so a neutral ctrl holds a stable rest pose instead of flailing.
 
 

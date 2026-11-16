@@ -5,7 +5,7 @@ a different interface: implement what is written, and list the problem under "co
 final report. The parent integrates and resolves.
 
 Baseline commit: `e5d4872`. Python: `.venv/Scripts/python.exe` (3.13). Project root:
-`<repo>`. Shell is git-bash on Windows.
+the local clone of this repository. Shell is git-bash on Windows.
 
 ## 1. File ownership
 

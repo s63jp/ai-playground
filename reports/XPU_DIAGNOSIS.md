@@ -138,7 +138,7 @@ This is expected: the network is too small to benefit from GPU parallelism. The 
 
 ```bash
 # Environment check
-cd <repo>
+cd <repo root>          # wherever the repo is cloned
 .venv/Scripts/python.exe -c "import torch; print(torch.__version__, torch.xpu.is_available(), torch.xpu.get_device_name(0))"
 
 # Full diagnostics (no load)
