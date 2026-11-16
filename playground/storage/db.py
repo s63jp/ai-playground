@@ -176,6 +176,20 @@ class Database:
     def session(self, sid: int) -> dict | None:
         return self.one("SELECT * FROM sessions WHERE id=?", (sid,))
 
+    def reconcile_orphans(self) -> list[int]:
+        """Sessions still marked 'running' with no live process behind them (e.g. a killed
+        run, or a server that died mid-external-session). Called once at process start,
+        BEFORE this process starts any session of its own: no runner can be legitimately
+        'running' across a process boundary, so every pre-existing 'running' row is an
+        orphan. Marking them 'interrupted' is the honest record — 'interrupted' is exactly
+        the resumable state (`--resume`), while 'running' forever would lie about history.
+        Returns the reconciled session ids."""
+        orphans = [r["id"] for r in self.q("SELECT id FROM sessions WHERE status='running'")]
+        for sid in orphans:
+            self.update_session(sid, status="interrupted", end_reason="interrupted",
+                                ended_at=time.time())
+        return orphans
+
     def next_session_number(self, agent_id: str, mode: str = "exploration") -> int:
         r = self.one("SELECT COALESCE(MAX(session_number),0) AS m FROM sessions WHERE agent_id=? AND mode=?",
                      (agent_id, mode))

@@ -33,6 +33,17 @@ def _cfg(args):
     return load_config(args.config, over or None)
 
 
+def _db_reconcile(cfg):
+    """Open the database and reconcile orphaned 'running' sessions left by dead processes.
+    Must run BEFORE this process starts any session of its own."""
+    db = _db(cfg)
+    fixed = db.reconcile_orphans()
+    if fixed:
+        print(f"reconciled {len(fixed)} orphaned session(s) left 'running' by a dead process: "
+              f"{', '.join('#' + str(s) for s in fixed)} (marked interrupted; resumable with --resume)")
+    return db
+
+
 def _adapter_factory(cfg, args):
     from .agents import make_adapter
     return lambda agent_id: make_adapter(cfg, args.adapter or "scripted", model=args.model)
@@ -61,6 +72,7 @@ def cmd_serve(args):
 
     from .dashboard import create_app
     cfg = _cfg(args)
+    db = _db_reconcile(cfg)  # orphaned external sessions from a dead server become 'interrupted'
     host = args.host or cfg["server"]["host"]
     port = args.port or cfg["server"]["port"]
     print(f"Dashboard: http://{host}:{port}/   API docs: http://{host}:{port}/docs")
@@ -71,7 +83,7 @@ def cmd_explore(args):
     from .session import run_session
     from .session.runner import resolve_resume_adapter
     cfg = _cfg(args)
-    db = _db(cfg)
+    db = _db_reconcile(cfg)
     # On --resume, default to the adapter/model the session was started with (not the CLI default,
     # which is 'scripted' — the reference policy, not an AI). Audit 2026-11-13.
     adapter_name, model = args.adapter, args.model
@@ -94,7 +106,7 @@ def cmd_explore(args):
 def cmd_run_agents(args):
     from .session import run_agents
     cfg = _cfg(args)
-    db = _db(cfg)
+    db = _db_reconcile(cfg)
     ids = args.agents.split(",") if args.agents else agent_ids(cfg)
     print(f"Running {len(ids)} agents x {args.sessions} session(s), concurrency {args.concurrency}, "
           f"adapter {args.adapter or 'scripted'}")
@@ -187,7 +199,7 @@ def cmd_messages(args):
 def cmd_benchmark(args):
     from .session.benchmark import run_benchmark
     cfg = _cfg(args)
-    db = _db(cfg)
+    db = _db_reconcile(cfg)
     a = args.group_a.split(",")
     b = args.group_b.split(",") if args.group_b else None
     res = run_benchmark(cfg, db, _adapter_factory(cfg, args), a, b,
@@ -203,7 +215,7 @@ def cmd_benchmark(args):
 def cmd_ablate(args):
     from .session.benchmark import run_ablation
     cfg = _cfg(args)
-    db = _db(cfg)
+    db = _db_reconcile(cfg)
     res = run_ablation(cfg, db, _adapter_factory(cfg, args), args.agent, args.remove.split(","),
                        args.tasks.split(",") if args.tasks else None, args.label, args.repeats,
                        progress=lambda r: print(f"  {r['condition']:12s} {r['task_id']:22s} completed={r['completed']!s:5}"

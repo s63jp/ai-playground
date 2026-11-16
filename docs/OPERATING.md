@@ -122,6 +122,11 @@ The world is restored from the last checkpoint (every 10 actions) and the remain
 actions are replayed deterministically. The resume report checks the rebuilt state hash against the one
 logged at the time (`state_matches_log`). The model is told the session was resumed.
 
+**Orphans.** Every session-starting command (`explore`, `run-agents`, `benchmark`, `ablate`, `serve`)
+reconciles the database at start: sessions still marked `running` from a dead process are marked
+`interrupted` (the resumable state) before anything new begins, so a killed run can never leave a
+permanent "running" ghost in the record.
+
 ---
 
 ## 4. Run 13 agents
