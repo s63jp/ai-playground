@@ -7,6 +7,17 @@ const $ = (s) => document.querySelector(s);
 // carry agent- or API-supplied text goes through esc() before being placed in HTML. Values interpolated
 // without esc() are server-side enums, numbers, or ids validated server-side (agent ids: [a-z0-9_-]).
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Display sanitiser for "Agent's words" (reports/ADAPTER_TOOLCALL_LEAK.md): strip the chat-
+// template tokens and embedded tool-call markup the model emits as text. Raw content stays in
+// the database verbatim; the dashboard shows the agent's words, the template's.
+const TEMPLATETOKEN = /<\|[^<>|]{1,24}\|>/g;
+const FUNCBLOCK = /<function=[^<>]{0,80}>(?:.|\n)*?<\/function>|<function=[^<>]{0,80}>(?:.|\n)*/g;
+const PARAMBLOCK = /<parameter=[^<>]{0,60}>(?:.|\n)*?(?:<\/parameter>|$)/g;
+const sanitizeWords = (s) => {
+  let t = String(s ?? '').replace(TEMPLATETOKEN, '').replace(FUNCBLOCK, '').replace(PARAMBLOCK, '').trim();
+  if (!t) t = '[tool-call markup — see Recent actions]';
+  return t;
+};
 const api = async (p, opt) => { const r = await fetch(p, opt); if (!r.ok) throw new Error(`${p}: ${r.status} ${await r.text()}`); return r.json(); };
 const fmt = (v, d = 2) => (typeof v === 'number' ? v.toFixed(d) : v ?? '–');
 
@@ -298,7 +309,7 @@ async function refresh(first = false) {
   if (evs.events.length) { lastSeen.e = evs.events[evs.events.length - 1].n; drawFlights(evs.events); }
   for (const m of msgs.messages) {
     lastSeen.m = m.id;
-    if (m.role === 'assistant') $('#w-msgs').insertAdjacentHTML('afterbegin', `<div class="row say">“${esc(m.content)}”</div>`);
+    if (m.role === 'assistant') $('#w-msgs').insertAdjacentHTML('afterbegin', `<div class="row say">“${esc(sanitizeWords(m.content))}”</div>`);
   }
   const st = detail.final_state;
   const s = detail.summary;
