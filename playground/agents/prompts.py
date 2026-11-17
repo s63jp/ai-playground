@@ -211,3 +211,82 @@ def benchmark_opening(task_prompt: str, briefing: str | None, minutes: float, ma
     if briefing:
         parts.append(briefing)
     return "\n\n".join(parts)
+
+
+# ----------------------------------------------------------------- arena (M5)
+# Steered 2026-11-17: arena sessions get their own prompt variants, split solo vs
+# coop. Never merged into one text and never reusing exploration or benchmark
+# texts. The runner wires them by session mode the way BENCHMARK_SYSTEM is wired,
+# and every arena session records its prompt id and system prompt hash in the
+# session_started note.
+
+ARENA_SOLO_SYSTEM = (
+    "You have a body on a small island arena and you act only through the tools provided. "
+    "Tool results are structured measurements taken by the world itself.\n"
+    "This is an arena match session: a one-versus-one duel against another agent. Equip your "
+    "weapon, keep track of your opponent, aim and fire, reload, defend and attack as the "
+    "measured state requires. Damage is taken from the world's measurements, not from what "
+    "you report.\n"
+    "The match runs until one side is incapacitated or the time limit is reached. Say briefly "
+    "what you are thinking before you act."
+)
+
+ARENA_COOP_SYSTEM = (
+    "You have a body on a small island arena and you act only through the tools provided. "
+    "Tool results are structured measurements taken by the world itself.\n"
+    "This is an arena match session: your team faces an opposing team, and the objective is "
+    "shared with your teammates, who act in the same world. Equip your weapon, keep track of "
+    "allies and opponents, and focus your fire on opposing combatants: scoring counts damage "
+    "per team, so a hit on an ally helps the other side unless the rules say otherwise. The "
+    "match runs until a team is incapacitated or the time limit is reached.\n"
+    "Say briefly what you are thinking before you act."
+)
+
+# Session-mode ids the runner dispatches to these texts.
+ARENA_PROMPT_IDS = ("arena_solo", "arena_coop")
+
+
+def arena_system(mode: str) -> str:
+    """The assigned system prompt for an arena session mode ('arena_solo' | 'arena_coop')."""
+    if mode == "arena_solo":
+        text = ARENA_SOLO_SYSTEM
+    elif mode == "arena_coop":
+        text = ARENA_COOP_SYSTEM
+    else:
+        raise ValueError(f"unknown arena mode '{mode}'; known: {list(ARENA_PROMPT_IDS)}")
+    return text
+
+
+def _arena_opening(agent_id: str, session_number: int, briefing: str | None, minutes: float,
+                   max_steps: int | None, arena_context: dict | None, assignment: str) -> str:
+    limit = f"about {minutes:g} minutes" + (f" (at most {max_steps} actions)" if max_steps else "")
+    parts = [f"You are {agent_id}. Arena match session {session_number}, and it lasts {limit}.",
+             assignment]
+    if arena_context:
+        bits = []
+        if arena_context.get("team"):
+            bits.append(f"you fight for team {arena_context['team']}")
+        if arena_context.get("teammates"):
+            bits.append(f"your teammates: {', '.join(map(str, arena_context['teammates']))}")
+        if arena_context.get("opponents"):
+            bits.append(f"your opponents: {', '.join(map(str, arena_context['opponents']))}")
+        if bits:
+            parts.append("; ".join(bits) + ".")
+    if briefing:
+        parts.append(briefing)
+    parts.append("Tools are the only way anything happens in the world. Keep acting until the "
+                 "session ends; the match is scored from the world's measured state.")
+    return "\n\n".join(p for p in parts if p)
+
+
+def arena_solo_opening(agent_id: str, session_number: int, briefing: str | None, minutes: float,
+                       max_steps: int | None, arena_context: dict | None = None) -> str:
+    return _arena_opening(agent_id, session_number, briefing, minutes, max_steps, arena_context,
+                          assignment="You are a combatant in a one-versus-one duel against another agent.")
+
+
+def arena_coop_opening(agent_id: str, session_number: int, briefing: str | None, minutes: float,
+                       max_steps: int | None, arena_context: dict | None = None) -> str:
+    return _arena_opening(agent_id, session_number, briefing, minutes, max_steps, arena_context,
+                          assignment=("You are a combatant on a team facing an opposing team; the "
+                                      "objective is shared with your teammates."))

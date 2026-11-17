@@ -26,7 +26,8 @@ def ensure_agents(cfg: dict, db=None, ids: list[str] | None = None) -> list[str]
 
 def run_agents(cfg: dict, db, adapter_factory: Callable[[str], Adapter], ids: list[str] | None = None,
                sessions: int = 1, concurrency: int = 1, label: str | None = None,
-               progress: Callable[[dict], None] | None = None, max_continuations: int = 0) -> dict:
+               progress: Callable[[dict], None] | None = None, max_continuations: int = 0,
+               mode: str = "exploration") -> dict:
     """Run `sessions` exploration sessions for each agent. Returns per-agent summaries.
 
     If an agent ends a session with continue_next_session=true (it has unfinished experiments or open
@@ -43,7 +44,7 @@ def run_agents(cfg: dict, db, adapter_factory: Callable[[str], Adapter], ids: li
         remaining = sessions
         while remaining > 0:
             summary = run_session(copy.deepcopy(cfg), db, agent_id, adapter_factory(agent_id),
-                                  mode="exploration", label=label)
+                                  mode=mode, label=label)
             out.append(summary)
             if progress:
                 progress(summary)

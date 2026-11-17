@@ -222,6 +222,36 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
             p.append(mode)
         return {"sessions": db.q(sql + " ORDER BY id DESC LIMIT ?", [*p, limit])}
 
+    @app.get("/api/arena")
+    def arena_matches(limit: int = 50):
+        """Arena matches (M5): every recorded session whose mode is an arena mode, grouped
+        into match RUNS (sessions of the same label that started within 15 s of the run's
+        anchor) so each duel/coop event can be opened as one unit."""
+        rows = db.q("SELECT id, agent_id, mode, session_number, label, adapter, model, status, "
+                    "end_reason, started_at, ended_at, sim_time, action_count, wall_seconds "
+                    "FROM sessions WHERE mode LIKE 'arena%' ORDER BY id DESC LIMIT ?", [limit * 4])
+        runs: list = []
+        for r in rows:
+            anchor = (r["label"] or "arena", r["started_at"] or 0.0)
+            if runs and runs[-1]["_label"] == r["label"] \
+                    and (runs[-1]["_anchor"] - anchor[1]) <= 15.0:
+                runs[-1]["sessions"].append(r)
+            else:
+                runs.append({"_label": r["label"] or "arena", "_anchor": anchor[1],
+                             "label": r["label"] or "arena", "sessions": [r]})
+        matches = []
+        for run in runs[:limit]:
+            ss = sorted(run["sessions"], key=lambda s: s["id"])
+            matches.append({
+                "label": run["label"],
+                "started_at": min(s["started_at"] or 0.0 for s in ss),
+                "status": ("completed" if all(s["status"] == "completed" for s in ss)
+                           else "running" if any(s["status"] != "completed" for s in ss) else "unknown"),
+                "modes": sorted({s["mode"] for s in ss}),
+                "sessions": ss,
+            })
+        return {"matches": matches}
+
     @app.get("/api/sessions/{sid}")
     def session_detail(sid: int):
         sess(sid)

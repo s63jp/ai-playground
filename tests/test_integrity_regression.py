@@ -389,6 +389,19 @@ class TestFreeWillPrompts:
             for pat in STEER_PHRASES:
                 assert not re.search(pat, txt, re.I), (pat, txt[:160])
 
+    def test_arena_prompts_are_separate_assigned_work_texts(self):
+        """Steered 2026-11-17: arena solo and coop are separate prompt registry entries,
+        distinct from every other registry text; arena ids never collide with exploration ids."""
+        from playground.agents.prompts import (ARENA_COOP_SYSTEM, ARENA_SOLO_SYSTEM,
+                                               ARENA_PROMPT_IDS, EXPLORATION_SYSTEM)
+        arena = (ARENA_SOLO_SYSTEM, ARENA_COOP_SYSTEM)
+        all_texts = set(arena) | set(PERSONALITIES.values()) | {EXPLORATION_SYSTEM, BENCHMARK_SYSTEM}
+        assert len(all_texts) == len(arena) + len(PERSONALITIES) + 2
+        for pid in ARENA_PROMPT_IDS:
+            assert pid not in PERSONALITIES
+        for text in arena:
+            assert text not in EXPLORATION_SYSTEM
+
     def test_opening_states_reset_and_preserves_choice(self):
         op = exploration_opening("agent_a", 1, None, 30, 400)
         assert "reset" in op.lower()

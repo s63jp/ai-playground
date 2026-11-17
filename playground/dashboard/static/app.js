@@ -145,6 +145,33 @@ function ensureMesh(id) {
 // The physics agent stays the deterministic collision box — the rig is a faithful visual driven by the
 // same pose stream (position per frame; heading and gait derived from velocity, like the pose replay).
 const agentMesh = makeAgentRig();
+// M5 arena replay: simple standing rigs for every OTHER recorded combatant. The shared
+// world frames carry each agent's root position (frame.agents); the session's own agent
+// keeps the full makeAgentRig figure. Values are internal ids/numbers only (no HTML).
+const extraRigs = new Map();
+const EXTRA_RIG_COLORS = [0xff7755, 0x55cc77, 0xddaa44, 0xcc66dd, 0x55dddd];
+function ensureExtraRig(aid) {
+  let rig = extraRigs.get(aid);
+  if (rig) return rig;
+  const group = new THREE.Group();
+  const idx = [...aid].reduce((a, c) => a + c.charCodeAt(0), 0) % EXTRA_RIG_COLORS.length;
+  const color = EXTRA_RIG_COLORS[idx];
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.17, 0.55, 4, 10),
+                              new THREE.MeshStandardMaterial({ color, roughness: 0.8 }));
+  body.rotation.x = Math.PI / 2;   // build along +Z like every other mesh (the world group is z-up)
+  body.position.set(0, 0, 0.05);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 10),
+                              new THREE.MeshStandardMaterial({ color, roughness: 0.8 }));
+  head.position.set(0, 0, 0.55);
+  const legs = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.42, 0.2),
+                              new THREE.MeshStandardMaterial({ color: 0x3a4453, roughness: 0.85 }));
+  legs.position.set(0, 0, -0.4);
+  group.add(body, head, legs);
+  world.add(group);
+  rig = { group };
+  extraRigs.set(aid, rig);
+  return rig;
+}
 function makeAgentRig() {
   const H = spec.agent_body.height;                       // 1.6 m collision box height
   const skin = new THREE.MeshStandardMaterial({ color: 0xb3a69a, roughness: 0.9 });
@@ -244,7 +271,8 @@ window.addEventListener('resize', resize); resize();
 
 // ------------------------------------------------------------------ replay state
 // Frames are stored as deltas with periodic keyframes; we reconstruct full poses on load.
-let frames = [], poses = [], cur = 0, playing = false, sessionId = null, lastSeen = { a: 0, e: 0, m: 0 };
+let frames = [], poses = [], cur = 0, playing = false, sessionId = null, sessionAgent = null,
+    lastSeen = { a: 0, e: 0, m: 0 };
 let flights = [];
 
 function rebuild(from = 0) {
@@ -254,7 +282,7 @@ function rebuild(from = 0) {
     if (f.key) { state = { objects: {}, present: f.present }; }
     for (const [id, p] of Object.entries(f.objects)) state.objects[id] = p;
     if (f.present) for (const id of Object.keys(state.objects)) if (!f.present.includes(id)) delete state.objects[id];
-    poses[i] = { t: f.t, agent: f.agent, held: f.held, objects: { ...state.objects }, present: state.present };
+    poses[i] = { t: f.t, agent: f.agent, agents: f.agents || null, held: f.held, objects: { ...state.objects }, present: state.present };
   }
 }
 function show(i) {
@@ -272,6 +300,16 @@ function show(i) {
     m.quaternion.set(q[4], q[5], q[6], q[3]);   // MuJoCo w,x,y,z -> three x,y,z,w
   }
   agentMesh.position.set(...p.agent);
+  // M5 arena: every other combatant recorded by the shared world gets its own rig.
+  for (const [, rig] of extraRigs) rig.group.visible = false;
+  if (p.agents && sessionAgent) {
+    for (const [aid, xyz] of Object.entries(p.agents)) {
+      if (aid === sessionAgent) continue;
+      const rig = ensureExtraRig(aid);
+      rig.group.visible = true;
+      rig.group.position.set(xyz[0], xyz[1], xyz[2]);
+    }
+  }
   animateRig(p, poses[cur - 1] || null);
   $('#r-scrub').value = cur; $('#r-time').textContent = `t=${fmt(p.t, 1)}s  frame ${cur + 1}/${poses.length}`;
   trails.children.forEach((l) => { l.visible = l.userData.t0 <= p.t; });
@@ -304,10 +342,32 @@ function drawFlights(evs) {
 const agents = (await api('/api/agents')).agents.map((a) => a.agent_id);
 for (const sel of ['#w-agent', '#m-agent', '#a-agent']) for (const a of agents) $(sel).insertAdjacentHTML('beforeend', `<option>${esc(a)}</option>`);
 
+let arenaMatches = [];
+const modeName = (m) => ({ 'arena_solo': '1v1 duel', 'arena_coop': 'team match' }[m] || m);
+// All interpolated values below are esc()-wrapped per this file's XSS policy (see header).
+async function loadArenaMatches(retries = 3) {
+  try {
+    arenaMatches = (await api('/api/arena')).matches;
+    $('#w-arena').innerHTML = '<option value="">—</option>' + arenaMatches.map((m, i) =>
+      `<option value="${i}">${esc(m.label.replace(/^arena:/, ''))} · ${m.sessions.length} ${m.sessions.length === 1 ? 'combatant' : 'combatants'} · ${esc(m.status)}</option>`).join('');
+  } catch (e) {
+    // startup race with the page's other boot fetches: quietly retry, never block the tab
+    if (retries > 0) setTimeout(() => loadArenaMatches(retries - 1), 2000);
+  }
+}
+$('#w-arena').onchange = (e) => {
+  const m = arenaMatches[e.target.value];
+  if (!m) return;
+  $('#w-session').innerHTML = m.sessions.map((x) =>
+    `<option value="${+x.id}">#${+x.id} ${esc(x.agent_id)} · ${esc(modeName(x.mode))} (${esc(x.status)})</option>`).join('');
+  if (m.sessions.length) openSession(m.sessions[0].id);
+};
+loadArenaMatches();
+
 async function loadSessions() {
   const a = $('#w-agent').value;
   const s = (await api(`/api/sessions?agent_id=${a}`)).sessions;
-  $('#w-session').innerHTML = s.map((x) => `<option value="${+x.id}">#${+x.id} ${esc(x.mode)}${x.task_id ? ':' + esc(x.task_id) : ''} s${+x.session_number} (${esc(x.status)})</option>`).join('');
+  $('#w-session').innerHTML = s.map((x) => `<option value="${+x.id}">#${+x.id} ${esc(modeName(x.mode))}${x.task_id ? ':' + esc(x.task_id) : ''} s${+x.session_number} (${esc(x.status)})</option>`).join('');
   if (s.length) await openSession(s[0].id);
 }
 async function openSession(id) {
@@ -333,6 +393,7 @@ async function refresh(first = false) {
   ]);
   if (sid !== sessionId) return;
   const atEnd = cur >= poses.length - 1;
+  sessionAgent = detail.agent_id;
   if (fr.frames.length) { const from = frames.length; frames.push(...fr.frames); rebuild(from); $('#r-scrub').max = poses.length - 1; }
   for (const a of acts.actions) {
     lastSeen.a = a.idx;

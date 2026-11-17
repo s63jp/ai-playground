@@ -50,7 +50,7 @@ simulator run shown, not a function returning.
 | 15 | Catch moving objects | 1 | `catch()` measured interception |
 | 16 | Objects of different size/weight/properties | 1 | 12 blocks + rock (rolls) + mass-dependent behaviour (carry, throw recoil, tower drift) |
 
-### Combat & equipment (mission §1.3) — M4 landed for rows 17–24; arena rows 25–27 remain
+### Combat & equipment (mission §1.3) — M4 landed for rows 17–24; M5 landed rows 25–27
 
 | # | Claim | Class | Evidence / gap |
 |---|-------|-------|----------------|
@@ -62,9 +62,9 @@ simulator run shown, not a function returning.
 | 22 | Detect real impacts through MuJoCo contacts | 1 | M4: damage is read FROM MuJoCo contact events as the measured collision impulse (N·s); per-agent attribution names the exact struck body part from the contact geom pair (`_agent_parts` enrichment); the holder's own weapon pair is refused (solver-weld artifact, measured no-damage); `test_combat_damage.py` |
 | 23 | Calculate damage from physical interactions + equipment | 1 | M4: damage = measured impulse × item `damage_scale` × part multiplier (head/neck 1.5, torso 1.0, hip 0.9, limbs 0.6) × shield absorb; floor `damage_min_impulse` 0.8 N·s (walk-in contacts stay below by physics — measured), cap 95; measured constants recorded in BUGLOG §10; `test_combat_damage.py` |
 | 24 | Health, incapacitation, match termination | 1 | M4: per-agent health consumes the measured damage; incapacitation is PHYSICAL — real `put_down` + `incapacitate_rig` (gait None, that agent's PD entries deleted → gravity crumple, `set_gait` refuses them); `match_ended` emitted with the surviving winner when a team is eliminated (`_check_match`); `test_combat_match.py` 7 |
-| 25 | Agents make independent tactical decisions in combat | 4 | LLM loop + tools exist generally; no arena session mode exists to place an agent in one (steered design: arena solo + arena coop prompt variants, see M5) |
-| 26 | Duels and team-based encounters | 4 | `arena/` ArenaMatch/Scorer/modes with validated plans — but play() is injected-callable orchestration tested with fake worlds/sessions only; scorer maps proj_id→agent by its own admission |
-| 27 | Record and replay matches | 3 | per-session replay real (frames + three.js + checkpoints); match-format report JSON has `timeline: []` placeholder |
+| 25 | Agents make independent tactical decisions in combat | 2 | M5: arena session modes exist and run end-to-end — `run_session(mode='arena_solo'\|'arena_coop')` with dedicated prompt registry entries (`ARENA_SOLO_SYSTEM`/`ARENA_COOP_SYSTEM`, never reused from exploration/benchmark), prompt id + system-prompt hash recorded per session, `run_agents(mode=...)` passthrough; recorded matches drove real combatants through the real combat tools (equip/look_around/fire) with per-shot measured aiming; scripted combatants so far — no LLM-driven arena match recorded yet (that is the remaining honest gap) |
+| 26 | Duels and team-based encounters | 1 | M5: production factories (`arena/factories.py`, no stubs) build the REAL multi-agent combat world from the match cfg (`build_match_setup` → `PhysicsWorld` + `setup_agent_pose` + stand stance), translate the real combat events into the scorer with proven proj_id→(agent, team) attribution, and drive one recorded session per combatant on the match thread; `run_arena_match` wires plan+factories+scorer end to end with the runtime's measured KO arbitration; `playground arena` CLI (direct + subprocess verified); scored duel recorded 2026-11-17 (#120/#121: 8 shots → 8 measured torso hits, 8.9–9.6 damage each, per-agent stats); team-based: 2v2 worlds build, launch and record (coop modes + `agents_nearby` perception) — recorded coop *combat* runs and LLM combatants are the documented next work |
+| 27 | Record and replay matches | 1 | M5: `ArenaMatch` records the real match-event timeline (every translated event, elapsed-stamped); `export_match_report` writes it (+ end_reason/sessions) — the `timeline: []` placeholder is gone; the dashboard lists arena **runs** (per-run grouping), opens any combatant session through the ordinary replay player (frames + three.js + scrubber: the #120/#121 duel replays at 800 frames), with `/api/arena` serving the run view; friendly mode labels (`1v1 duel` / `team match`) in the UI |
 
 ### Intelligence & learning (mission §1.4)
 
@@ -87,7 +87,7 @@ simulator run shown, not a function returning.
 | 37 | Preserve individual agent identities and memories | 1 | 13-agent roster, per-agent memory dirs + sessions |
 | 38 | Record actions and physical events | 1 | action log + events, per-tool physics events |
 | 39 | SHA-256-chained logs | 1 | append-only chain + `verify-log` CLI + `db.verify_chain` |
-| 40 | Replay and measurable experiment results | 1 (sessions) / 3 (matches) | deterministic replay (bitwise determinism, checkpoints incl. mid-flight); match replay absent until 27 closes |
+| 40 | Replay and measurable experiment results | 1 | deterministic replay (bitwise determinism, checkpoints incl. mid-flight); match replay via the recorded event timeline + per-session frame streams (M5) |
 | 41 | Provider independence + structured tool interface | 1 | 65-tool catalogue in `interface/schema.py` (dynamically enumerated, no hardcoded counts in new code) |
 
 ## Independent verifiers / cross-checks used
@@ -249,3 +249,57 @@ verbs remain the movement options); the arena is still library-only —
 input contract is exactly the `cfg["combat"]` shape built by `world/spec.py`;
 no live arena/session run exists yet, so no "versus" capability claim is made
 until M5 lands it.
+
+## M5 — CLOSED (2026-11-17 late, evidence-backed)
+
+M5 (arena orchestration) closed rows 25–27: production factories + arena
+session modes + real scoring/replay, with the first recorded scored duel.
+Delivered, verified by live runs (not stubs — the first worker attempt produced
+a stub world and was rejected and rebuilt on the real engine):
+
+- `arena/factories.py` (new): `build_match_setup` translates a match cfg into
+  the real multi-agent combat world config (`cfg["combat"]`: equipment items
+  within reach, latent pellet pool); `production_world_factory` builds the REAL
+  `PhysicsWorld`, orients every combatant via `setup_agent_pose` and sets the
+  `stand` combat stance; `ArenaWorldAdapter` steps the engine and translates the
+  real events (`pellet_launched`/`agent_damaged`/`agent_incapacitated`/
+  `match_ended`) into the scorer's impact contract with real proj_id→(agent,
+  team) attribution (melee via the wielder of the striking item); the session
+  launcher records every combatant through `run_session(mode='arena_solo'\
+|'arena_coop')` on the SHARED world (`run_session(world=...)`), fans the
+  world's events/frames out to all participating sessions, and drives one
+  honest adapter turn per combatant between physics ticks (match-owned single
+  thread — sessions never step physics concurrently); `run_arena_match` wires
+  plan+factories+scorer end to end, augments the result with the runtime's
+  measured KO arbitration (`end_reason`), and finalizes each session record.
+- `playground/cli.py`: `playground arena match.json [--adapter --model --db
+  --out --root]` — verified by direct call AND a real subprocess.
+- `session/runner.py`: `world=` shared-world injection; `arena_solo`/
+  `arena_coop` prompt dispatch (registry entries in `agents/prompts.py`,
+  recorded prompt_id + system-prompt hash per session); `session/manager.py`
+  `run_agents(mode=...)`.
+- `arena/scoring.py`: proj_id→(shooter_agent, shooter_team) registry; per-agent
+  `hits_dealt`/`hits_taken` (the 'cannot map proj_id→agent' hack and its
+  apologia are gone); `arena/match.py`: REAL match-event timeline in
+  `play()`/`step()` and in `export_match_report` (the `timeline: []`
+  placeholder is gone), plus `end_reason`/`sessions` in the report.
+- Dashboard: `/api/arena` matches grouped per RUN (15 s window), arena selector
+  in the Watch tab, per-combatant rigs from the shared-world frames (friendly
+  `1v1 duel`/`team match` labels), retry on boot races.
+- `interface/physical.py`: `look_around` entries now carry measured `position`
+  (the honest aiming surface for combatants).
+
+**Measured duel (sessions #120/#121, recorded live 2026-11-17):** scripted
+combatants equip, `look_around` (opponent + held muzzle in one observation),
+solve LOS to the opposing torso centre, fire — **8 shots → 8 impacts (4 each
+way), 8.9–9.6 damage per hit, per-agent stats credited, both rigs upright the
+full 20 s** (final z 0.799; the 400→800-frame record replays in the dashboard).
+
+**Gate (M5 close):** see §11 gate evidence in `BUGLOG_2026-11-17.md`.
+
+**Still honest limits (M5, documented, not hidden):** combatants were scripted
+(PolicyAdapter) — no LLM-driven arena match recorded yet; team-vs-team coop
+runs recorded only with holding combatants (no live coop combat); the arena
+world cfg passthrough of match `arena` geometry is spawn/layout keys only;
+`look_around`'s new `position` field is additive and the bearing/distance
+fields remain for older consumers.

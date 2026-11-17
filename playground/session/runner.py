@@ -13,8 +13,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..agents.adapters import Adapter, AdapterError, ToolCall
-from ..agents.prompts import (BENCHMARK_SYSTEM, DEFAULT_PERSONALITY, REVIEW_BEFORE_STOP,
-                              benchmark_opening, continue_nudge, exploration_opening, exploration_system,
+from ..agents.prompts import (ARENA_PROMPT_IDS, BENCHMARK_SYSTEM, DEFAULT_PERSONALITY, REVIEW_BEFORE_STOP,
+                              arena_coop_opening, arena_solo_opening, arena_system, benchmark_opening,
+                              continue_nudge, exploration_opening, exploration_system,
                               loop_nudge, prompt_hash)
 from ..analysis.behaviour import store_classification
 from ..config import config_hash, resolve_path
@@ -189,6 +190,7 @@ def _summarise(env: Environment, db, sid: int, end_reason: str, adapter: Adapter
 def run_session(cfg: dict, db, agent_id: str, adapter: Adapter, mode: str = "exploration",
                 memory: MemoryStore | None = None, label: str | None = None,
                 scene: Callable[[PhysicsWorld], None] | None = None, task_prompt: str | None = None,
+                arena_context: dict | None = None, world: PhysicsWorld | None = None,
                 exclude_tools: list[str] | None = None, include_briefing: bool = True,
                 extra: dict | None = None, clock: Callable[[], float] | None = None,
                 resume_session_id: int | None = None, on_event: Callable[[str, dict], None] | None = None,
@@ -216,7 +218,7 @@ def run_session(cfg: dict, db, agent_id: str, adapter: Adapter, mode: str = "exp
         check_resume_adapter(row, adapter)
         sid, number = resume_session_id, row["session_number"]
         env = Environment(cfg, db, memory, agent_id, sid, number, mode=row["mode"], allowed_tools=tool_names,
-                          scene=scene, clock=clock, wall_used=float(row["wall_seconds"] or 0.0))
+                          scene=scene, clock=clock, wall_used=float(row["wall_seconds"] or 0.0), world=world)
         resumed = env.restore()
         db.update_session(sid, status="running")
     else:
@@ -231,7 +233,7 @@ def run_session(cfg: dict, db, agent_id: str, adapter: Adapter, mode: str = "exp
         _unregister_session_stop(sid)
         _register_session_stop(sid)
         env = Environment(cfg, db, memory, agent_id, sid, number, mode=mode, allowed_tools=tool_names,
-                          scene=scene, clock=clock)
+                          scene=scene, clock=clock, world=world)
     briefing = memory.briefing() if include_briefing else None
     # Stamp every memory item written this session with the brain that actually produced it.
     memory.author = {"adapter": adapter.name, "model": adapter.model, "source": "agent"}
@@ -241,6 +243,16 @@ def run_session(cfg: dict, db, agent_id: str, adapter: Adapter, mode: str = "exp
         system = exploration_system(prompt_id)
         opening = exploration_opening(agent_id, number, briefing, float(s_cfg["duration_minutes"]),
                                       s_cfg.get("max_steps"))
+    elif mode in ARENA_PROMPT_IDS:
+        # Assigned arena work (M5): its own prompt texts, recorded per session - steered design.
+        prompt_id = mode
+        system = arena_system(mode)
+        if mode == "arena_solo":
+            opening = arena_solo_opening(agent_id, number, briefing, float(s_cfg["duration_minutes"]),
+                                         s_cfg.get("max_steps"), arena_context)
+        else:
+            opening = arena_coop_opening(agent_id, number, briefing, float(s_cfg["duration_minutes"]),
+                                         s_cfg.get("max_steps"), arena_context)
     else:
         system = BENCHMARK_SYSTEM
         opening = benchmark_opening(task_prompt or "", briefing, float(s_cfg["duration_minutes"]),

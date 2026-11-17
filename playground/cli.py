@@ -6,6 +6,7 @@
     playground memory show agent_001         inspect memory
     playground benchmark --group-a agent_001 Group A vs Group B
     playground ablate agent_001 --remove D-002
+    playground arena match.json              duel/coop match via the production factories
     playground demo                          the end-to-end demonstration
     playground verify-log 12                 check a session's hash chain
 """
@@ -15,6 +16,7 @@ import argparse
 import json
 import sys
 import time
+from .arena.factories import cmd_arena
 
 from .config import agent_ids, load_config, resolve_path
 
@@ -535,6 +537,17 @@ def main(argv=None) -> int:
     s.add_argument("--fresh", type=int, default=200, help="throws for fresh evaluation (default 200)")
     s.add_argument("--closed-loop", action="store_true", help="run closed-loop evaluation")
     s.set_defaults(fn=cmd_ml)
+
+    # ---- arena subcommand
+    s = sub.add_parser("arena", help="run an arena match from a JSON config file")
+    s.add_argument("config", help="path to match configuration JSON file")
+    s.add_argument("--out", default=None, help="output file for match report (default: same name with .report.json)")
+    s.add_argument("--adapter", default="scripted", help="per-combatant adapter (scripted, or a live model name)")
+    s.add_argument("--model", default=None, help="model override for the adapter")
+    s.add_argument("--db", default=None, help="session database override (default: the configured one)")
+    s.add_argument("--root", default=None, help="project root override (default: the configured one)")
+    s.set_defaults(fn=cmd_arena)
+
     args = p.parse_args(argv)
     t = time.time()
     rc = args.fn(args) or 0

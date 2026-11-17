@@ -4,9 +4,9 @@
 Provides :class:`ArenaMatch` which validates a match configuration, builds a world via a
 factory, launches agent sessions via a launcher, steps the simulation and computes scores.
 
-The implementation is deliberately lightweight – it does not depend on the MuJoCo engine
-directly, instead it works with *callables* supplied by the caller (the production code in the
-parent repository will pass real factories, the unit tests inject fakes).
+It does not depend on the MuJoCo engine directly: it works with *callables* supplied by the
+caller for the world and the sessions (the same surface the production factories implement;
+the unit tests inject fakes).
 """
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ class MatchResult(dict):
         - ``winner``: team name or ``None`` if timeout/no victor
         - ``duration``: elapsed seconds
         - ``timeout``: bool indicating match ended by time limit
+        - ``timeline``: ordered list of recorded match events (impacts with elapsed time)
     """
 
     def __init__(self, data: Dict[str, Any]):
@@ -50,6 +51,8 @@ class ArenaMatch:
         self._elapsed = 0.0
         self._winner: str | None = None
         self._timeout = False
+        # Timeline of events with timestamps and shooter info.
+        self._timeline: List[Dict[str, Any]] = []
 
     # --------------------------------------------------------------------- validation & planning
     def plan(self) -> None:
@@ -89,6 +92,17 @@ class ArenaMatch:
         # Nothing else to do – the heavy lifting (world creation, session launch) is delegated.
 
     # --------------------------------------------------------------------- execution
+    def _consume_events(self, events: List[Dict[str, Any]], at: float) -> None:
+        """Feed world/session events into the scorer and the match timeline."""
+        for e in events:
+            entry = dict(e)
+            owner = self._scorer.owner_of(e.get('proj_id'))
+            if owner:
+                entry['shooter_agent'], entry['shooter_team'] = owner
+            entry['elapsed'] = at
+            self._timeline.append(entry)
+            self._scorer.process_event(e)
+
     def play(self, world_factory: Callable[[Dict[str, Any]], Any],
              session_launcher: Callable[[Dict[str, Any]], Any]) -> None:
         """Run the match.
@@ -112,14 +126,12 @@ class ArenaMatch:
         while elapsed < duration:
             # Step world – collect any events for scoring.
             events = self._world.step(time_step) if hasattr(self._world, 'step') else []
-            for e in events:
-                self._scorer.process_event(e)
+            self._consume_events(events, elapsed)
             # Advance each session.
             for sess in self._sessions:
-                # Each session may generate its own events; we forward them to the scorer.
                 sess_events = sess.step(time_step) if hasattr(sess, 'step') else []
-                for e in sess_events:
-                    self._scorer.process_event(e)
+                self._consume_events(sess_events, elapsed)
+
             elapsed += time_step
             # Victory check.
             if self._scorer.check_victory():
@@ -136,12 +148,10 @@ class ArenaMatch:
         if self._world is None:
             raise RuntimeError('play() or world_factory not yet invoked')
         events = self._world.step(dt) if hasattr(self._world, 'step') else []
-        for e in events:
-            self._scorer.process_event(e)
+        self._consume_events(events, self._elapsed + dt)
         for sess in self._sessions:
             sess_events = sess.step(dt) if hasattr(sess, 'step') else []
-            for e in sess_events:
-                self._scorer.process_event(e)
+            self._consume_events(sess_events, self._elapsed + dt)
         self._elapsed += dt
         if self._scorer.check_victory():
             self._winner = self._scorer.winner()
@@ -165,23 +175,31 @@ class ArenaMatch:
             'winner': self._winner,
             'duration': self._elapsed,
             'timeout': self._timeout,
+            'timeline': self._timeline,
         }
         return MatchResult(data)
 
 def export_match_report(result: MatchResult, path: str) -> None:
     """Write a JSON file with the full match result.
 
-    The format mirrors the keys of :class:`MatchResult` and includes an empty ``timeline`` list for
-    future extensions.
+    The format mirrors the keys of :class:`MatchResult`, including the recorded match-event
+    ``timeline`` (an empty list only when no events actually occurred).
     """
     import json, os
+
+    def _res_get(key, default=None):
+        if isinstance(result, dict):
+            return result.get(key, default)
+        return getattr(result, key, default)
     data = {
+        "end_reason": _res_get("end_reason", None),
+        "sessions": _res_get("sessions", []),
         'team_stats': result.team_stats,
         'agent_stats': result.agent_stats,
         'winner': result.winner,
         'duration': result.duration,
         'timeout': result.timeout,
-        'timeline': [],
+        'timeline': getattr(result, 'timeline', []),
     }
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w', encoding='utf-8') as fp:

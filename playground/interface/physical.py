@@ -180,7 +180,8 @@ class PhysicalTools:
                 continue
             entry = {"id": oid, "name": s.name, "kind": s.kind, "distance": round(d, 3),
                      "bearing_degrees": round(bearing, 1), "direction": compass(bearing),
-                     "top_height_above_feet": round(top - feet, 3)}
+                     "top_height_above_feet": round(top - feet, 3),
+                     "position": rnd(p, 3)}
             if s.movable:
                 entry["within_reach"] = w._in_reach(p)
                 entry["held"] = oid == w.held
