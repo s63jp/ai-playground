@@ -1655,7 +1655,14 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
 
     @app.get("/")
     def index():
-        return FileResponse(STATIC / "index.html")
+        # no-cache: index.html carries the tab navigation and the asset URLs,
+        # so it must always be revalidated. A stale cached entry page must
+        # never render as a working dashboard — especially when the server it
+        # once came from is already gone (2026-11-17 investigation: a browser
+        # served its cached pre-merge page after the old process died).
+        # Static assets dodge the issue with versioned URLs (?v=m63, ?v=1).
+        return FileResponse(STATIC / "index.html",
+                            headers={"Cache-Control": "no-cache"})
 
     @app.exception_handler(Exception)
     async def crash(request, exc):  # noqa: ANN001

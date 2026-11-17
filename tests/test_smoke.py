@@ -29,6 +29,12 @@ def test_dashboard_and_api(cfg, db):
     # the rl_live tab's sparklines/viewport legitimately use canvases.
     home = c.get("/")
     assert "app.js" in home.text and "rl_live_tab.js" in home.text
+    # The Live Neural Training tab is part of the served navigation, and the
+    # entry page always revalidates (a stale cached index.html must never
+    # render as a working dashboard after the serving process is gone —
+    # regression of the 2026-11-17 missing-tab investigation).
+    assert "Live neural training" in home.text
+    assert home.headers["Cache-Control"] == "no-cache"
     assert c.get("/static/vendor/three.module.min.js").status_code == 200
     assert len(c.get("/api/agents").json()["agents"]) == 13
     sid = s["session_id"]
