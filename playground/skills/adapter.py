@@ -47,7 +47,8 @@ class WorldCapabilities:
     def _unavailable(self, name: str) -> dict:
         return {"status": "unavailable", "detail": f"Capability '{name}' not present in world"}
 
-    def set_gait(self, mode: str, speed: float = 1.0, heading: t.Optional[float] = None) -> dict:
+    def set_gait(self, mode: str, speed: float = 1.0, heading: t.Optional[float] = None,
+                 **extra) -> dict:
         if not self._has_gait:
             return self._unavailable("set_gait")
         return self.world.set_gait(mode, speed, heading)

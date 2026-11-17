@@ -67,6 +67,23 @@ def _placeholders(value: Any, found: set[str]) -> None:
             _placeholders(v, found)
 
 
+def classify_lifecycle(code: str, details: dict) -> str:
+    """Layer-5 lifecycle vocabulary (docs/AGENT_PHYSICAL_INTEGRATION.md D2).
+
+    'partial' = the action made measured progress and was then stopped:
+    a blocked/deflected move (the world reports how far it got in
+    `distance_travelled`), or a chain that completed some steps before a
+    failure. Everything else is 'failed'.
+    """
+    if code == "blocked":
+        return "partial"
+    if "distance_travelled" in details:
+        return "partial"
+    if details.get("completed_steps", 0) > 0:
+        return "partial"
+    return "failed"
+
+
 class Environment:
     def __init__(self, cfg: dict, db, memory: MemoryStore, agent_id: str, session_id: int,
                  session_number: int, mode: str = "exploration", allowed_tools: list[str] | None = None,
@@ -214,11 +231,22 @@ class Environment:
             else:
                 body = getattr(self, f"_t_{tool}")(clean, turn)
             result = {"success": True, "action": tool, "action_index": idx, **body}
+            # Lifecycle vocabulary (Phase 12, docs/AGENT_PHYSICAL_INTEGRATION.md D2):
+            # a returned tool call is 'completed' only when the world measured the
+            # requested outcome — the vocabulary after the merge, so a body can
+            # never override it.
+            result["status"] = "completed"
             code = None
         except (ToolError, ActionError, MemoryError_) as e:
             code = e.code
             result = {"success": False, "action": tool, "action_index": idx,
                       "error": {"code": e.code, "message": e.message}}
+            # Physical actions that made measured progress and were then stopped
+            # (blocked by an obstacle, deflected off course, or a chain that
+            # completed some steps before failing) report 'partial'; every other
+            # failure is 'failed'. Success is never claimed from a return value.
+            details = e.details if isinstance(e.details, dict) else {}
+            result["status"] = classify_lifecycle(e.code, details)
             if e.details:
                 result["details"] = e.details
         except Exception as e:  # noqa: BLE001 - a crash in a tool must surface as a failure, never a success

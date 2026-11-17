@@ -966,6 +966,7 @@ class PhysicsWorld:
             "position": p, "feet_height": p[2] - self.hh, "head_height": p[2] + self.hh,
             "velocity": self.agent_vel(), "speed": float(np.linalg.norm(self.agent_vel())),
             "on_ground": self.grounded, "standing_on": self.support,
+            "fallen": self.agent_fallen(),
             "surface_below": {"height": below, "object": what},
             "facing_degrees": self.facing, "holding": self.held,
             "body": {"width": 2 * self.hw, "height": 2 * self.hh, "mass": self.base_mass},

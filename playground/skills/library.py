@@ -45,7 +45,10 @@ class SkillsLibrary:
 
     def invoke(self, skill_id: str, adapter: Any, params: Dict[str, Any] | None = None) -> dict:
         """Execute a skill against *adapter*.
-        Returns a dict with keys ``skill``, ``status`` and ``detail``.
+
+        Returns a dict with keys ``skill``, ``status`` and ``detail``; when the
+        controller method returns a dict, the full measured payload is carried
+        under ``result`` (additive — callers of the old shape keep working).
         """
         params = params or {}
         spec = self.get(skill_id)
@@ -59,14 +62,19 @@ class SkillsLibrary:
         if not method_name or not hasattr(adapter, method_name):
             return {"skill": skill_id, "status": "unavailable", "detail": f"Adapter lacks method {method_name}"}
         method = getattr(adapter, method_name)
+        # Catalog defaults fill unset parameters; explicit params win.
+        merged = {**spec.controller.get("defaults", {}), **params}
         try:
-            result = method(**params)
+            result = method(**merged)
         except Exception as exc:
             return {"skill": skill_id, "status": "failed", "detail": str(exc)}
         # Expect result dict with a ``status`` key.
-        status = result.get('status', 'failed')
-        detail = result.get('detail', '')
-        return {"skill": skill_id, "status": status, "detail": detail}
+        status = result.get('status', 'failed') if isinstance(result, dict) else 'failed'
+        detail = result.get('detail', '') if isinstance(result, dict) else ''
+        out = {"skill": skill_id, "status": status, "detail": detail}
+        if isinstance(result, dict):
+            out["result"] = result
+        return out
 
     def bump_version(self, skill_id: str, new_version: str) -> None:
         spec = self.get(skill_id)

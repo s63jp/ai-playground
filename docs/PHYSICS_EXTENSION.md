@@ -21,6 +21,7 @@ against evidence (test output), never against intent.
 | 9 | Multi-agent arena (`playground/arena/`: match, scoring, modes, reports) | `pytest tests/test_arena.py -q` | landed (stub-agent level) |
 | 10 | Human player integration (`playground/player.py`, `dashboard/player_api.py`, `static/js/player.js`) | `pytest tests/test_player.py -q` | landed (audit at gate) |
 | 11 | Performance optimisation + full integration | `pytest tests/test_performance.py tests/test_mode_integration.py -q`; `python scripts/profile_step.py --benchmark`; `python scripts/health_check.py` | landed |
+| 12 | Autonomous physical agent integration (`docs/AGENT_PHYSICAL_INTEGRATION.md`): lifecycle statuses (completed/partial/failed + interrupted ledger), new agent tools (`run_to/turn_to/stop_moving/stand/stand_up/approach_object/reach_for/carry_to/run_skill/run_chain`), agent skill adapter over the existing gait/manipulation/recovery implementations, ManipulationController reach repair (radians + measured tracking) | `pytest tests/test_agent_physics_integration.py tests/test_manipulation.py tests/test_skills.py -q`; full `run_tests.sh` | landed (31 HVE integration tests + 41 green across agent/manip/skills/locomotion; full suite + health check at the integration gate) |
 
 ## Package verification table
 

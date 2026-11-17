@@ -6,6 +6,7 @@ world and the private sandbox copy used by run_physics_test.
 from __future__ import annotations
 
 import math
+import os
 from typing import Any
 
 import numpy as np
@@ -47,6 +48,10 @@ def visible_event(ev: dict) -> dict:
 class PhysicalTools:
     def __init__(self, world: PhysicsWorld):
         self.w = world
+        # Phase 12 lazily-built skill plumbing (skills library, adapter, arm controller).
+        self._skill_lib = None
+        self._skill_adapter = None
+        self._mc = None
 
     # ------------------------------------------------------------ helpers
     def _direction(self, direction) -> np.ndarray:
@@ -431,6 +436,239 @@ class PhysicalTools:
                     break
         return {"object_id": object_id, "collisions": found, "count": len(found),
                 "note": None if found else "No collisions above the recording threshold match."}
+
+
+    # ------------------------------------------------------------------ physical extension (Phase 12)
+    # These wrappers ride the existing gait/manipulation/world implementations
+    # only: no second locomotion system, no qpos/qvel writes
+    # (docs/AGENT_PHYSICAL_INTEGRATION.md).
+
+    def _skill_setup(self) -> None:
+        """Build the skill library + adapter lazily (cheap worlds stay cheap)."""
+        if self._skill_lib is None:
+            import tempfile
+            from ..skills.agent_adapter import AgentSkillAdapter
+            from ..skills.catalog import ALL_SKILLS
+            from ..skills.library import SkillsLibrary
+            from ..manipulation import ManipulationController
+            lib = SkillsLibrary(root=os.path.join(tempfile.gettempdir(), "playground_skills"))
+            known = {s.id for s in lib.list()}
+            for spec in ALL_SKILLS:
+                if spec.id not in known:
+                    lib.register(spec)
+            self._skill_lib = lib
+            self._mc = ManipulationController(self.w)
+            self._skill_adapter = AgentSkillAdapter(self.w, self, self._mc)
+
+    def _resolve_skill(self, name: str):
+        self._skill_setup()
+        key = str(name).strip().lower()
+        for spec in self._skill_lib.list():
+            if spec.id == key or spec.id == f"skill-{key}" or spec.name.lower() == key:
+                return spec
+        raise ToolError("unknown_skill", f"There is no skill named '{str(name)[:60]}'.",
+                        available_skills=sorted(s.id for s in self._skill_lib.list()))
+
+    def run_to(self, x: float, y: float, speed: float | None = None) -> dict:
+        """A run is a move at a raised requested speed; the payload reports what the legs managed."""
+        res = self.walk_to(float(x), float(y), speed=float(speed) if speed is not None else 2.8)
+        res["requested_speed"] = round(float(speed) if speed is not None else 2.8, 3)
+        return res
+
+    def turn_to(self, heading: float) -> dict:
+        """Face a compass heading. Heading changes ride the contact-driven walk —
+        this rig turns by striding (measured drift and waist angle are reported)."""
+        w = self.w
+        h = float(heading)
+        current = float(getattr(w, "facing", 90.0))
+        diff = (h - current + 180.0) % 360.0 - 180.0
+        ap0 = w.agent_pos().copy()
+        walked = 0.0
+        if abs(diff) > 5.0:
+            d2 = np.array([math.cos(math.radians(h)), math.sin(math.radians(h))], dtype=float)
+            res = w.move(d2, 0.12, speed=0.5, stop=True)
+            walked = float(res.get("distance_travelled", 0.0))
+            end_face = round(float(w.facing), 2)
+        else:
+            end_face = round(current, 2)
+        j = w.m.joint("waist_yaw")
+        waist = float(w.d.qpos[int(j.qposadr[0])])
+        end = w.agent_pos()
+        return {"requested_heading": h, "previous_facing_degrees": round(current, 2),
+                "facing_degrees": end_face,
+                "walked_for_turn": round(walked, 4),
+                "displacement_during_turn": round(float(math.hypot(end[0] - ap0[0], end[1] - ap0[1])), 4),
+                "waist_yaw_deg": round(math.degrees(waist), 2)}
+
+    def stop_moving(self) -> dict:
+        """End the current walk: the gait controller holds posture until the body is still."""
+        w = self.w
+        if getattr(w, "_gait_controller", None) is not None:
+            w.set_gait("stop")
+        w.target_vel[:] = 0.0
+        t1 = w.time
+        while w.time - t1 < 3.0:
+            w._step()
+            v = w.agent_vel()
+            if w.grounded and math.hypot(v[0], v[1]) < 0.02 and abs(v[2]) < 0.02:
+                break
+        v = w.agent_vel()
+        speed = float(math.hypot(v[0], v[1]))
+        return {"settled": bool(w.grounded and speed < 0.05), "speed": round(speed, 4),
+                "velocity": [round(float(v[0]), 4), round(float(v[1]), 4), round(float(v[2]), 4)],
+                "elapsed_s": round(w.time - t1, 3)}
+
+    def stand(self, seconds: float = 2.0) -> dict:
+        """Hold the neutral standing posture for a while; reports the measured state after."""
+        w = self.w
+        w.set_gait("stand")
+        payload = w.wait(float(seconds)) if seconds and float(seconds) > 0 else {}
+        return {"upright_after": bool(not w.agent_fallen()), "agent_state": w.agent_state(),
+                **{k: v for k, v in payload.items() if k != "status"}}
+
+    def stand_up(self) -> dict:
+        """Attempt to rise from a fallen pose. The outcome comes from the measured
+        recovery events; a recovery that never sustained is reported as failed."""
+        w = self.w
+        if not w.agent_fallen():
+            return {"recovered": True, "recovery_event": None, "agent_was_upright": True,
+                    "agent_state": w.agent_state()}
+        w.stand_up()
+        deadline = w.time + 9.0
+        idx, events, event = 0, w.events, None
+        while w.time < deadline and event is None:
+            w._step()
+            while idx < len(events):
+                etype = events[idx].get("type")
+                if etype in ("recovery_complete", "recovery_failed"):
+                    event = etype
+                    break
+                idx += 1
+        if event != "recovery_complete":
+            raise ActionError("recovery_failed", "The stand-up attempt ended without a sustained upright pose.",
+                              event=event, fallen_after=bool(w.agent_fallen()))
+        return {"recovered": True, "recovery_event": event,
+                "recovery_after_s": round(w.time - deadline + 9.0, 3),
+                "agent_state": w.agent_state()}
+
+    def approach_object(self, object_id: str, stop_short: float = 0.6, speed: float | None = None) -> dict:
+        """Walk until the object is close, stopping short of it."""
+        w = self.w
+        w._movable(object_id)  # validates: ActionError unknown_object for unknown ids
+        pos = np.asarray(w.obj_pos(object_id), dtype=float)
+        ap = w.agent_pos()
+        off = np.array([ap[0] - pos[0], ap[1] - pos[1]], dtype=float)
+        n = float(math.hypot(off[0], off[1]))
+        if n < 1e-6:
+            off = np.array([0.0, -1.0])
+            n = 1.0
+        short = max(0.0, min(float(stop_short), n - 0.25))
+        if n > short + 0.05:
+            tgt = pos[:2] + off / n * short
+            res = dict(self.walk_to(float(tgt[0]), float(tgt[1]), speed=speed))
+        else:
+            res = {"distance_travelled": 0.0, "start_position": rnd(ap).tolist(),
+                   "end_position": rnd(ap).tolist(), "elapsed": 0.0}
+        end = w.agent_pos()
+        remaining = float(math.hypot(end[0] - pos[0], end[1] - pos[1]))
+        res["object"] = object_id
+        res["distance_remaining"] = round(remaining, 4)
+        res["within_reach"] = bool(remaining <= float(w.ac.get("reach", 1.5)))
+        return res
+
+    def reach_for(self, object_id: str) -> dict:
+        """Point one arm toward the object; the aim is verified against the measured joints."""
+        w = self.w
+        w._movable(object_id)  # validates: ActionError unknown_object for unknown ids
+        self._skill_setup()
+        out = dict(self._mc.reach(object_id))
+        obj = np.asarray(w.obj_pos(object_id), dtype=float)
+        hand = np.asarray(self._mc._hand_pos(), dtype=float)
+        out["hand_to_object"] = round(float(np.linalg.norm(hand - obj)), 4)
+        out["object_position"] = [round(float(obj[0]), 4), round(float(obj[1]), 4), round(float(obj[2]), 4)]
+        return out
+
+    def carry_to(self, object_id: str, x: float, y: float, speed: float | None = None) -> dict:
+        """Take an object to a point: close in, take hold, walk there, set it down.
+        Every part is reported; nothing teleports — the object rides the carry pin."""
+        w = self.w
+        if abs(float(x)) > w.half or abs(float(y)) > w.half:
+            raise ToolError("outside_world", f"({x}, {y}) is beyond the island edge (limits are "
+                            f"+/-{w.half} in x and y).", limits=[-w.half, w.half])
+        w._movable(object_id)  # validates: ActionError unknown_object for unknown ids
+        ledger: list[dict] = []
+        pos = np.asarray(w.obj_pos(object_id), dtype=float)
+        if w.held and w.held != object_id:
+            raise ActionError("hands_full", f"Already holding '{w.held}'; put it down before taking '{object_id}'.",
+                              holding=w.held)
+        if not w.held:
+            ap = w.agent_pos()
+            off = np.array([ap[0] - pos[0], ap[1] - pos[1]], dtype=float)
+            n = float(math.hypot(off[0], off[1]))
+            if n > 0.5:
+                step_to = pos[:2] + off / n * 0.5
+                app = dict(self.walk_to(float(step_to[0]), float(step_to[1]), speed=speed))
+                ledger.append({"step": "approach", "arrived": app.get("arrived"),
+                               "distance_travelled": app.get("distance_travelled")})
+            got = dict(self.pick_up(object_id))
+            ledger.append({"step": "pick_up", "held": w.held,
+                           "was_moving": got.get("was_moving")})
+        carry = dict(self.walk_to(float(x), float(y), speed=speed))
+        ledger.append({"step": "carry", "arrived": carry.get("arrived"),
+                       "distance_travelled": carry.get("distance_travelled"),
+                       "still_holding": w.held})
+        if w.held == object_id:
+            down = dict(self.put_down(object_id))
+            ledger.append({"step": "put_down", "released": True})
+        final = w.obj_pos(object_id)
+        miss = float(math.hypot(final[0] - float(x), final[1] - float(y)))
+        return {"ledger": ledger, "object": object_id, "target": [float(x), float(y)],
+                "final_position": [round(float(final[0]), 4), round(float(final[1]), 4)],
+                "distance_to_target": round(miss, 4), "held_after": w.held}
+
+    def run_skill(self, skill: str, params: dict | None = None) -> dict:
+        """Execute one catalogue skill and return what physically happened."""
+        spec = self._resolve_skill(skill)
+        out = self._skill_lib.invoke(spec.id, self._skill_adapter, dict(params or {}))
+        body = {"skill": spec.id, "skill_name": spec.name, "skill_status": out.get("status")}
+        body.update(out.get("result") or {})
+        if out.get("detail"):
+            body["detail"] = out["detail"]
+        if out.get("status") == "failed":
+            raise ActionError("skill_failed", str(out.get("detail") or "the skill failed"), **body)
+        if out.get("status") == "unavailable":
+            raise ActionError("skill_unavailable", str(out.get("detail") or "this world lacks the capability"), **body)
+        return body
+
+    def run_chain(self, steps: list) -> dict:
+        """Run skills in order, stopping at the first that does not complete.
+        Each step is reported; the steps after a failure are marked interrupted."""
+        if not isinstance(steps, list) or not steps:
+            raise ToolError("invalid_argument", "run_chain needs a non-empty ordered list of steps.")
+        ledger: list[dict] = []
+        completed = 0
+        for i, step in enumerate(steps):
+            if not isinstance(step, dict) or not step.get("skill"):
+                raise ToolError("invalid_argument", f"Step {i} needs a 'skill' name.")
+            args = step.get("args") if isinstance(step.get("args"), dict) else {}
+            try:
+                body = self.run_skill(step["skill"], args)
+                ledger.append({"index": i, "skill": step["skill"], "status": "succeeded", "result": body})
+                completed += 1
+            except (ActionError, ToolError) as exc:
+                code = getattr(exc, "code", "skill_failed")
+                msg = getattr(exc, "message", str(exc))
+                ledger.append({"index": i, "skill": step["skill"], "status": "failed",
+                               "error": {"code": code, "message": msg}})
+                for j in range(i + 1, len(steps)):
+                    nxt = steps[j].get("skill") if isinstance(steps[j], dict) else None
+                    ledger.append({"index": j, "skill": nxt, "status": "interrupted"})
+                raise ActionError(
+                    "chain_failed",
+                    f"Step {i} ({step['skill']}) did not complete ({code}); "
+                    f"the remaining {len(steps) - i - 1} step(s) were not run.",
+                    ledger=ledger, completed_steps=completed, failed_step=i)
+        return {"ledger": ledger, "completed_steps": completed, "total_steps": len(steps)}
 
 
 PHYSICAL_TOOL_NAMES = [n for n in dir(PhysicalTools) if not n.startswith("_")]

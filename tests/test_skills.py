@@ -17,6 +17,11 @@ class StubWorld:
             self.position += speed * 0.5
             return {"status": "succeeded", "detail": f"Moved {mode}"}
         return {"status": "failed", "detail": "Mode not supported"}
+    def move(self, direction=None, distance=0.5, speed=None, **extra):
+        # The catalogue's walking/running skill dispatches to move(); the stub
+        # advances by the requested distance.
+        self.position += float(distance)
+        return {"status": "succeeded", "detail": f"Moved {distance}"}
     def stand_up(self):
         self.fallen = False
         return {"status": "succeeded", "detail": "Standing up"}
