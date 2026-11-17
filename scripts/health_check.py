@@ -195,7 +195,8 @@ def main() -> int:
     @check("physics extension modules (optional)")
     def _():
         mods = ["playground.locomotion", "playground.rl.env", "playground.rl.rewards",
-                "playground.rl.curriculum",
+                "playground.rl.curriculum", "playground.rl.ppo",
+                "playground.rl.checkpoint", "playground.rl.eval",
                 "playground.skills.library", "playground.combat.projectiles",
                 "playground.combat.equipment", "playground.arena.match",
                 "playground.manipulation", "playground.player",

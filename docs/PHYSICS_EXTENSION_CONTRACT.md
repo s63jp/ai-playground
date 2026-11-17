@@ -114,10 +114,12 @@ its displacement assertion — rewrite it to assert real contact-driven displace
 ## 3. Frozen cross-package interfaces
 
 ### P2 RL consumes world
-> **M6-B B2 supersession note (2026-11-17).** The authoritative RL environment
-> contract is now `docs/RL_ENVIRONMENT.md` (contract version `rl_env/2`, 40-dim
-> observation, one measured reward pipeline in `playground/rl/rewards.py`, one
-> curriculum in `playground/rl/curriculum.py`). The pre-M6 text below is kept for
+> **M6-B B2 supersession note (2026-11-17; contract extended at B3).** The
+> authoritative RL environment contract is now `docs/RL_ENVIRONMENT.md`
+> (contract version `rl_env/3` — the v2 40-dim observation plus the appended
+> commanded-velocity slice, one measured reward pipeline in
+> `playground/rl/rewards.py`, one curriculum in
+> `playground/rl/curriculum.py`). The pre-M6 text below is kept for
 > history; its reward-component list (`energy_penalty`, `joint_limit`) and its
 > `train(cfg)`/checkpoint artifact requirements describe the REMOVED broken pre-M6
 > trainer, not the current system.

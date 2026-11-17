@@ -156,11 +156,13 @@ for the full catalogue):
   the same world through the same tool contract — the dashboard serves the live
   humanoid skeleton (23 bodies) and agent state over `/api/player/state`.
 * **RL** (`playground/rl/`): the authoritative locomotion environment
-  contract (14-action / 40-dimensional observation `rl_env/2`,
-  `docs/RL_ENVIRONMENT.md`), one consolidated reward pipeline with a
-  measured anti-exploit structure, and a deterministic env-side curriculum.
-  No training algorithm exists yet (M6-B B3 introduces the trainer); the
-  scripted gait is a benchmark, not a learned policy.
+  contract (14-action / 43-dimensional observation `rl_env/3` — v2 plus the
+  commanded target velocity, `docs/RL_ENVIRONMENT.md`), one consolidated
+  reward pipeline with a measured anti-exploit structure, a deterministic
+  env-side curriculum, and (B3) a genuine actor-critic PPO trainer trained
+  only from real MuJoCo rollouts (`playground/rl/ppo.py`,
+  `scripts/rl_ppo.py train`, seeded checkpoints in `experiments/rl/`). The
+  scripted gait remains a benchmark, never a learned policy.
 
 ---
 

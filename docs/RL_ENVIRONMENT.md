@@ -1,9 +1,11 @@
-# M6-B — The RL Environment Contract (`rl_env/2`)
+# M6-B — The RL Environment Contract (`rl_env/3`)
 
-**Stage B2 document. Scope: environment infrastructure ONLY — observation,
-action, reward, termination, curriculum, lifecycle. Not covered here
-(comes in later M6-B stages): the RL training algorithm (B3), the reward
-programme tuning, `.aipg` brain files, agent deployment.**
+**Stage B2 document, extended at B3 for observation contract v3 (task
+conditioning) and the curriculum stage-direction correction. Scope:
+environment infrastructure ONLY — observation, action, reward, termination,
+curriculum, lifecycle. Not covered here: the RL training algorithm (B3 —
+see `reports/m6b/B3_PPO_LEARNING.md`), the reward programme tuning (B4),
+`.aipg` brain files (B5), agent deployment.**
 
 One environment, one reward pipeline, one curriculum mechanism:
 
@@ -25,9 +27,12 @@ constant in the code.
 
 ---
 
-## 1. Observation contract (float32[40])
+## 1. Observation contract (float32[43], layout v3)
 
-Section table from `observation_layout()` (slices are `[start, end)`):
+v3 is an **APPEND-only** extension of v2 (and v2 of v1): every v2 section
+keeps its slice and meaning. v3 adds slice 40–43, the commanded target
+velocity ("task conditioning"; see §1.5). Section table from
+`observation_layout()` (slices are `[start, end)`):
 
 | # | Slice | Field | Units / frame | Meaning |
 |---|---|---|---|---|
@@ -38,6 +43,7 @@ Section table from `observation_layout()` (slices are `[start, end)`):
 | 5 | 34–35 | `upright_margin` | raw | torso up-z (`torso_up[2]`) |
 | 6 | 35–38 | `torso_forward` | unit vector, WORLD frame | torso `xmat` **column 1** — the rig's chest/heading axis (the rig faces its local +Y; measured during the scripted walk, column 1 rotates to `(cos h, sin h)` for heading h) |
 | 7 | 38–40 | `foot_ground_force` | N ÷ 1000 (left, right) | ground-support normal force under each foot: contacts whose counterpart body is **outside this rig** (self-pairs are excluded — see §1.3) and with \|contact normal z\| > 0.7 (the same support rule `PhysicsWorld._post_step` uses for `grounded`); forces summed via `mj_contactForce`, snapshot at the decision boundary |
+| 8 | 40–43 | `command` | m/s ÷ 5.0, WORLD frame (v3, B3) | the commanded target velocity `v*` that the reward tracks — the movement objective itself; same scale as `torso_lin_vel` so commanded and measured velocities are directly comparable. Changed at every `set_phase`/`set_target_velocity`, deterministic |
 
 **Joint order** (model order, probe-verified; constant for a rig revision):
 
@@ -75,7 +81,45 @@ the transition is FAULTED and the observation is zeroed before return
 velocity- and posture-conditioned; a seeded reset moves the world start
 pose without changing the first observation — this is a documented design
 property, verified by test), other agents, held objects, terrain shape.
-`layout_version` 3 would add such fields APPEND-only.
+`layout_version` 4 would add such fields APPEND-only (v3 followed exactly
+this rule by appending the command).
+
+### 1.5 Task conditioning (added at B3, layout v3)
+
+Before B3 the observation did not tell the policy WHICH movement it was
+being asked to perform — identical physical states could require different
+actions depending on the commanded objective, which was hidden in
+`env.target_velocity`. v3 fixes this by observing the commanded target
+velocity itself (slice 40–43, WORLD frame, ÷ 5.0 like `torso_lin_vel`):
+
+- **Frame.** Commands stay WORLD-frame (`v*` is exactly the vector
+  `compute_reward`'s `velocity_tracking` and `progress` project against).
+  The policy also observes the torso velocity and the chest axis in world
+  frame, so commanded-vs-achieved velocity is directly comparable in
+  observation space with no hidden transform.
+- **Curriculum conditioning.** The trainable ladder differs between stages
+  ONLY through the command (`standing [0,0,0]` → `controlled [0,0.25,0]` →
+  `sustained [0,0.5,0]`) and `upright_assist` (a plant-side blending of the
+  policy's own PD targets toward neutral — its physical effect is observable
+  through the joint response, and it is not part of the task definition).
+  With the command observed, a separate task/phase identifier is redundant
+  and was deliberately NOT added.
+- **Stage-direction correction (measured, B3).** The B2 stage data commanded
+  `+X`, but the probe `ai-playground-audit/probe_b3_yaw.py` measured that a
+  policy cannot locomote along +X: the rig's ONLY rotational root dof is
+  `waist_yaw` (a Z-hinge between the container and the torso) which the env
+  posture-PD holds at 0 and which is OUTSIDE the 14-action space; without a
+  waist command the reachable locomotion is along the chest axis —
+  random-action mean |dy| = 0.94 m vs |dx| = 0.013 m, chest heading stays
+  ≈90° ± 3°, waist never leaves 0 ± 0.06 rad. The scripted gait reaches +X
+  only because it OVERRIDES the waist PD (heading − 90°). Stages 2–3
+  therefore command the walkable chest axis (world +Y at spawn): the gait
+  at heading 90 reproduces the full benchmark on that axis (0.749 m / 8 s,
+  `probe_b3_axis.py`). This is a phase-DATA correction; the reward, the
+  env mechanism and the B1 safety stack are untouched, and the config
+  default `rl.target_velocity` (+X) keeps its documented role: the bare-env
+  task pairing matching the heading-0 gait benchmark and its B2 anti-farm
+  tests (`tests/test_rl_env_b2.py`).
 
 ### 1.3 Discovered physical quirk (documented, not fixed at B2)
 
@@ -206,8 +250,8 @@ excluded; invalid physics steps never become successful transitions.
 | Stage | target v* | upright_assist | Purpose |
 |---|---|---|---|
 | `standing` | [0, 0, 0] | 0.6 | balance; tracking pays matched stillness |
-| `controlled` | [0.25, 0, 0] | 0.3 | slow walking with assistance |
-| `sustained` | [0.5, 0, 0] | 0.0 | the honest walking task |
+| `controlled` | [0, 0.25, 0] | 0.3 | slow walking along the walkable chest axis (§1.5) with assistance |
+| `sustained` | [0, 0.5, 0] | 0.0 | the honest walking task on that axis |
 | `disturbance` | — | — | RESERVED (needs a measured disturbance hook) |
 | `terrain` | — | — | RESERVED (needs terrain spawn phases) |
 | `navigation` | — | — | RESERVED (needs heading/waypoint sampling) |
@@ -255,18 +299,25 @@ decimated loop (asserted in-test to ±0.05), and zero-action remains ≈
 define its untrained baseline explicitly. The scripted gait remains a
 BENCHMARK, never labelled learned.
 
-## 7. What does NOT exist yet (no claims)
+## 7. What now exists (B3) and what does NOT exist yet
 
-- **No RL training algorithm** — no PPO/SAC/anything gradient-based; the
-  removed `rl/train.py` was never functional. B3 introduces the trainer.
+- **The RL training algorithm EXISTS at B3:** a genuine actor-critic PPO
+  trainer (`playground/rl/ppo.py`), documented in
+  `reports/m6b/B3_PPO_LEARNING.md` and §7-equation form in the module
+  docstring. It trains only from real MuJoCo rollouts through this
+  contract, with seeded checkpoints under `experiments/rl/`
+  (`playground/rl/checkpoint.py`; NOT the `.aipg` format) and the matched
+  evaluation harness `playground/rl/eval.py` (CLI `scripts/rl_ppo.py`).
 - **No portable brain files / `.aipg`** (B5); the manifest will carry
   exactly `observation_layout()`/`action_layout()`.
 - **No deployment path for a neural policy into an agent** (adapter work;
   later stage).
-- **No neural walking claim of any kind.** Scripted gait ≠ learned.
-- Evaluation harness, CLI, dashboard RL surface — deferred per stage
-  plan; the dashboard receives a read-only contract/probe panel at B2
-  close (no trainer, no learning claims).
+- **No .aipg-, Studio- or dashboard-training surface claims.** The script
+  CLI is the training workflow for B3; the dashboard RL tab stays
+  read-only for the environment contract.
+- **No neural walking claim of any kind beyond what the measured B3
+  evidence records.** Scripted gait ≠ learned; the trained policy's
+  quality is whatever `reports/m6b/B3_PPO_LEARNING.md` measured.
 
 ## 8. Known limitations (documented honestly)
 

@@ -217,6 +217,34 @@ rl:
     stability: 0.2
     stability_window: 25     # decisions (0.5 s) variance window on up_z
     fall: 5.0                # one-shot penalty magnitude at fall termination
+  # PPO (B3 trainer, playground/rl/ppo.py). Every key here has a matching
+  # fallback constant in PPO_HYPER_DEFAULTS; the config value wins.
+  ppo:
+    rollout_steps: 2048      # decisions collected per optimisation pass
+    epochs: 4                # optimisation epochs over each rollout
+    minibatch: 512
+    lr: 3.0e-4               # Adam LR for actor and critic
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_eps: 0.2
+    ent_coef: 0.0            # Gaussian-entropy bonus coefficient
+    value_coef: 0.5          # value-loss coefficient
+    max_grad_norm: 0.5       # global-norm clip per network
+    hidden: [64, 64]         # actor and critic trunk widths
+    log_std_init: 0.0        # initial action sigma = 1.0
+    target_kl: null          # optional early-stop KL threshold
+  # Training-run driver settings (scripts/rl_ppo.py / PPOTrainer).
+  ppo_run:
+    total_steps: 2000000     # valid decision steps planned
+    seed: 20261117           # master seed (init, sampling, reset poses)
+    checkpoint_freq: 200000  # decisions between periodic checkpoints
+    # Explicit per-stage budgets (decisions) applied through
+    # Curriculum.advance(); everything after the last budget runs at the
+    # final ladder stage (`sustained`). Remove entries to skip a stage; an
+    # empty dict trains a single stage for the whole budget.
+    stage_budgets:
+      standing: 400000
+      controlled: 500000
 
 server:
   host: 127.0.0.1

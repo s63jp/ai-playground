@@ -23,11 +23,13 @@ class TestRlContract:
         r = client.get("/api/rl/contract")
         assert r.status_code == 200
         data = r.json()
-        assert data["contract_version"] == 2
-        assert data["obs_dim"] == 40 and data["action_dim"] == 14
+        assert data["contract_version"] == 3
+        assert data["obs_dim"] == 43 and data["action_dim"] == 14
         obs = data["observation"]
-        assert obs["layout_version"] == 2 and obs["dim"] == 40
-        assert sum(s["slice"][1] - s["slice"][0] for s in obs["sections"]) == 40
+        assert obs["layout_version"] == 3 and obs["dim"] == 43
+        assert sum(s["slice"][1] - s["slice"][0] for s in obs["sections"]) == 43
+        assert obs["sections"][-1]["name"] == "command" \
+            and obs["sections"][-1]["slice"] == [40, 43]
         act = data["action"]
         assert act["action_dim"] == 14
         assert len(act["joints"]) == 14

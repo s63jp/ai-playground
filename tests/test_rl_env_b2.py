@@ -38,20 +38,31 @@ def _zero(env):
 
 # ---------------------------------------------------------------- observation
 def test_obs_contract_dimensions_and_finiteness():
+    """v3 = the v2 40-slice APPEND-only + the commanded velocity (B3 task
+    conditioning); all v2 sections keep their meaning."""
     env = LocoEnv()
     obs = env.reset()
-    assert obs.shape == (40,)
+    assert obs.shape == (43,)
     zero = _zero(env)
     for _ in range(25):
         obs, r, term, trunc, info = env.step(zero)
-        assert obs.shape == (40,)
+        assert obs.shape == (43,)
         assert np.all(np.isfinite(obs)), "observation went non-finite without fault"
         assert not term
     layout = env.observation_layout()
-    assert layout["layout_version"] == 2 and layout["dim"] == 40
+    assert layout["layout_version"] == 3 and layout["dim"] == 43
     covered = sum(hi - lo for _, lo, hi in
                   [(s["name"], s["slice"][0], s["slice"][1]) for s in layout["sections"]])
-    assert covered == 40
+    assert covered == 43
+    # APPEND-only guarantee: the first 7 v2 sections keep their exact slices
+    assert [(s["name"], s["slice"]) for s in layout["sections"][:7]] == [
+        ("joint_pos", [0, 14]), ("joint_vel", [14, 28]), ("torso_up", [28, 31]),
+        ("torso_lin_vel", [31, 34]), ("upright_margin", [34, 35]),
+        ("torso_forward", [35, 38]), ("foot_ground_force", [38, 40])]
+    # the v3 append is the command section
+    assert layout["sections"][7]["name"] == "command" \
+        and layout["sections"][7]["slice"] == [40, 43]
+    assert layout["command_frame"] == "world"
     assert layout["joint_order"] == ["spine_L2", "left_shoulder", "left_elbow",
                                      "right_shoulder", "right_elbow", "head_pitch",
                                      "head_yaw", "head_roll", "left_hip", "left_knee",
@@ -77,6 +88,9 @@ def test_obs_normalisation_values():
     assert np.allclose(obs[28:31], [0, 0, 1], atol=1e-4)
     assert np.allclose(obs[35:38], [0, 1, 0], atol=1e-4)  # chest +Y at waist 0
     assert obs[38] >= 0.0 and obs[39] >= 0.0
+    # the commanded target is visible (v3): config default v* = [0.5, 0, 0],
+    # world frame, / 5.0 root_vel_scale
+    assert np.allclose(obs[40:43], [0.1, 0.0, 0.0], atol=1e-6)
     # stand briefly: feet support ~ body weight -> contact forces become large
     zero = _zero(env)
     for _ in range(50):
@@ -418,11 +432,11 @@ def test_episode_isolation_no_state_leakage():
 def test_obs_action_dims_stable_across_episodes():
     env = LocoEnv()
     o = env.reset()
-    assert o.shape == (40,)
+    assert o.shape == (43,)
     env.reset(seed=1)
     o2 = env.reset()
-    assert o2.shape == (40,)
-    assert LocoEnv.action_dim == 14 and LocoEnv.contract_version == 2
+    assert o2.shape == (43,)
+    assert LocoEnv.action_dim == 14 and LocoEnv.contract_version == 3
 
 
 # ---------------------------------------------------------------- curriculum
@@ -439,7 +453,9 @@ def test_curriculum_transitions_deterministic_and_explicit():
         if c.step():
             transitions.append((c.stage.id, c.steps_in_stage))
     assert transitions == [("controlled", 0)], transitions
-    assert env.target_velocity == pytest.approx([0.25, 0.0, 0.0])
+    # B3 measured correction: stages command the walkable chest axis (world +Y
+    # at spawn; probe_b3_yaw: |dy| 70x |dx| for waist-locked policies)
+    assert env.target_velocity == pytest.approx([0.0, 0.25, 0.0])
     assert env.upright_assist == pytest.approx(0.3)
     # reproducible: a second run of the same sequence gives the same crossings
     env.reset()

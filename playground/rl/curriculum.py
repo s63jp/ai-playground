@@ -10,8 +10,10 @@ stacked over a previous stage's overrides.
 The canonical stage ladder (mission stages 1-6):
 
 1  standing        balance only (zero target velocity, upright assistance)
-2  controlled      slow forward movement (0.25 m/s) with partial assistance
-3  sustained       sustained walking at the full 0.5 m/s target, no assist
+2  controlled      slow forward walking (0.25 m/s along the rig's walkable
+                   chest axis = world +Y at spawn) with partial assistance
+3  sustained       sustained walking at the full 0.5 m/s target along the same
+                   axis, no assist: the honest walking task
 4  disturbance     recovery from measured disturbances — RESERVED: needs an
                    env-side disturbance hook (impulse classes); not trainable
                    until that lands
@@ -51,13 +53,19 @@ def _stand_phase() -> dict:
 
 
 def _controlled_phase() -> dict:
+    # B3 measured correction (evidence: ai-playground-audit/probe_b3_yaw): a
+    # policy without a waist command (the rig's ONLY rotational root dof, held
+    # by the env posture PD) locomotes along the chest axis — random-action
+    # displacement mean |dy| = 0.94 m vs |dx| = 0.013 m; the scripted gait
+    # walks the chest axis equally well (heading 90 -> 0.749 m / 8 s). Stage
+    # phases therefore command WORLD +Y (the spawn-facing chest axis).
     return {"gravity_scale": 1.0, "upright_assist": 0.3, "max_steps": 400,
-            "target_velocity": [0.25, 0.0, 0.0]}
+            "target_velocity": [0.0, 0.25, 0.0]}
 
 
 def _sustained_phase() -> dict:
     return {"gravity_scale": 1.0, "upright_assist": 0.0, "max_steps": 400,
-            "target_velocity": [0.5, 0.0, 0.0]}
+            "target_velocity": [0.0, 0.5, 0.0]}
 
 
 DEFAULT_STAGES = (
@@ -66,10 +74,12 @@ DEFAULT_STAGES = (
           "kernel pays matching stillness, progress pays nothing.",
           400, _stand_phase(), True),
     Stage("controlled", "Controlled forward movement",
-          "Slow 0.25 m/s walking with partial upright assistance.",
+          "Slow 0.25 m/s walking along the rig's walkable axis (world +Y at "
+          "spawn) with partial upright assistance.",
           1200, _controlled_phase(), True),
     Stage("sustained", "Sustained walking",
-          "Full 0.5 m/s target, no assistance: the honest walking task.",
+          "Full 0.5 m/s target along the walkable axis, no assistance: the "
+          "honest walking task.",
           1600, _sustained_phase(), True),
     Stage("disturbance", "Recovery from disturbances",
           "Reserved: needs a measured disturbance hook in the env "

@@ -2,9 +2,10 @@
 
 Rewritten at B2: reward components now consume ENGINE MEASUREMENTS (never
 normalized observation slices), the step protocol is 5-tuple gym-style, and
-the observation is the v2 40-dim layout. The anti-exploit semantics from the
-original suite are preserved and strengthened (see test_rl_env_b2.py for the
-full B2 battery)."""
+the observation is the v3 layout (B3 task-conditioning append over v2). The
+anti-exploit semantics from the original suite are preserved and strengthened
+(see test_rl_env_b2.py for the full B2 battery, test_rl_env_b3.py for the v3
+append battery)."""
 import numpy as np
 import pytest
 
@@ -21,7 +22,7 @@ _TARGET = np.array([0.5, 0.0, 0.0])
 def test_shapes():
     env = LocoEnv()
     obs = env.reset()
-    assert obs.shape == (LocoEnv.obs_dim,) == (40,)
+    assert obs.shape == (LocoEnv.obs_dim,) == (43,)   # v3 = v2 40 + command
     act = np.zeros(LocoEnv.action_dim, dtype=np.float32)
     obs2, rew, term, trunc, info = env.step(act)
     assert obs2.shape == (LocoEnv.obs_dim,)

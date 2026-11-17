@@ -1,12 +1,13 @@
 """LocoEnv — the single authoritative locomotion RL environment (M6-B B2).
 
-Contract version 2 ("rl_env/2"): documented in full in docs/RL_ENVIRONMENT.md
+Contract version 3 ("rl_env/3"): documented in full in docs/RL_ENVIRONMENT.md
 and machine-readable via observation_layout() / action_layout(); the B5 .aipg
 manifest reproduces exactly this schema. One env, one reward pipeline (rl/
 rewards.py), one curriculum mechanism (rl/curriculum.py applying phases
 through set_phase).
 
-Observation v2 (float32[40]; v1's 35-dim layout with appended sections):
+Observation v3 (float32[43]; v3 is an APPEND-ONLY extension of v2, which was
+an APPEND-ONLY extension of v1: all v2 slices keep their meaning):
     [0:14]   joint positions, normalized (2q - lo - hi)/(hi - lo) in [-1, 1]
     [14:28]  joint velocities, normalized  qvel / 6.0 rad/s
     [28:31]  torso up-vector, world frame (unit)
@@ -14,6 +15,9 @@ Observation v2 (float32[40]; v1's 35-dim layout with appended sections):
     [34:35]  upright margin (= torso up_z, raw)
     [35:38]  torso forward (chest) axis, world frame (unit; xmat column 1)
     [38:40]  per-foot ground-support normal force / 1000.0 N (left, right)
+    [40:43]  COMMANDED target velocity v*, WORLD frame, / 5.0 m/s (B3: the
+             movement objective the reward tracks is observed; see
+             "task conditioning" in docs/RL_ENVIRONMENT.md §1.5)
 
 Action (14 normalized joints, [-1, 1]) maps to PD targets
     target = lo + (a + 1) * 0.5 * (hi - lo)
@@ -57,7 +61,7 @@ from ..world.physics import ActionError
 from .rewards import (COMPONENT_KEYS, DEFAULTS, MeasuredStep, compute_reward,
                       heading_progress_raw)
 
-CONTRACT_VERSION = 2
+CONTRACT_VERSION = 3
 
 # Fixed normalisation constants (rl.observation in config; documented). Vel
 # scales come from measured scripting envelopes: knee peak 4.83 rad/s during
@@ -69,7 +73,7 @@ _CONTACT_FORCE_SCALE = 1000.0  # N per obs unit
 
 
 class LocoEnv:
-    obs_dim = 14 + 14 + 3 + 3 + 1 + 3 + 2   # 40, layout v2 (see module docstring)
+    obs_dim = 14 + 14 + 3 + 3 + 1 + 3 + 2 + 3   # 43, layout v3 (v2 40 + command)
     action_dim = 14
     contract_version = CONTRACT_VERSION
 
@@ -534,8 +538,13 @@ class LocoEnv:
         cl, cr = self._foot_contacts_n()
         contacts = (np.array([cl, cr], dtype=np.float32)
                     / np.float32(self._contact_force_scale))
+        # task conditioning (v3, APPEND-only): the commanded target velocity the
+        # reward tracks, world frame, same scale as the observed torso velocity
+        # (root_vel_scale) so commanded and measured velocities are comparable
+        command = (self._target_vel.astype(np.float32)
+                   / np.float32(self._root_vel_scale))
         obs = np.concatenate([joint_pos, joint_vel, torso_up, torso_vel,
-                              upright_margin, torso_fwd, contacts])
+                              upright_margin, torso_fwd, contacts, command])
         return obs.astype(np.float32)
 
     # ------------------------------------------------------------ diagnostics
@@ -596,6 +605,11 @@ class LocoEnv:
                 {"name": "foot_ground_force", "slice": [38, 40], "unit": "N",
                  "note": f"ground-support normal force (|nz|>0.7, non-rig contacts), "
                          f"/ {self._contact_force_scale} (left, right)"},
+                {"name": "command", "slice": [40, 43], "unit": "m/s",
+                 "note": f"COMMANDED target velocity v* the reward tracks, WORLD "
+                         f"frame, / {self._root_vel_scale} (same scale as "
+                         f"torso_lin_vel); task conditioning (B3); APPEND-only "
+                         f"slice over v2"},
             ],
             "joint_order": list(self.joint_names),
             "joint_ranges_rad": {n: [float(lo), float(hi)]
@@ -605,8 +619,10 @@ class LocoEnv:
                 "joint_vel": f"/ {_JOINT_VEL_SCALE}",
                 "root_vel": f"/ {_ROOT_VEL_SCALE}",
                 "contact_force": f"/ {_CONTACT_FORCE_SCALE}",
+                "command": f"/ {_ROOT_VEL_SCALE} (root_vel_scale; matches torso_lin_vel)",
                 "unit_vectors_up_fwd_and_margin": "none",
             },
+            "command_frame": "world",
             "fault_semantics": {
                 "non_finite_observation": "transition FAULTED, zeroed, terminated",
                 "mjwarn_during_window": "transition FAULTED, zeroed, terminated",

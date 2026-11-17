@@ -1,0 +1,330 @@
+"""PPO trainer / evaluator CLI for the locomotion environment (M6-B stage B3).
+
+Drives ONLY the authoritative stack: playground/rl/env.py (LocoEnv),
+playground/rl/rewards.py, playground/rl/curriculum.py, playground/rl/ppo.py
+(trainer) and playground/rl/checkpoint.py. There is no second training engine.
+
+Commands
+--------
+  train   Run a seeded PPO training run (fresh or resumed from a checkpoint).
+          Progress -> <out>/<name>/progress.jsonl; periodic + final checkpoints,
+          run config echo and a final result summary.
+  eval    Evaluate a checkpoint policy against the zero-action control and the
+          scripted gait benchmark under MATCHED held-out conditions.
+  baselines  The matched B3 baselines: fresh untrained policy, zero action,
+          gait benchmark (same seeds, horizon, stage phase).
+
+Run from the repository root, e.g.:
+  .venv/Scripts/python.exe scripts/rl_ppo.py train --name b3_sustained_run1
+  .venv/Scripts/python.exe scripts/rl_ppo.py eval --checkpoint <ckpt.json>
+  .venv/Scripts/python.exe scripts/rl_ppo.py baselines --stage sustained
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+import numpy as np  # noqa: E402
+
+from playground.config import load_config  # noqa: E402
+from playground.rl import eval as rl_eval  # noqa: E402
+from playground.rl.checkpoint import (CheckpointError, load_checkpoint,  # noqa: E402
+                                      save_checkpoint)
+from playground.rl.curriculum import DEFAULT_STAGES, Curriculum  # noqa: E402
+from playground.rl.env import LocoEnv  # noqa: E402
+from playground.rl.ppo import (PPOConfig, PPOError, PPOTrainer,  # noqa: E402
+                               TanhGaussianActor, Critic)
+
+
+def _rl_cfg(cfg):
+    return dict(cfg.get("rl") or {})
+
+
+def _run_dir(cfg, name):
+    out = Path(cfg.get("rl", {}).get("ppo_run", {}).get("out_root")
+               or (ROOT / "experiments" / "rl"))
+    d = out / name
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _parse_stage_budgets(s: str | None):
+    if not s:
+        return None
+    out = {}
+    for part in s.split(","):
+        k, v = part.split("=")
+        out[k.strip()] = int(v)
+    return out
+
+
+def _make_env_and_curriculum(cfg):
+    env = LocoEnv(cfg={"agent_body": {"type": "humanoid"},
+                       **(_rl_cfg(cfg) or {})})
+    cur = Curriculum(env)            # binds + applies the standing stage
+    return env, cur
+
+
+# --------------------------------------------------------------------- train
+def cmd_train(a):
+    cfg = load_config(None, overrides={})
+    rl = _rl_cfg(cfg)
+    run = dict(rl.get("ppo_run") or {})
+    total_steps = a.steps if a.steps is not None else int(run.get("total_steps", 2_000_000))
+    seed = a.seed if a.seed is not None else int(run.get("seed", 20261117))
+    cp_freq = int(run.get("checkpoint_freq", 200_000))
+    stage_budgets = _parse_stage_budgets(a.stage_budget) if a.stage_budget \
+        else run.get("stage_budgets")
+    ppo_cfg = PPOConfig.from_rl_cfg(rl)
+    if a.ent_coef is not None:
+        ppo_cfg.ent_coef = float(a.ent_coef)
+    if a.lr is not None:
+        ppo_cfg.lr = float(a.lr)
+    if a.rollout_steps is not None:
+        ppo_cfg.rollout_steps = int(a.rollout_steps)
+
+    torch = __import__("torch")
+    torch.set_num_threads(1)     # tiny MLPs: thread pool overhead dominates
+    torch.manual_seed(seed)
+
+    env, cur = _make_env_and_curriculum(cfg)
+    out = Path(a.out) if a.out else _run_dir(cfg, a.name)
+    out.mkdir(parents=True, exist_ok=True)
+
+    if a.resume:
+        ck = load_checkpoint(a.resume, env=env)
+        actor, critic = ck["actor"], ck["critic"]
+        trainer_state = dict(ck["rng"])
+        from playground.rl.checkpoint import apply_rng
+        apply_rng(ck["rng"])
+        meta_steps = int(trainer_state.get("total_valid_steps", 0))
+        print(f"resumed from {a.resume}: step {meta_steps}", flush=True)
+        if total_steps <= meta_steps:
+            total_steps = meta_steps + ppo_cfg.rollout_steps
+    else:
+        actor = TanhGaussianActor(env.obs_dim, env.action_dim,
+                                  hidden=ppo_cfg.hidden,
+                                  log_std_init=ppo_cfg.log_std_init, seed=seed)
+        critic = Critic(env.obs_dim, hidden=ppo_cfg.hidden, seed=seed)
+        trainer_state = None
+
+    trainer = PPOTrainer(env, actor, critic, ppo_cfg, seed=seed,
+                         total_steps=total_steps, stage_budgets=stage_budgets,
+                         curriculum=cur)
+    if a.resume:
+        # restore optimiser + rng + counters + CURRICULUM STAGE for exact
+        # continuation (the loader verifies the contract fingerprint;
+        # curriculum select() re-applies the saved stage phase, which is the
+        # documented non-cumulative rewrite — a semantically exact no-op)
+        trainer.opt_a = ck["optimizer_actor"]
+        trainer.opt_c = ck["optimizer_critic"]
+        trainer.load_rng_state(trainer_state)
+        saved_cur = ck["meta"].get("curriculum") or {}
+        if "index" in saved_cur:
+            cur.select(int(saved_cur["index"]))
+            print(f"  curriculum restored to stage '{cur.stage.id}' "
+                  f"(index {cur.index})", flush=True)
+        else:
+            print("  WARNING: checkpoint carries no curriculum record; "
+                  "training resumes from stage 0 (standing)", flush=True)
+
+    progress_path = out / "progress.jsonl"
+    pf = progress_path.open("a", encoding="utf-8")
+    last_ckpt = {"step": trainer.total_valid_steps}
+
+    def _checkpoint(tag):
+        cp = save_checkpoint(out / tag, actor=actor, critic=critic,
+                             optimizer_actor=trainer.opt_a,
+                             optimizer_critic=trainer.opt_c, env=env,
+                             cfg_dict=ppo_cfg.as_dict(), seed=seed,
+                             trainer_state=trainer.rng_state(),
+                             extra_meta={"stage": cur.stage.id,
+                                         "run_total_steps": total_steps,
+                                         "run": a.name,
+                                         "curriculum": {"index": cur.index,
+                                                        "stage_id": cur.stage.id},
+                                         "training_steps": trainer.total_valid_steps})
+        print(f"  checkpoint: {cp['path']} ({cp['bytes']} bytes)", flush=True)
+        return cp
+
+    def on_iteration(rec):
+        pf.write(json.dumps(rec) + "\n")
+        pf.flush()
+        if rec["total_valid_steps"] - last_ckpt["step"] >= cp_freq:
+            last_ckpt["step"] = rec["total_valid_steps"]
+            _checkpoint(f"ckpt_{rec['total_valid_steps']:09d}.json")
+
+    trainer.on_iteration = on_iteration
+    t0 = time.perf_counter()
+    print(f"[train] {a.name}: total_steps={total_steps} seed={seed} "
+          f"rollout={ppo_cfg.rollout_steps} ent_coef={ppo_cfg.ent_coef} "
+          f"stages={stage_budgets}", flush=True)
+    summary = trainer.train()
+    wall = time.perf_counter() - t0
+    final = _checkpoint("ckpt_final.json")
+    (out / "config.json").write_text(json.dumps({
+        "ppo": ppo_cfg.as_dict(), "total_steps": total_steps, "seed": seed,
+        "stage_budgets": stage_budgets,
+        "env_contract_version": env.contract_version,
+        "obs_dim": env.obs_dim, "action_dim": env.action_dim,
+        "started_from_checkpoint": a.resume or None,
+    }, indent=2), encoding="utf-8")
+    (out / "result.json").write_text(json.dumps({
+        **summary, "wall_s": round(wall, 1),
+        "final_checkpoint": final["path"],
+        "faulted_windows_total": trainer.faulted_windows_total,
+        "rollout_rejections": trainer.rollout_rejections,
+    }, indent=2), encoding="utf-8")
+    print(json.dumps({**summary, "wall_s": round(wall, 1)}, indent=2), flush=True)
+
+
+# ----------------------------------------------------------------------- eval
+def cmd_eval(a):
+    policy_eval_checkpoint(a)
+
+
+def policy_eval_checkpoint(a):
+    cfg = load_config(None, overrides={})
+    rl = _rl_cfg(cfg)
+    torch = __import__("torch")
+    torch.set_num_threads(1)
+    env = LocoEnv(cfg={"agent_body": {"type": "humanoid"}, **rl})
+    ck = load_checkpoint(a.checkpoint, env=env)
+    actor, meta = ck["actor"], ck["meta"]
+    episodes = a.episodes or rl_eval.DEFAULT_EPISODES
+    seed_base = a.seed_base or rl_eval.EVAL_SEED_BASE
+    max_steps = int(rl.get("max_episode_steps", 400))
+    phase = rl_eval._stage_phase_dict(Curriculum(), a.stage)
+    out_dir = Path(a.out) if a.out else Path(a.checkpoint).parent
+    results = {"checkpoint": a.checkpoint, "stage": a.stage,
+               "episodes": episodes, "seed_base": seed_base,
+               "max_steps": max_steps, "meta_stage": meta.get("stage"),
+               "training_steps": meta.get("training_steps")}
+    tables = []
+    t_policy = rl_eval.eval_policy(actor, env, episodes=episodes, seed_base=seed_base,
+                                   phase=phase, max_steps=max_steps)
+    results["policy"] = t_policy["summary"]
+    t_zero = rl_eval.eval_zero(env, episodes=episodes, seed_base=seed_base,
+                               phase=phase, max_steps=max_steps)
+    results["zero_action"] = t_zero["summary"]
+    gait_heading = a.gait_heading if a.gait_heading is not None else 0.0
+    t_gait = rl_eval.eval_gait(env, episodes=1, seed_base=seed_base, phase=phase,
+                               heading=gait_heading, max_steps=max_steps)
+    results["gait_benchmark"] = t_gait["summary"]
+    results["gait_heading_deg"] = gait_heading
+
+    def row(label, s):
+        d = s.get("axis_displacement_m") or {}
+        ns = s.get("net_displacement_m") or {}
+        up = s.get("upright_fraction") or {}
+        return {"policy": label,
+                "axis_disp_mean_m": round(d.get("mean", 0.0), 4),
+                "axis_disp_std_m": round(d.get("std", 0.0), 4),
+                "net_disp_mean_m": round(ns.get("mean", 0.0), 4),
+                "upright_mean": round(up.get("mean", 0.0), 4),
+                "falls_total": s.get("falls_total"),
+                "faulted_total": s.get("faulted_windows_total"),
+                "completed": s.get("completed_truncated")}
+    tables = [row("trained_policy", results["policy"]),
+              row("zero_action", results["zero_action"]),
+              row(f"gait(h={gait_heading:.0f})", results["gait_benchmark"])]
+    print(json.dumps({"evaluation": tables, "summary_full": {
+        k: results[k] for k in ("policy", "zero_action", "gait_benchmark")}},
+        indent=2), flush=True)
+    outp = out_dir / (f"eval_{a.stage}_s{seed_base}_{episodes}ep.json")
+    outp.write_text(json.dumps(results, indent=2), encoding="utf-8")
+    print(f"written: {outp}", flush=True)
+
+
+# ------------------------------------------------------------------ baselines
+def cmd_baselines(a):
+    cfg = load_config(None, overrides={})
+    rl = _rl_cfg(cfg)
+    torch = __import__("torch")
+    torch.set_num_threads(1)
+    env = LocoEnv(cfg={"agent_body": {"type": "humanoid"}, **rl})
+    episodes = a.episodes or rl_eval.DEFAULT_EPISODES
+    seed_base = a.seed_base or rl_eval.EVAL_SEED_BASE
+    max_steps = int(rl.get("max_episode_steps", 400))
+    phase = rl_eval._stage_phase_dict(Curriculum(), a.stage)
+    results = {"stage": a.stage, "episodes": episodes, "seed_base": seed_base,
+               "max_steps": max_steps}
+    print(f"[baselines] stage={a.stage} episodes={episodes} "
+          f"seeds={seed_base}+0..{episodes - 1}", flush=True)
+    t_fresh = rl_eval.eval_fresh_actor(env, episodes=episodes, seed_base=seed_base,
+                                       phase=phase, max_steps=max_steps)
+    results["fresh_untrained"] = t_fresh["summary"]
+    t_zero = rl_eval.eval_zero(env, episodes=episodes, seed_base=seed_base,
+                               phase=phase, max_steps=max_steps)
+    results["zero_action"] = t_zero["summary"]
+    for heading in (0.0, 90.0):
+        t_g = rl_eval.eval_gait(env, episodes=1, seed_base=seed_base, phase=phase,
+                                heading=heading, max_steps=max_steps)
+        results[f"gait_heading_{int(heading)}"] = t_g["summary"]
+    for k, v in results.items():
+        if k in ("stage", "episodes", "seed_base", "max_steps"):
+            continue
+        d = (v.get("axis_displacement_m") or {})
+        print(f"  {k:22s} axis_disp mean {d.get('mean', 0.0):+.4f} "
+              f"std {d.get('std', 0.0):.4f} | falls {v.get('falls_total')} "
+              f"faults {v.get('faulted_windows_total')} completed {v.get('completed_truncated')}",
+              flush=True)
+    outp = Path(a.out) if a.out else _run_dir(cfg, "baselines")
+    outp.mkdir(parents=True, exist_ok=True)
+    dest = outp / f"baselines_{a.stage}_s{seed_base}_{episodes}ep.json"
+    dest.write_text(json.dumps(results, indent=2), encoding="utf-8")
+    print(f"written: {dest}", flush=True)
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+    t = sub.add_parser("train")
+    t.add_argument("--name", required=True)
+    t.add_argument("--steps", type=int, default=None)
+    t.add_argument("--seed", type=int, default=None)
+    t.add_argument("--rollout-steps", type=int, default=None)
+    t.add_argument("--ent-coef", type=float, default=None)
+    t.add_argument("--lr", type=float, default=None)
+    t.add_argument("--stage-budget", default=None,
+                   help="e.g. standing=400000,controlled=500000")
+    t.add_argument("--resume", default=None)
+    t.add_argument("--out", default=None)
+    e = sub.add_parser("eval")
+    e.add_argument("--checkpoint", required=True)
+    e.add_argument("--stage", default="sustained")
+    e.add_argument("--episodes", type=int, default=None)
+    e.add_argument("--seed-base", type=int, default=None)
+    e.add_argument("--gait-heading", type=float, default=0.0)
+    e.add_argument("--out", default=None)
+    b = sub.add_parser("baselines")
+    b.add_argument("--stage", default="sustained")
+    b.add_argument("--episodes", type=int, default=None)
+    b.add_argument("--seed-base", type=int, default=None)
+    b.add_argument("--out", default=None)
+    args = p.parse_args(argv)
+    try:
+        if args.cmd == "train":
+            cmd_train(args)
+        elif args.cmd == "eval":
+            cmd_eval(args)
+        elif args.cmd == "baselines":
+            cmd_baselines(args)
+    except CheckpointError as exc:
+        print(f"CHECKPOINT ERROR: {exc}", file=sys.stderr)
+        return 2
+    except PPOError as exc:
+        print(f"PPO ERROR: {exc}", file=sys.stderr)
+        return 3
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
