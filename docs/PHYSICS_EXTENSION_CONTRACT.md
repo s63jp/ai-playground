@@ -6,7 +6,7 @@ wins wherever the two disagree.
 
 ## 0. Ground rules (every package)
 
-- Project root: `C:/Users/jamie/Projects/ai-playground`. Python: `./.venv/Scripts/python.exe`.
+- Project root: this repository checkout. Python: `./.venv/Scripts/python.exe`.
 - pytest 9 + `-q` prints **no final count line**. Pass/fail = exit code; quote the `[ 100% ]`
   progress line from your runs as evidence.
 - **No git commands at all** (no commit/stash/checkout). The parent handles git.
@@ -31,7 +31,7 @@ wins wherever the two disagree.
 - **No ports/servers**: never bind ports or start the dashboard from tests. Test servers
   through `TestClient` / in-process fixtures like existing tests do.
 - **Machine-independent tests**: derive all repo paths from `__file__` (hardcoded
-  `C:/Users/jamie/...` breaks CI and is a regression test target).
+  a hardcoded absolute machine path breaks CI and is a regression test target).
 - **Free-will contract for agent-facing text** (user mandate): no tool description, notice or
   result string may steer agents toward actions or objectives. Facts and "your choice" framings
   only. If you add a tool description, follow existing schema.py wording style.
