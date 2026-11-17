@@ -163,6 +163,19 @@ for the full catalogue):
   only from real MuJoCo rollouts (`playground/rl/ppo.py`,
   `scripts/rl_ppo.py train`, seeded checkpoints in `experiments/rl/`). The
   scripted gait remains a benchmark, never a learned policy.
+* **Live neural training** (`playground/rl_live/`, *this branch*; see
+  [docs/LIVE_TRAINING.md](docs/LIVE_TRAINING.md)): a viewer/controls surface
+  over the ONE authoritative stack — "Live neural training" dashboard tab
+  (tab mounts via `register_rl_live_routes(app, cfg)`, gateway convention)
+  and an optional standalone sidecar (`-m playground.rl_live.server` on
+  127.0.0.1:8766). `FrameTapEnv` forwards every trainer call unchanged to
+  the real `LocoEnv` (identity- and coupling-tested: viewer frames are the
+  trained env's own `d.xpos`/`d.xquat`, no second simulation); telemetry
+  follows `progress.jsonl` read-only; pause/stop ride the trainer's
+  `should_stop` at rollout boundaries; "save brain" writes B3's
+  `rl_checkpoint/1` format while paused/stopped. It starts (only) when the
+  B3 trainer modules are present — a tree without them surfaces the honest
+  `trainer_unavailable` state.
 
 ---
 

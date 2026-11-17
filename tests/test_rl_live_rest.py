@@ -53,10 +53,23 @@ def test_spec_404_until_started(env):
     assert r.json()["available"] is False
 
 
-@pytest.mark.skipif(interop.trainer_available(),
-                    reason="B3 modules present on this tree")
-def test_start_refuses_without_trainer(env):
-    client, handle, _tmp = env
+def test_start_refuses_without_trainer(tmp_path, monkeypatch):
+    """The dashboard mount refuses start while the trainer layers are
+    unavailable. Post-B3-merge the modules exist, so unavailability is
+    FORCED through the probe (still a real production state when torch is
+    missing); the honest-refusal contract stays covered instead of skipped."""
+    monkeypatch.setattr("playground.rl_live.interop.trainer_available",
+                        lambda: False)
+    b3p = tmp_path / "b3" / "progress.jsonl"
+    b3p.parent.mkdir(parents=True, exist_ok=True)
+    b3p.write_text(json.dumps({"iteration": 1, "total_valid_steps": 2048,
+                               "stage": "standing"}) + "\n", encoding="utf-8")
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    register_rl_live_routes(app, {"rl_live": {"b3_progress": str(b3p)}},
+                            out_root=tmp_path / "runs_unavailable",
+                            frame_hz=10_000)
+    client = TestClient(app)
     r = client.post("/api/rl_live/start", json={})
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "trainer_unavailable"

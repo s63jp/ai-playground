@@ -1,6 +1,7 @@
 """The rl_live sidecar server: endpoints, SSE fanout, static guards, and the
-read-only B3 telemetry view (torch-free; trainer availability-dependent tests
-are skipped on trees that already carry the B3 modules)."""
+read-only B3 telemetry view (torch-free; trainer-unavailability tests FORCE
+the unavailable state through the probe, which is still a real production
+state when torch is missing)."""
 from __future__ import annotations
 
 import json
@@ -177,9 +178,13 @@ def test_sse_stream_receives_frames_and_b3(http, app):
         s.close()
 
 
-def test_start_refuses_without_trainer(http, tmp_path):
-    """A session on the DEFAULT interop path refuses to start on a tree that
-    lacks the B3 modules (the honest-foundations state)."""
+def test_start_refuses_without_trainer(http, tmp_path, monkeypatch):
+    """The default interop path refuses to start while the trainer layers
+    are UNAVAILABLE. Post-B3-merge the modules exist, so unavailability is
+    FORCED through the probe (still a real production state when torch is
+    missing) — the honest-refusal contract stays covered instead of skipped."""
+    monkeypatch.setattr("playground.rl_live.interop.trainer_available",
+                        lambda: False)
     session = LiveBrainSession(root=tmp_path / "runs_default")   # default factory
     other = App(session=session, bus=Bus(frame_hz=10_000),
                 b3=B3Telemetry(tmp_path / "nonexistent.jsonl"),
@@ -242,8 +247,17 @@ def test_real_session_controls_over_http(app, http):
     assert spec.get("spec_version") == 1
     st = json.loads(_get(http, "/api/rl_live/status"))
     assert st["session"]["config"]["name"] == "http_walk"
-    tele = json.loads(_get(http, "/api/rl_live/telemetry.json?limit=5"))["records"]
-    assert tele and tele[0]["iteration"] >= 1
+    # the first iteration record arrives a beat after "running": wait for it
+    # (a start/pause race, not an availability fact)
+    first = None
+    t0 = time.time()
+    while time.time() - t0 < 10.0:
+        tele = json.loads(_get(http, "/api/rl_live/telemetry.json?limit=5"))["records"]
+        if tele and tele[0]["iteration"] >= 1:
+            first = tele[0]
+            break
+        time.sleep(0.05)     # the fake trainer advances 10 steps/10 ms
+    assert first is not None, "fake trainer produced no iteration record in 10 s"
     app.session.pause()
     assert wait_state(app.session, "paused")
     save = json.loads(_post(http, "/api/rl_live/save", {"tag": "peek"}))

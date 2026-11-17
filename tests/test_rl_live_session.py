@@ -93,10 +93,12 @@ def wait_until(pred, timeout=8.0):
 
 
 # ------------------------------------------------------------------ tests
-@pytest.mark.skipif(interop.trainer_available(),
-                    reason="B3 modules present on this tree; the "
-                           "unavailable-state path does not apply")
-def test_unavailable_tree_surfaces_clearly(tmp_path):
+def test_unavailable_tree_surfaces_clearly(tmp_path, monkeypatch):
+    """Post-B3-merge the modules exist, so unavailability is FORCED through
+    the availability probe (still a real production state when torch is
+    missing); the honest error-surfacing contract stays covered."""
+    monkeypatch.setattr("playground.rl_live.interop.trainer_available",
+                        lambda: False)
     s = LiveBrainSession(root=tmp_path / "rl_live")
     assert s.state == "error"
     st = s.status()["session"]
