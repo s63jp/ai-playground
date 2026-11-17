@@ -350,9 +350,12 @@ modes the backend actually runs.
 13 shots→13 hits, report `experiments/arena_paint_demo_report.json`) and dashboard-
 launched duel #124/#125 (scripted combatants end-to-end through
 `POST /api/run/arena` → job `15c2a1d1` → Watch & Replay); match #126/#127
-re-verified post-fix. Replay of #122/#127 renders markers at the body poses,
-attribution-coloured pellets (14), 16 trail lines, and paint decals at the
-recorded contact points (browser-verified with the live server).
+re-verified post-fix AND produced the first measured **KO arbitration**
+(`end_reason="incapacitated"`, winner Red 8–5, 9 shots → 8 hits dealt; report
+`arena_paint_demo_report.json`). Replay of #122/#127 renders markers at the
+body poses, attribution-coloured pellets (14), 16 trail lines, and paint
+decals at the recorded contact points (browser-verified with the live
+server).
 
 **Gate (M5.5 close):** full suite ×2 consecutive: run 1 `run_tests.sh`
 **612 passed / 0 failed / 3 environmental skips of 615** (11 new
