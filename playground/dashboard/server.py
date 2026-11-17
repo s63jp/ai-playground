@@ -256,7 +256,7 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
     def session_detail(sid: int):
         sess(sid)
         s = session_summary(db, sid)
-        s.pop("config", None)
+        s["arena_context"] = (s.pop("config", None) or {}).get("arena")
         s["frames"] = db.frame_count(sid)
         return s
 
@@ -1388,6 +1388,170 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
             except Exception:
                 pass
         return _start_run_job("compare", job)
+
+    # ---------------------------------------------------------------- run modes: arena + task (M5.5)
+    # Modes the BACKEND genuinely supports, for the Run & models selector. Grounded in
+    # session/runner.py's mode dispatch (exploration/arena_*), session/benchmark.run_task
+    # (mode='benchmark') and arena/factories.run_arena_match + mode_for().
+    RUN_MODES = [
+        {"id": "exploration", "label": "Free play (exploration)",
+         "note": "One agent roaming the island with the full toolset, memory on."},
+        {"id": "benchmark", "label": "Task run (single agent)",
+         "note": "One agent on a fixed benchmark task whose result the engine verifies."},
+        {"id": "arena_solo", "label": "Arena duel (1v1)",
+         "note": "Two combatants, one per team, real paintball physics and scoring."},
+        {"id": "arena_coop", "label": "Arena team match",
+         "note": "Two teams; teammates share a line, friendly fire stays off by default."},
+    ]
+
+    def _equipment_options() -> list[dict]:
+        from ..combat.equipment import EQUIPMENT
+        out: list[dict] = []
+        for eid, es in sorted(EQUIPMENT.items()):
+            entry = {"id": eid, "name": es.get("name", eid), "combat_class": es.get("combat_class"),
+                     "grip": es.get("grip"), "dims_m": list(es.get("dims_m") or []),
+                     "ammo_capacity": es.get("ammo_capacity")}
+            pc = es.get("projectile_cfg")
+            if pc:
+                # the launcher's real projectile (radius drives the pellet mesh size)
+                entry["projectile"] = {"speed": pc.get("speed"), "radius": pc.get("radius"),
+                                       "colour": pc.get("colour"), "restitution": pc.get("restitution")}
+            out.append(entry)
+        return out
+
+    @app.get("/api/run/modes")
+    def run_modes():
+        """Run-mode registry for the Run & models selector: only modes the backend runs,
+        plus the real equipment catalogue (M5 factories validate against the same one)."""
+        return {"modes": RUN_MODES, "equipment": _equipment_options(),
+                "limits": {"duration_s": [2, 600], "pellets": [1, 96], "score_target": [1, 999],
+                           "combatants_per_team": [1, 4], "teams": 2}}
+
+    @app.post("/api/run/arena")
+    def run_arena_api(body: dict = Body(...)):
+        """Launch a REAL arena match (M5 production factories) as a run job.
+
+        Body: {"mode": "arena_solo"|"arena_coop", "name": str?, "rules": {"duration_s", "pellets",
+        "score_target", "friendly_fire"}, "teams": [{"name", "agents": [{"id", "adapter", "model"}],
+        "equipment": [<EQUIPMENT id>]}]}. The job runs run_arena_match end-to-end; every
+        combatant session is recorded exactly like a CLI match."""
+        from ..arena.factories import mode_for, run_arena_match
+        from ..combat.equipment import EQUIPMENT
+        from ..agents.adapters import make_adapter
+
+        mode = str(body.get("mode") or "")
+        if mode not in ("arena_solo", "arena_coop"):
+            raise HTTPException(400, f"mode must be 'arena_solo' or 'arena_coop' (got '{mode}').")
+        teams_in = body.get("teams")
+        if not isinstance(teams_in, list) or len(teams_in) != 2:
+            raise HTTPException(400, "arena runs need exactly two teams")
+        limits = {"duration_s": (2, 600), "pellets": (1, 96), "score_target": (1, 999)}
+        rules_in = body.get("rules") or {}
+        rules: dict = {}
+        for key, (lo, hi) in limits.items():
+            v = float(rules_in.get(key, {"duration_s": 60, "pellets": 24, "score_target": 10}[key]))
+            if not (lo <= v <= hi):
+                raise HTTPException(400, f"{key} out of range: {v} (allowed {lo}..{hi})")
+            rules[key] = int(v) if key != "duration_s" else round(v, 2)
+        rules["friendly_fire"] = bool(rules_in.get("friendly_fire", False))
+
+        match_cfg: dict = {"rules": rules, "teams": []}
+        adapter_for_agent: dict[str, tuple[str, str | None]] = {}
+        for ti, team in enumerate(teams_in):
+            if not isinstance(team, dict):
+                raise HTTPException(400, f"team {ti} must be an object")
+            name = str(team.get("name") or "").strip() or (f"Team{ti + 1}")
+            members = team.get("agents") or [{}]
+            if not (1 <= len(members) <= 4):
+                raise HTTPException(400, f"team '{name}' needs 1-4 agents (mode '{mode}': "
+                                         "arena_solo requires exactly one per team)")
+            equipment = [str(e) for e in (team.get("equipment") or [])]
+            unknown = [e for e in equipment if e not in EQUIPMENT]
+            if unknown:
+                raise HTTPException(400, f"unknown equipment for team '{name}': {unknown}; "
+                                         f"known: {sorted(EQUIPMENT)}")
+            agents_out: list[dict] = []
+            for ai, acfg in enumerate(members):
+                aid = str(acfg.get("id") or "").strip()
+                if not aid:
+                    raise HTTPException(400, f"team '{name}' agent {ai + 1}: 'id' is required")
+                if not AGENT_ID_RE.match(aid):
+                    raise HTTPException(400, f"invalid combatant id '{aid}': 1-40 chars "
+                                             "a-z 0-9 '_' '-' (must start alphanumeric)")
+                adapter_name = str(acfg.get("adapter") or "").strip() or "scripted"
+                if adapter_name not in set((cfg.get("adapters") or {})):
+                    raise HTTPException(400, f"combatant '{aid}': unknown adapter '{adapter_name}'. "
+                                             f"Configured: {sorted(cfg.get('adapters') or {})}")
+                model = str(acfg.get("model") or "").strip() or None
+                adapter_for_agent[aid] = (adapter_name, model)
+                agents_out.append({"id": aid})
+            match_cfg["teams"].append({"name": name, "agents": agents_out, "equipment": equipment})
+
+        resolved_mode = mode_for(match_cfg["teams"])
+        if resolved_mode != mode:
+            raise HTTPException(400, f"team layout is a {resolved_mode} match, not '{mode}': "
+                                     "arena_solo needs exactly 2 teams of 1 combatant")
+        match_name = str(body.get("name") or "").strip()
+        if match_name and not re.match(r"^[a-zA-Z0-9_\-]{1,40}$", match_name):
+            raise HTTPException(400, "name must be 1-40 chars of letters, digits, '_' or '-'")
+
+        def adapter_factory(agent_id: str, plan_item: dict):
+            aname, amodel = adapter_for_agent.get(agent_id, ("scripted", None))
+            return make_adapter(cfg, aname, model=amodel)
+
+        def job(state):
+            result = run_arena_match(match_cfg, adapter_factory, db=db, root_cfg=cfg,
+                                     match_name=match_name or "dashboard")
+            payload = {
+                "mode": resolved_mode, "end_reason": result.get("end_reason"),
+                "winner": result.get("winner"), "duration": result.get("duration"),
+                "timeout": bool(result.get("timeout")),
+                "team_stats": result.get("team_stats"), "agent_stats": result.get("agent_stats"),
+                "sessions": [dict(s) for s in (result.get("sessions") or [])],
+                "timeline_events": len(result.get("timeline") or []),
+                "timeline": [t for t in (result.get("timeline") or [])
+                             if isinstance(t, dict)][:200],
+            }
+            state["result"] = payload
+            state["progress"].append({"sessions": payload["sessions"]})
+
+        return _start_run_job("arena", job)
+
+    @app.post("/api/run/benchmark")
+    def run_benchmark_api(body: dict = Body(...)):
+        """Launch ONE benchmark task session as a run job (the backend's real single-agent
+        task mode: session/benchmark.run_task, with the engine verifying the result)."""
+        from ..agents.adapters import make_adapter
+        from ..session.benchmark import TASKS, run_task
+        task_id = str(body.get("task_id") or "")
+        if task_id not in TASKS:
+            raise HTTPException(400, f"unknown task_id; available: {sorted(TASKS)}")
+        agent_id = str(body.get("agent_id") or "").strip()
+        if not AGENT_ID_RE.match(agent_id):
+            raise HTTPException(400, "agent_id is required: 1-40 chars of a-z, 0-9, '_' or '-'")
+        adapter_name = str(body.get("adapter") or "").strip() or "scripted"
+        if adapter_name not in set((cfg.get("adapters") or {})):
+            raise HTTPException(400, f"unknown adapter '{adapter_name}'. "
+                                     f"Configured: {sorted(cfg.get('adapters') or {})}")
+        model = str(body.get("model") or "").strip() or None
+
+        def job(state):
+            from ..memory import MemoryStore
+            run_id = db.x("INSERT INTO benchmark_runs(label,kind,created_at,params_json) "
+                          "VALUES(?,?,?,?)",
+                          (f"bench:{agent_id}:{task_id}", "single", time.time(),
+                           json.dumps({"agent_id": agent_id, "task_id": task_id,
+                                       "adapter": adapter_name, "model": model})))
+            task = TASKS[task_id]
+            mem = MemoryStore(memory_root(cfg), agent_id, cfg, db=db)
+            row = run_task(cfg, db, task, agent_id,
+                           make_adapter(cfg, adapter_name, model=model), mem, run_id,
+                           "A", "experienced")
+            state["result"] = {"run_id": run_id, **row}
+            state["progress"].append({"session_id": row["session_id"], "task_id": task_id,
+                                      "action_count": row.get("action_count")})
+
+        return _start_run_job("benchmark", job)
 
     # ---------------------------------------------------------------- dashboard
     app.mount("/static", StaticFiles(directory=STATIC), name="static")

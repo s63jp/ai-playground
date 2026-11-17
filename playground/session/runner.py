@@ -223,9 +223,15 @@ def run_session(cfg: dict, db, agent_id: str, adapter: Adapter, mode: str = "exp
         db.update_session(sid, status="running")
     else:
         number = db.next_session_number(agent_id, mode)
+        # Session config snapshot; arena matches add their manifest (teams/items/pellets
+        # + this combatant's own team context) so the dashboard can render the match
+        # with real attribution instead of grey primitives (M5.5).
+        recorded_cfg = {k: cfg[k] for k in ("world", "agent_body", "rules", "session", "memory")}
+        if arena_context:
+            recorded_cfg["arena"] = arena_context
         sid = db.create_session(agent_id=agent_id, mode=mode, session_number=number, label=label,
                                 adapter=adapter.name, model=adapter.model, config_hash=config_hash(cfg),
-                                config_json={k: cfg[k] for k in ("world", "agent_body", "rules", "session", "memory")},
+                                config_json=recorded_cfg,
                                 memory_dir=str(memory.dir),
                                 budget_json={"minutes": s_cfg["duration_minutes"], "max_steps": s_cfg.get("max_steps")},
                                 **(extra or {}))

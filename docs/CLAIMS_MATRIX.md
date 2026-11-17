@@ -303,3 +303,60 @@ runs recorded only with holding combatants (no live coop combat); the arena
 world cfg passthrough of match `arena` geometry is spawn/layout keys only;
 `look_around`'s new `position` field is additive and the bearing/distance
 fields remain for older consumers.
+
+## M5.5 — CLOSED (2026-11-17 evening, evidence-backed): arena visual polish + dashboard run modes
+
+Presentation and integration milestone over M5 (no redesign; no physics changes):
+every new pixel is driven by recorded data, and Run & Models now launches the
+modes the backend actually runs.
+
+- **Records:** every arena session now stores its match manifest —
+  `arena/factories.py` passes `arena_context.match` {name, mode, teams,
+  items(id→EQUIPMENT id), pellets} through `run_session`, which records it in
+  the session `config_json` (`arena` key — additive; free-play sessions
+  unchanged); `/api/sessions/{sid}` surfaces it as `arena_context`.
+- **Run modes:** `GET /api/run/modes` serves the four backend-genuinely-supported
+  modes (exploration / benchmark / arena_solo / arena_coop — grounded in
+  runner dispatch + `session/benchmark.run_task` + `arena/factories.mode_for`)
+  and the real EQUIPMENT registry (dims/class/grip/projectile radius). The
+  dashboard's Run & Models card grew a mode selector with per-mode fields:
+  free-play (as before), benchmark task runs (new `POST /api/run/benchmark`,
+  one `run_task` session as a run job), and arena matches (new
+  `POST /api/run/arena` → `run_arena_match` on the run-jobs thread with
+  per-combatant adapter+model, team names, equipment, duration/pellets/
+  score-target/friendly-fire, all validated server-side against the same
+  factories the CLI uses). Submit → job poll → result banner → the match
+  appears in the Watch & Replay arena selector. Refusals (bad mode/teams/
+  equipment/layout mismatch/unknown adapter or task) are 400s before any job
+  starts.
+- **Visuals (all presentation over recorded physics — no invented motion):**
+  `dashboard/static/js/combatfx.js`: paintball markers built from the real
+  EQUIPMENT dims (receiver/barrel/hopper/grip/trigger guard + team-colour
+  accents; variants for baton/shield/grenade/dual pistols), positioned by the
+  item body's recorded pose each frame (held at the real carry pin — measured
+  z 0.84 m / 0.30 m forward; dropped where the body rests); paintballs as
+  glossy team-coloured spheres from the recorded `pellet_launched`
+  attribution (shooter→team→colour); per-pellet trails drawn from recorded
+  frame poses only (index-accurate on scrub, 64-sample window); ground paint
+  decals from recorded pellet collision events (throttled per pellet,
+  floor-height contacts); short-lived impact particles from recorded
+  `agent_damaged` contact positions in the shooter's colour. Extra combatant
+  rigs take their team colour from the manifest. Equipment stays a plain box
+  only for recordings with neither manifest nor equip evidence (documented
+  legacy gap, see BUGLOG §12c).
+
+**Recorded evidence (this milestone):** duel #122/#123 (driven, measured aim,
+13 shots→13 hits, report `experiments/arena_paint_demo_report.json`) and dashboard-
+launched duel #124/#125 (scripted combatants end-to-end through
+`POST /api/run/arena` → job `15c2a1d1` → Watch & Replay); match #126/#127
+re-verified post-fix. Replay of #122/#127 renders markers at the body poses,
+attribution-coloured pellets (14), 16 trail lines, and paint decals at the
+recorded contact points (browser-verified with the live server).
+
+**Gate (M5.5 close):** full suite ×2 consecutive: run 1 `run_tests.sh`
+**612 passed / 0 failed / 3 environmental skips of 615** (11 new
+`test_arena_dashboard_m55.py` tests + 604 prior; skips named: LM Studio
+offline ×2, dataset absent — unchanged from M5) with
+`health_check {"healthy": true, "failed": []}`; run 2 pytest full exit 0
+(3 skips, all dots); explicit HVE+smoke **83 passed in 52.05 s**;
+`git diff --check` clean.

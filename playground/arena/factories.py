@@ -457,6 +457,15 @@ def run_arena_match(match_cfg: dict, adapter_factory: Callable[[str, dict], Adap
         team = plan_item["team"]
         teammates = [a for a in setup.combat_teams.get(team, []) if a != aid]
         opponents = [a for t, aids in setup.combat_teams.items() if t != team for a in aids]
+        # Rendering/inspection manifest (recorded with the session): which combatants
+        # belong to which team and which world objects are combat equipment. The
+        # dashboard reads this from the session's config to draw markers/pellets with
+        # real team colours instead of grey primitives (M5.5).
+        arena_context={"team": team, "teammates": teammates, "opponents": opponents,
+                       "match": {"name": match_name or "match", "mode": mode,
+                                 "teams": {t: list(a) for t, a in setup.combat_teams.items()},
+                                 "items": [dict(it) for it in setup.world_cfg["combat"]["items"]],
+                                 "pellets": int(setup.world_cfg["combat"]["pellets"])}}
         session_cfg = copy.deepcopy(root_cfg)
         # the session lives while the match lives: budget = match time (plus wrapup),
         # so the runner's wall-clock phase machine never closes a live combatant early.
@@ -467,8 +476,7 @@ def run_arena_match(match_cfg: dict, adapter_factory: Callable[[str, dict], Adap
         summary = run_session(session_cfg, db, aid, bridge, mode=mode,
                               label=f"arena:{match_name or 'match'}",
                               world=world_adapter.world,
-                              arena_context={"team": team, "teammates": teammates,
-                                             "opponents": opponents})
+                              arena_context=arena_context)
         handle = ArenaSessionHandle(summary, adapter, bridge, team=team, mode=mode,
                                     turn_interval_s=turn_interval_s, cfg=session_cfg,
                                     db=db, teammates=teammates, opponents=opponents)

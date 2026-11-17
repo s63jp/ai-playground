@@ -179,21 +179,45 @@
         <div id="lab-models" class="scroll"></div>
       </div>
       <div class="card">
-        <h3>Launch exploration <span class="muted small">(runs live in the world)</span></h3>
+        <h3>Launch run <span class="muted small">(Run &amp; Models: modes the backend supports)</span></h3>
         <form id="lab-run-form">
           <div class="form-row">
+            <label>Mode <select id="lab-run-mode"></select></label>
+            <span id="lab-run-mode-note" class="muted small"></span>
+          </div>
+          <div id="lab-run-bench-fields" hidden>
+            <div class="form-row">
+              <label>Task <select id="lab-run-bench-task"></select></label>
+              <label>Agent <select id="lab-run-bench-agent"></select></label>
+              <label>Adapter <select id="lab-run-bench-adapter"></select></label>
+              <label>Model <input type="text" id="lab-run-bench-model" placeholder="default / &lt;id&gt;" size="16"></label>
+            </div>
+          </div>
+          <div id="lab-run-arena-fields" hidden>
+            <div class="form-row">
+              <label>Match name <input type="text" id="lab-arena-name" placeholder="duel" size="10"></label>
+              <label>Duration (s) <input type="number" id="lab-arena-duration" value="45" min="2" max="600"></label>
+              <label>Score target <input type="number" id="lab-arena-target" value="10" min="1" max="999"></label>
+              <label>Pellet pool <input type="number" id="lab-arena-pellets" value="24" min="1" max="96"></label>
+              <label><input type="checkbox" id="lab-arena-ff"> friendly fire</label>
+            </div>
+            <div id="lab-arena-teams"></div>
+          </div>
+          <div class="form-row" id="lab-run-explore-fields">
             <label>Agent <select id="lab-run-agent"></select></label>
             <label>Model <input type="text" id="lab-run-model" placeholder="default / &lt;id&gt;" size="20"></label>
           </div>
-          <div class="form-row">
+          <div class="form-row" id="lab-run-explore-extra">
             <label>Sessions <input type="number" id="lab-run-sessions" value="1" min="1" max="50"></label>
             <label>Steps/session <input type="number" id="lab-run-steps" value="60" min="1" max="10000"></label>
             <label>At a time <input type="number" id="lab-run-concurrency" value="1" min="1" max="8"></label>
             <label>Max continuations <input type="number" id="lab-run-cont" value="0" min="0" max="20"></label>
-            <button type="submit" class="btn">Launch run</button>
-            <button type="button" id="lab-run-stop" class="danger" disabled>Stop run</button>
           </div>
-          <div id="lab-run-status" class="muted small"></div>
+          <div class="form-row">
+            <button type="submit" class="btn" id="lab-run-go">Launch run</button>
+            <button type="button" id="lab-run-stop" class="danger" disabled>Stop run</button>
+            <span id="lab-run-status" class="muted small"></span>
+          </div>
         </form>
       </div>
       <div class="card">
@@ -381,7 +405,7 @@
   </main>
 </div>
 
-<script type="module" src="/static/app.js?v=m56"></script>
+<script type="module" src="/static/app.js?v=m60"></script>
 <!-- Humanoid visualisation and auxiliary modules (local, no CDN) -->
 <script type="module" src="/static/js/humanoid_view.js"></script>
 <script type="module" src="/static/js/splat.js"></script>

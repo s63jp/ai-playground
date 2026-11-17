@@ -7,6 +7,8 @@ const $ = (s) => document.querySelector(s);
 // carry agent- or API-supplied text goes through esc() before being placed in HTML. Values interpolated
 // without esc() are server-side enums, numbers, or ids validated server-side (agent ids: [a-z0-9_-]).
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+window.__bootErrors = [];
+window.addEventListener('error', (e) => { window.__bootErrors.push(String(e.message || e) + ' @' + (e.filename || '') + ':' + (e.lineno || 0)); });
 // Display sanitiser for "Agent's words" (reports/ADAPTER_TOOLCALL_LEAK.md): strip the chat-
 // template tokens and embedded tool-call markup the model emits as text. Raw content stays in
 // the database verbatim; the dashboard shows the agent's words, the template's.
@@ -25,6 +27,7 @@ const sanitizeWords = (s) => {
   return t;
 };
 import { HumanoidView } from './js/humanoid_view.js';
+import { CombatFX, makeMarker, makePellet, teamColour, _oid } from './js/combatfx.js';
 
 const api = async (p, opt) => { const r = await fetch(p, opt); if (!r.ok) throw new Error(`${p}: ${r.status} ${await r.text()}`); return r.json(); };
 
@@ -118,6 +121,101 @@ for (let k = -H; k <= H; k += 4) {          // coordinate labels every 4 m
 }
 
 const meshes = {};
+// ------------------------------------------------------------------ combat visuals (M5.5)
+// Markers/pellets/splats/trails are presentation over recorded physics: object meshes are
+// classified from the recorded arena manifest (session config) + attribution events,
+// equipment proportions come from the real EQUIPMENT registry, and no motion is invented.
+const equipmentSpecs = {};                     // EQUIPMENT id -> registry entry (with dims_m)
+let runModes = [];                             // backend-supported run modes for the lab selector
+let equipList = [];                            // ordered EQUIPMENT entries (for dropdown labels)
+try {
+  const rm = await api('/api/run/modes');
+  runModes = rm.modes || [];
+  for (const e of (rm.equipment || [])) { equipmentSpecs[e.id] = e; equipList.push(e); }
+} catch (e) { /* older backend still renders plain boxes */ }
+const fx = new CombatFX(world);
+let combatCtx = { match: null, teamOf: {}, pellets: {}, items: {}, _splatT: {}, _sid: null };
+const itemTeam = {};                           // item object id -> team name (slug match)
+
+function buildCombatCtx(ctx, sid) {
+  // _sid binds the MANIFEST source: null here means "manifest not yet loaded from the
+  // session detail" — refresh binds it once per session, then attribution accumulates.
+  combatCtx = { match: ctx && ctx.match ? ctx.match : null, teamOf: {}, pellets: {}, items: {}, _splatT: {}, _sid: sid ?? null };
+  for (const [t, aids] of Object.entries((ctx && ctx.match && ctx.match.teams) || {})) {
+    for (const a of aids) combatCtx.teamOf[a] = t;
+  }
+  for (const it of ((ctx && ctx.match && ctx.match.items) || [])) combatCtx.items[it.id] = { item: it.item };
+  // item ids are '<teamslug>_item_<k>' (M5 factory naming): match the slug to the team
+  // names in the manifest so an item's marker wears its owning team's accent colour.
+  for (const it of Object.keys(combatCtx.items)) {
+    const slug = it.split('_item_')[0];
+    for (const t of Object.keys((ctx && ctx.match && ctx.match.teams) || {})) {
+      if (_oid(t) === slug) itemTeam[it] = t;
+    }
+  }
+  window.__combatDebug = () => ({ manifestSid: combatCtx._sid, hasMatch: !!combatCtx.match,
+    items: { ...combatCtx.items }, pelletCount: Object.keys(combatCtx.pellets).length,
+    teams: { ...combatCtx.teamOf } });        // inspection hook for automated QA
+}
+function pelletColour(pid) {
+  const owner = combatCtx.pellets[pid];
+  const team = owner ? (combatCtx.teamOf[owner.agent] || owner.team) : (owner ? owner.team : null);
+  return owner && (owner.agent || owner.team) ? teamColour(team || owner.agent) : 0xd8d8d8;
+}
+function itemColour(oid) {
+  return teamColour(itemTeam[oid] || 'neutral');
+}
+function damageColour(src) {
+  if (combatCtx.pellets[src]) return pelletColour(src);
+  if (combatCtx.items[src]) return itemColour(src);   // melee strikes take the wielder's colour
+  return null;                                        // unattributed hits stay uncoloured (honest)
+}
+function reinstateCombatMeshes() {
+  // When attribution arrives after a plain block mesh exists (live polling), swap the
+  // cached mesh for the real marker/pellet silhouette on the next show().
+  for (const [id, m] of Object.entries(meshes)) {
+    const wantMarker = combatCtx.items[id], wantPellet = combatCtx.pellets[id];
+    if (wantMarker && m.userData.marker) continue;
+    if (wantPellet && m.userData.pellet) continue;
+    if (!wantMarker && !wantPellet) continue;
+    world.remove(m);
+    delete meshes[id];
+  }
+}
+function combatEvents(evs) {
+  // Paint effects respond ONLY to recorded physics events:
+  // - pellet_launched  -> pellet attribution (object id -> shooter + item)
+  // - weapon_reload    -> equipped-marker classification for legacy recordings
+  // - agent_damaged    -> measured contact position -> splash particles in the shooter's colour
+  // - collision        -> pellet-vs-surface contacts -> flat ground decals (throttled)
+  for (const e of evs) {
+    const d = e.data || {};
+    if (e.type === 'pellet_launched') {
+      if (d.object) combatCtx.pellets[d.object] = { agent: d.agent, item: d.item };
+    } else if (e.type === 'weapon_reload') {
+      if (d.object && d.item) {
+        combatCtx.items[d.object] = { item: d.item };
+        const slug = String(d.object).split('_item_')[0];
+        if (slug) itemTeam[d.object] = Object.keys(combatCtx.teamOf).find((t) => _oid(t) === slug) || itemTeam[d.object];
+      }
+    } else if (e.type === 'agent_damaged') {
+      const col = damageColour(d.source);
+      if (col && Array.isArray(d.position) && d.position.length >= 3) {
+        fx.burst(d.position[0], d.position[1], d.position[2], col, 7);
+      }
+    } else if (e.type === 'collision') {
+      const objs = d.objects || [];
+      let pid = null;
+      for (const o of objs) if (combatCtx.pellets[o]) { pid = o; break; }
+      if (!pid || (d.impulse || 0) < 0.3) continue;
+      if (!Array.isArray(d.position) || d.position.length < 3 || d.position[2] > 0.12) continue;
+      const okTime = (combatCtx._splatT[pid] == null) || (e.t - combatCtx._splatT[pid]) >= 0.4;
+      if (!okTime) continue;
+      combatCtx._splatT[pid] = e.t;
+      fx.addSplat(d.position[0], d.position[1], d.position[2], pelletColour(pid), null); // a paint mark; no motion is invented
+    }
+  }
+}
 function makeMesh(o) {
   const col = new THREE.Color(o.colour);
   const mat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.8 });
@@ -135,6 +233,27 @@ for (const o of spec.objects) meshes[o.id] = makeMesh(o);
 const blockTemplate = spec.objects.find((o) => o.kind === 'block');
 function ensureMesh(id) {
   if (meshes[id]) return meshes[id];
+  // Combat objects (M5.5): equipment markers and pellets get real silhouettes; every
+  // other generated object keeps the legacy block template.
+  const itemEntry = combatCtx.items[id];
+  if (itemEntry) {
+    const es = equipmentSpecs[itemEntry.item] || { id: itemEntry.item };
+    const col = itemColour(id);
+    const g = makeMarker(es, col);
+    g.userData.marker = itemEntry.item;
+    meshes[id] = g;
+    world.add(g);
+    return g;
+  }
+  if (combatCtx.pellets[id]) {
+    const owner = combatCtx.pellets[id];
+    const radius = (equipmentSpecs[owner.item] || {}).projectile && equipmentSpecs[owner.item].projectile.radius;
+    const g = makePellet(radius, pelletColour(id));
+    g.userData.pellet = true;
+    meshes[id] = g;
+    world.add(g);
+    return g;
+  }
   const colour = spec.colours[id] || '#ffffff';
   meshes[id] = makeMesh({ ...blockTemplate, id, colour, position: [0, 0, -50] });   // generated in-world
   return meshes[id];
@@ -154,8 +273,10 @@ function ensureExtraRig(aid) {
   let rig = extraRigs.get(aid);
   if (rig) return rig;
   const group = new THREE.Group();
+  // Team colour when the recorded arena manifest knows this combatant's team (M5.5);
+  // otherwise the legacy deterministic hash colour.
   const idx = [...aid].reduce((a, c) => a + c.charCodeAt(0), 0) % EXTRA_RIG_COLORS.length;
-  const color = EXTRA_RIG_COLORS[idx];
+  const color = (combatCtx.teamOf && combatCtx.teamOf[aid]) ? teamColour(combatCtx.teamOf[aid]) : EXTRA_RIG_COLORS[idx];
   const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.17, 0.55, 4, 10),
                               new THREE.MeshStandardMaterial({ color, roughness: 0.8 }));
   body.rotation.x = Math.PI / 2;   // build along +Z like every other mesh (the world group is z-up)
@@ -267,7 +388,14 @@ function resize() {
   renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
 }
 window.addEventListener('resize', resize); resize();
-(function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
+let _lastFrameTs = performance.now();
+(function loop() {
+  requestAnimationFrame(loop);
+  const now = performance.now();
+  fx.tick(Math.min(0.05, (now - _lastFrameTs) / 1000));   // impact FX decay in real time
+  _lastFrameTs = now;
+  controls.update(); renderer.render(scene, camera);
+})();
 
 // ------------------------------------------------------------------ replay state
 // Frames are stored as deltas with periodic keyframes; we reconstruct full poses on load.
@@ -298,7 +426,9 @@ function show(i) {
     const m = ensureMesh(id);
     m.visible = true; m.position.set(q[0], q[1], q[2]);
     m.quaternion.set(q[4], q[5], q[6], q[3]);   // MuJoCo w,x,y,z -> three x,y,z,w
+    if (combatCtx.pellets[id]) fx.trail(id, q, pelletColour(id), cur);   // the pellet's REAL recorded path
   }
+  fx.dropTrailsExcept(new Set(Object.keys(p.objects).filter((id) => combatCtx.pellets[id])));
   agentMesh.position.set(...p.agent);
   // M5 arena: every other combatant recorded by the shared world gets its own rig.
   for (const [, rig] of extraRigs) rig.group.visible = false;
@@ -374,6 +504,7 @@ async function openSession(id) {
   sessionId = +id; frames = []; poses = []; flights = []; lastSeen = { a: 0, e: 0, m: 0 };
   rigHeading = 0;
   trails.clear();
+  fx.reset(); buildCombatCtx(null, null);    // combat attribution rebuilds from this session's log
   ['#w-actions', '#w-msgs', '#w-exps'].forEach((s) => $(s).innerHTML = '');
   await refresh(true);
   show(poses.length - 1);
@@ -387,13 +518,14 @@ async function refresh(first = false) {
   const [fr, acts, evs, msgs, detail] = await Promise.all([
     api(`/api/sessions/${sid}/frames?start=${frames.length}&limit=5000`),
     api(`/api/sessions/${sid}/actions?after=${lastSeen.a}`),
-    api(`/api/sessions/${sid}/events?after=${lastSeen.e}&types=flight_end,object_appeared,object_lost,collision`),
+    api(`/api/sessions/${sid}/events?after=${lastSeen.e}&types=flight_end,object_appeared,object_lost,collision,pellet_launched,agent_damaged,weapon_reload`),
     api(`/api/sessions/${sid}/messages?after=${lastSeen.m}`),
     api(`/api/sessions/${sid}`),
   ]);
   if (sid !== sessionId) return;
   const atEnd = cur >= poses.length - 1;
   sessionAgent = detail.agent_id;
+  if (combatCtx._sid !== sid) buildCombatCtx(detail.arena_context, sid);   // the recorded match manifest
   if (fr.frames.length) { const from = frames.length; frames.push(...fr.frames); rebuild(from); $('#r-scrub').max = poses.length - 1; }
   for (const a of acts.actions) {
     lastSeen.a = a.idx;
@@ -404,12 +536,21 @@ async function refresh(first = false) {
     $('#w-actions').insertAdjacentHTML('afterbegin', `<div class="row mono small">#${a.idx} ${a.source !== 'agent' ? '<span class="muted">[' + a.source + ']</span> ' : ''}${esc(a.tool)}${err}${extra}</div>`);
     if (a.tool === 'record_experiment' && r.success) {
       const v = r.evidence_check;
-      $('#w-exps').insertAdjacentHTML('afterbegin', `<div class="row"><b>${r.experiment_id}</b> ${esc(a.args.hypothesis)}<br>
+      $('#w-exps').insertAdjacentHTML('afterbegin', `<div class="row"><b>${esc(r.experiment_id)}</b> ${esc(a.args.hypothesis)}<br>
         <span class="small muted">result:</span> ${esc(a.args.actual_result)} · <span class="small">${a.args.supported ? 'supported' : 'not supported'}</span>
-        · evidence <span class="${v.counts_as_evidence ? 'ok' : 'bad'}">${v.verdict}</span></div>`);
+        · evidence <span class="${v.counts_as_evidence ? 'ok' : 'bad'}">${esc(v.verdict)}</span></div>`);
+    }
+    if (a.tool === 'equip' && r.success && r.object && r.item) {
+      // equip results carry the real equipped_dict (object id + EQUIPMENT registry id):
+      // markers become classifiable even for sessions recorded before the manifest existed.
+      combatCtx.items[r.object] = { item: r.item };
+      const slug = String(r.object).split('_item_')[0];
+      if (slug) itemTeam[r.object] = Object.keys(combatCtx.teamOf).find((t) => _oid(t) === slug) || itemTeam[r.object];
+      lastSeen.equipLearned = true;
     }
   }
-  if (evs.events.length) { lastSeen.e = evs.events[evs.events.length - 1].n; drawFlights(evs.events); }
+  if (evs.events.length) { lastSeen.e = evs.events[evs.events.length - 1].n; combatEvents(evs.events); drawFlights(evs.events); }
+  reinstateCombatMeshes();
   for (const m of msgs.messages) {
     lastSeen.m = m.id;
     if (m.role === 'assistant') $('#w-msgs').insertAdjacentHTML('afterbegin', `<div class="row say">“${esc(sanitizeWords(m.content))}”</div>`);
@@ -1102,21 +1243,160 @@ document.getElementById('nn-gen-form')?.addEventListener('submit', async (e) => 
 });
 
 // ------------------------------------------------------------------ Lab: run, models, compare, ML switch, provenance
-let labInit = false;
+let labInit = false, labAdapters = [];
+const MODE_DEFAULTS = {                                // only when /api/run/modes is unavailable
+  modes: [], note: 'run-mode registry unavailable — restart the dashboard server',
+};
+function labMode() { return $('#lab-run-mode').value || 'exploration'; }
+function labSelect(sel, values, preselect) {
+  $(sel).innerHTML = values.map((v) =>
+    `<option value="${esc(v)}" ${v === preselect ? 'selected' : ''}>${esc(v)}</option>`).join('');
+}
+async function populateLabAdapters() {
+  try {
+    const ad = await api('/api/adapters');
+    labAdapters = ad.adapters.map((a) => a.name);
+    const oc = ad.adapters.filter((a) => a.type === 'openai_compat');
+    $('#lab-adapter').innerHTML = oc.map((a) => `<option value="${esc(a.name)}">${esc(a.name)}</option>`).join('');
+  } catch (e) { labAdapters = ['scripted']; }
+}
+function combatantRow(cls, defaults) {
+  const adapters = ['scripted', ...labAdapters.filter((a) => a !== 'scripted')];
+  return `<div class="row small"><input class="${cls} cid" value="${esc(defaults.id)}" placeholder="combatant id" size="14"> `
+    + `<select class="${cls} cad">${adapters.map((a) => `<option value="${esc(a)}" ${a === (defaults.adapter || 'scripted') ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select> `
+    + `<input class="${cls} cmodel" placeholder="model (provider default)" size="18"></div>`;
+}
+function buildArenaTeamsUi() {
+  const host = $('#lab-arena-teams');
+  if (!host) return;
+  const solo = labMode() === 'arena_solo';
+  const counts = { a: +($('#lab-arena-a-count')?.value || 1), b: +($('#lab-arena-b-count')?.value || 1) };
+  const names = { a: $('#lab-arena-a-name')?.value || 'Red', b: $('#lab-arena-b-name')?.value || 'Blue' };
+  // preserve typed rows while keeping the count in sync
+  const read = (letter) => [...host.querySelectorAll(`#lab-arena-${letter}-rows .cid`)].map((i) => ({ id: i.value,
+    adapter: i.closest('.row')?.querySelector('.cad')?.value, model: i.closest('.row')?.querySelector('.cmodel')?.value }));
+  const prevA = read('a'), prevB = read('b');
+  const defaultsA = []; const defaultsB = [];
+  for (let i = 0; i < counts.a; i++) defaultsA.push(prevA[i] || { id: i === 0 ? 'agent_arena_r1' : `agent_arena_r${i + 1}` });
+  for (let i = 0; i < counts.b; i++) defaultsB.push(prevB[i] || { id: `agent_arena_b${i + 1}` });
+  host.innerHTML = `
+    <div class="form-row team-a">
+      <b>Team A</b>
+      <label>name <input id="lab-arena-a-name" value="${esc(names.a)}" size="8"></label>
+      <label>combatants <input type="number" id="lab-arena-a-count" value="${counts.a}" min="1" max="4" ${solo ? 'disabled' : ''}></label>
+    </div>
+    <div id="lab-arena-a-rows">${defaultsA.map((d) => combatantRow('team-a-c', d)).join('')}</div>
+    <div class="form-row">
+      <label>Team A equipment <select id="lab-arena-a-equip" multiple size="3">
+        ${equipList.map((e) => `<option value="${esc(e.id)}" data-name="${esc(e.name)}" ${e.id === 'paintball_rifle' ? 'selected' : ''}>${esc(e.name || e.id)}${e.combat_class ? ' (' + esc(e.combat_class) + ')' : ''}</option>`).join('')}
+      </select></label>
+    </div>
+    <div class="form-row team-b">
+      <b>Team B</b>
+      <label>name <input id="lab-arena-b-name" value="${esc(names.b)}" size="8"></label>
+      <label>combatants <input type="number" id="lab-arena-b-count" value="${counts.b}" min="1" max="4" ${solo ? 'disabled' : ''}></label>
+    </div>
+    <div id="lab-arena-b-rows">${defaultsB.map((d) => combatantRow('team-b-c', d)).join('')}</div>
+    <div class="form-row">
+      <label>Team B equipment <select id="lab-arena-b-equip" multiple size="3">
+        ${equipList.map((e) => `<option value="${esc(e.id)}" ${e.id === 'paintball_pistol' ? 'selected' : ''}>${esc(e.name || e.id)}${e.combat_class ? ' (' + esc(e.combat_class) + ')' : ''}</option>`).join('')}
+      </select></label>
+    </div>`;
+  ['a', 'b'].forEach((letter) => {
+    const c = $(`#lab-arena-${letter}-count`);
+    if (c) c.onchange = buildArenaTeamsUi;             // re-render rows with preserved values
+    const nm = $(`#lab-arena-${letter}-name`);
+    if (nm) nm.oninput = null;                         // typed team names persist via the rebuild read
+  });
+}
+function refreshLabModeUi() {
+  if (!$('#lab-run-mode')) return;
+  const m = labMode();
+  const meta = runModes.find((x) => x.id === m) || MODE_DEFAULTS.modes.find((x) => x.id === m);
+  $('#lab-run-mode-note').textContent = meta ? meta.note : (runModes.length ? '' : MODE_DEFAULTS.note);
+  const solo = m === 'arena_solo', coop = m === 'arena_coop', bench = m === 'benchmark', explore = m === 'exploration';
+  $('#lab-run-explore-fields').hidden = !explore;
+  $('#lab-run-explore-extra').hidden = !explore;
+  $('#lab-run-bench-fields').hidden = !bench;
+  $('#lab-run-arena-fields').hidden = !(solo || coop);
+  if (solo || coop) {
+    buildArenaTeamsUi();
+  }
+}
+function populateBenchTasks(tasks) {
+  // tasks = /api/benchmarks/tasks payload (task ids are the backend's real TASKS keys)
+  $('#lab-run-bench-task').innerHTML = (tasks || []).map((t) =>
+    `<option value="${esc(t.id)}">${esc(t.name || t.id)}</option>`).join('');
+}
+async function initRunModes() {
+  if (!$('#lab-run-mode')) return;
+  if (runModes.length) {
+    $('#lab-run-mode').innerHTML = runModes.map((m) =>
+      `<option value="${esc(m.id)}">${esc(m.label || m.id)}</option>`).join('');
+    const benchAgents = (await api('/api/agents')).agents.map((a) => a.agent_id);
+    labSelect('#lab-run-bench-agent', benchAgents, benchAgents[0]);
+    try {
+      const bt = (await api('/api/benchmarks/tasks')).tasks || [];
+      populateBenchTasks(bt.sort((a, b) => String(a.id).localeCompare(String(b.id))));
+    } catch (e) { populateBenchTasks([]); }
+  } else {
+    $('#lab-run-mode').innerHTML = `<option value="">${esc(MODE_DEFAULTS.note)}</option>`;
+  }
+  $('#lab-run-mode').onchange = refreshLabModeUi;
+  refreshLabModeUi();
+}
 async function loadLab() {
   if (!labInit) {
     labInit = true;
-    // provider + agent dropdowns
+    // provider + agent dropdowns (the run-mode/equipment registry is loaded ONCE at page boot)
     try {
-      const [ad, ags] = await Promise.all([api('/api/adapters'), api('/api/agents')]);
-      const oc = ad.adapters.filter((a) => a.type === 'openai_compat');
-      $('#lab-adapter').innerHTML = oc.map((a) => `<option value="${esc(a.name)}">${esc(a.name)}</option>`).join('');
+      await populateLabAdapters();
+      const ags = await api('/api/agents');
       const agOpts = ags.agents.map((a) => `<option value="${esc(a.agent_id)}">${esc(a.agent_id)}</option>`).join('');
       $('#lab-run-agent').innerHTML = agOpts;
     } catch (e) { /* non-fatal */ }
+    await initRunModes();
+    labFillBenchAdapter();
   }
   loadMlConfig();
 }
+function labFillBenchAdapter() {
+  const adapters = ['scripted', ...labAdapters.filter((a) => a !== 'scripted')];
+  const el = $('#lab-run-bench-adapter');
+  if (el) el.innerHTML = adapters.map((a) => `<option value="${esc(a)}" ${a === 'scripted' ? 'selected' : ''}>${esc(a)}</option>`).join('');
+}
+function arenaTeamPayload(letter) {
+  const name = ($(`#lab-arena-${letter}-name`)?.value || '').trim();
+  const rows = [...document.querySelectorAll(`#lab-arena-${letter}-rows .row`)].map((r) => ({
+    id: (r.querySelector('.cid')?.value || '').trim(),
+    adapter: (r.querySelector('.cad')?.value || 'scripted').trim(),
+    model: (r.querySelector('.cmodel')?.value || '').trim() || null,
+  }));
+  const equipment = [...($(`#lab-arena-${letter}-equip`)?.selectedOptions || [])].map((o) => o.value);
+  return { name, agents: rows, equipment };
+}
+function validateArenaForm() {
+  const solo = labMode() === 'arena_solo';
+  const teams = [arenaTeamPayload('a'), arenaTeamPayload('b')];
+  for (const [i, t] of teams.entries()) {
+    if (!t.name) return `Team ${i === 0 ? 'A' : 'B'} needs a name`;
+    for (const c of t.agents) {
+      if (!/^[a-z0-9][a-z0-9_\-]{0,39}$/i.test(c.id)) return `Team ${t.name}: combatant id '${c.id}' is invalid (letters/digits/_/-)`;
+    }
+  }
+  if (teams[0].name.toLowerCase() === teams[1].name.toLowerCase()) return 'Team names must differ';
+  const dup = teams[0].agents.map((c) => c.id).filter((id) => teams[1].agents.some((c) => c.id === id));
+  if (dup.length) return `Combatant ids must be unique across teams (duplicate: ${dup[0]})`;
+  const dur = +$('#lab-arena-duration').value;
+  if (!(dur >= 2 && dur <= 600)) return 'Duration must be 2-600 s';
+  const target = +$('#lab-arena-target').value;
+  if (!(target >= 1 && target <= 999)) return 'Score target must be 1-999';
+  const pellets = +$('#lab-arena-pellets').value;
+  if (!(pellets >= 1 && pellets <= 96)) return 'Pellet pool must be 1-96';
+  if (solo && (teams[0].agents.length !== 1 || teams[1].agents.length !== 1)) return 'arena duel (1v1) needs exactly one combatant per team';
+  return null;
+}
+
 
 async function loadMlConfig() {
   try {
@@ -1162,7 +1442,7 @@ async function pollRunJob(jobId, statusEl, onDone) {
   const tick = async () => {
     try {
       const j = await api(`/api/run/jobs/${jobId}`);
-      const prog = (j.progress || []).length;
+      const prog = (j.progress || []).reduce((n, p) => n + (Array.isArray(p.sessions) ? p.sessions.length : 1), 0);
       statusEl.textContent = `Job ${jobId}: ${j.status} · ${prog} session(s) so far`;
       if (j.status === 'done') { onDone(j); return; }
       if (j.status === 'error') { statusEl.innerHTML = `<span class="bad">${esc(j.error || 'error')}</span>`; return; }
@@ -1175,23 +1455,59 @@ async function pollRunJob(jobId, statusEl, onDone) {
 let labRunJob = null; // id of the job launched most recently from this form
 $('#lab-run-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const body = { agent_id: $('#lab-run-agent').value, adapter: $('#lab-adapter').value,
-    model: $('#lab-run-model').value.trim() || null,
-    sessions: parseInt($('#lab-run-sessions').value, 10) || 1,
-    max_steps: parseInt($('#lab-run-steps').value, 10) || null,
-    concurrency: parseInt($('#lab-run-concurrency').value, 10) || 1,
-    max_continuations: parseInt($('#lab-run-cont').value, 10) || 0 };
   const el = $('#lab-run-status');
-  el.textContent = 'Launching…';
+  const mode = labMode();
   try {
-    const r = await api('/api/run/explore', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body) });
+    let r;
+    if (mode === 'arena_solo' || mode === 'arena_coop') {
+      const invalid = validateArenaForm();
+      if (invalid) { el.innerHTML = `<span class="bad">${esc(invalid)}</span>`; return; }
+      r = await api('/api/run/arena', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode, name: $('#lab-arena-name').value.trim() || null,
+          rules: { duration_s: +$('#lab-arena-duration').value, pellets: +$('#lab-arena-pellets').value,
+            score_target: +$('#lab-arena-target').value, friendly_fire: !!$('#lab-arena-ff').checked },
+          teams: [arenaTeamPayload('a'), arenaTeamPayload('b')],
+        }) });
+    } else if (mode === 'benchmark') {
+      const task = $('#lab-run-bench-task').value;
+      const agentId = $('#lab-run-bench-agent').value;
+      if (!task) { el.innerHTML = '<span class="bad">No tasks available (backend registry empty)</span>'; return; }
+      if (!agentId) { el.innerHTML = '<span class="bad">Pick an agent for the task run</span>'; return; }
+      r = await api('/api/run/benchmark', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_id: task, agent_id: agentId, adapter: $('#lab-run-bench-adapter').value,
+          model: $('#lab-run-bench-model').value.trim() || null }) });
+    } else {
+      if (mode && mode !== 'exploration') { el.innerHTML = `<span class="bad">Unknown mode '${esc(mode)}'</span>`; return; }
+      r = await api('/api/run/explore', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agent_id: $('#lab-run-agent').value, adapter: $('#lab-adapter').value,
+          model: $('#lab-run-model').value.trim() || null,
+          sessions: parseInt($('#lab-run-sessions').value, 10) || 1,
+          max_steps: parseInt($('#lab-run-steps').value, 10) || null,
+          concurrency: parseInt($('#lab-run-concurrency').value, 10) || 1,
+          max_continuations: parseInt($('#lab-run-cont').value, 10) || 0 }) });
+    }
     labRunJob = r.job_id;
     const stopBtn = $('#lab-run-stop');
     if (stopBtn) stopBtn.disabled = false;
     pollRunJob(r.job_id, el, (j) => {
-      el.innerHTML = `<span class="ok">Done.</span> ` + (j.progress || []).map((p) =>
-        `s${p.session_id}: ${p.actions} acts, ${esc(p.end_reason)}${p.continue_requested ? ' · asked to continue' : ''}${p.error ? `<br><span class="bad small">${esc(String(p.error))}</span>` : ''}`).join(' · ');
+      if (mode === 'arena_solo' || mode === 'arena_coop') {
+        const res = j.result || {};
+        el.innerHTML = `<span class="ok">Match ${esc(mode)} done — ${esc(res.end_reason || '?')}`
+          + `${res.winner ? ' · winner ' + esc(res.winner) : ''} · team scores `
+          + Object.entries(res.team_stats || {}).map(([t, s]) => `${esc(t)} ${s}`).join('/') + '</span>'
+          + (res.sessions || []).map((s) => `<div class="small">#${esc(s.session_id)} ${esc(s.agent_id)} (${esc(s.team)})</div>`).join('')
+          + `<div class="small muted">Open the Arena selector in Watch &amp; Replay to watch or open the recorded sessions.</div>`;
+        loadArenaMatches();
+      } else if (mode === 'benchmark') {
+      const res = j.result || {};
+      el.innerHTML = `<span class="ok">Task ${esc(res.task_id || '')} done — session #${esc(res.session_id || '?')} </span>`
+        + `<span class="small muted">${res.action_count != null ? res.action_count + ' actions · ' : ''}end ${esc(res.end_reason || res.error || '')}</span>`;
+      } else {
+        el.innerHTML = `<span class="ok">Done.</span> ` + (j.progress || []).map((p) =>
+          `s${esc(p.session_id)}: ${esc(p.actions)} acts, ${esc(p.end_reason)}${p.continue_requested ? ' · asked to continue' : ''}${p.error ? `<br><span class="bad small">${esc(String(p.error))}</span>` : ''}`).join(' · ');
+      }
       loadSessions();
     });
   } catch (err) { el.innerHTML = `<span class="bad">${esc(String(err))}</span>`; }
