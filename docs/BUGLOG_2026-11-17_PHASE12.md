@@ -72,3 +72,21 @@ thrash makes it flicker, so fall-invariant helpers must track it per step (like
 `test_locomotion` does), never assert it at a single endpoint. A brief stand phase
 BEFORE the leg fold registers the posture PD targets; without it the fold crumples
 past the recoverable sit pose into a wedged floor collapse.
+
+## 6. CI broke: physics.py loaded MuJoCo by .venv file path (fanout artifact)
+
+**Bug.** The fanout introduced an importlib hack that loaded MuJoCo by absolute
+path from `.venv/Lib/site-packages/mujoco/__init__.py` (Windows-only layout) as a
+second module named `mujoco_real`, "bypassing the local stub" — a stub that never
+existed. It was committed in `cd68da2`, which is exactly when CI went from green
+(run 19, pre-extension tree) to red: on CI there is no `.venv/Lib/site-packages`,
+so every collection died at startup (exit 4 in ~1 s, both matrix jobs).
+
+**Evidence.** Live CI run 23 for `630f369`: 1-second failure, "Process completed
+with exit code 4" on the pytest step. Reproduced locally in a clean py3.11 venv:
+the identical `config → world.physics` import chain prints MuJoCo's engine error
+and exits silently pre-fix; post-fix the whole chain imports and the earlier
+deselect-marked suite run completes.
+
+**Fix.** `import mujoco` like any declared dependency (`706fb21`). MuJoCo is in
+`requirements.txt`/`[project]` deps; no local stub exists to bypass.
