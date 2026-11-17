@@ -50,18 +50,18 @@ simulator run shown, not a function returning.
 | 15 | Catch moving objects | 1 | `catch()` measured interception |
 | 16 | Objects of different size/weight/properties | 1 | 12 blocks + rock (rolls) + mass-dependent behaviour (carry, throw recoil, tower drift) |
 
-### Combat & equipment (mission §1.3) — the big gap
+### Combat & equipment (mission §1.3) — M4 landed for rows 17–24; arena rows 25–27 remain
 
 | # | Claim | Class | Evidence / gap |
 |---|-------|-------|----------------|
-| 17 | Multiple independently controlled humanoids in one world | **5** | `PhysicsWorld` owns exactly one `agent_body` (cfg key, single rig in `world/spec.py` MJCF); player/RL/arena all assume the single agent. **Root dependency for 18–28.** |
-| 18 | Equipment that agents physically pick up, hold, carry, use | 4 | `combat/equipment.py` registry (mass/grip/ammo/spread) is real data + real fire/reload math, but grip = boolean flags — no MuJoCo attachment; `equip/fire/reload` agent tools are placeholder stubs returning `{"status":"ok"}`; absent from the 65-tool schema. Only the grenade `throw` delegates to real `world.throw` |
-| 19 | Melee weapons, shields | 5 | registry contains paintball guns + grenade only; no melee spec, no shield/parry mechanics |
-| 20 | Actual physical attacks and defensive actions | 3 | projectile launches + impacts are real (P5); kick/push usable offensively; no melee strike, block or dodge semantics |
-| 21 | Projectile-based equipment | 2 | ProjectileSystem real: launches by initial velocity, contact impacts, splat FX; equipment launcher signature frozen; but no agent-facing surface beyond world-level |
-| 22 | Detect real impacts through MuJoCo contacts | 2 | `projectile_impact` events real; no contact-force damage mapping on agent bodies (single body today) |
-| 23 | Calculate damage from physical interactions + equipment | **5** | no damage model anywhere in `playground/**` |
-| 24 | Health, incapacitation, match termination | **5** | no health state; scorer has victory-by-hits only (stub) |
+| 17 | Multiple independently controlled humanoids in one world | 1 | M3 CLOSED (2026-11-17): `world/spec.py` N-body MJCF with per-agent prefixed names, `AgentRuntime` + `_ScopedModel`/`AgentView` scoping, `agent=` API; `tests/test_multiagent_world.py` 10/10; `scripts/profile_multiagent.py --agents 1 2 4` 2473/1604.6/818.3 steps/s — full evidence in "M3 — CLOSED" below |
+| 18 | Equipment that agents physically pick up, hold, carry, use | 1 | M4: `combat/equipment.py` registry grew `combat_class`/`damage_scale`/`dims_m`/`shape` (7 items: 4 paintball guns, grenade, training baton, paint shield); `world/spec.py` builds REAL equipment + latent pellet-pool bodies from `cfg["combat"]` (no-combat worlds byte-identical to pre-M4); holds ride the real carry pin (`CombatRuntime.hold` → `world.pick_up`); fire/reload run through the real ProjectileSystem launcher; 7 combat tools in the shipped catalogue (`interface/schema.py` "combat" category) delegated by `PhysicalTools` → `combat_*` world methods; tests: `test_combat_world.py` 7, `test_equipment.py` 5, `test_skills.py` 5 |
+| 19 | Melee weapons, shields | 1 | M4: training baton (melee, `charge_speed`) + paint shield (`guard_height`/`guard_forward`, absorb); strike = PD straight-arm thrust with the hand-pinned weapon's velocity written from the measured arm-tip interval (`_pin_held(measure=True)` — a kinematic hold alone is invisible to collisions); shield stays collidable while equipped (`_set_collidable` kept ON) and absorbs in the damage path; `defend("guard")` sets the guard pose; `test_combat_world.py` |
+| 20 | Actual physical attacks and defensive actions | 1 | M4: `attack` = measured arm-swing strike (baton impulse ≈ 11.8 N·s; scale 0.8 ⇒ ≈9.4 damage/swing); `defend(stance)` = guard-pose rewrite of the carry-pin height/forward + shield absorb; honest limit: no dodge verb — mobility verbs (move/push) remain the movement options; `test_combat_world.py`, `test_combat_damage.py` |
+| 21 | Projectile-based equipment | 1 | M4: `fire` parks nothing — pool pellets launch at the held launcher's measured muzzle via `spawn_object`+`set_object_velocity` into the real ProjectileSystem (`_unpark`+active.add); honest refusals: empty pellet pool, rate limit, reload window; grenade = real `world.throw`; `test_combat_world.py`, `test_projectiles.py` |
+| 22 | Detect real impacts through MuJoCo contacts | 1 | M4: damage is read FROM MuJoCo contact events as the measured collision impulse (N·s); per-agent attribution names the exact struck body part from the contact geom pair (`_agent_parts` enrichment); the holder's own weapon pair is refused (solver-weld artifact, measured no-damage); `test_combat_damage.py` |
+| 23 | Calculate damage from physical interactions + equipment | 1 | M4: damage = measured impulse × item `damage_scale` × part multiplier (head/neck 1.5, torso 1.0, hip 0.9, limbs 0.6) × shield absorb; floor `damage_min_impulse` 0.8 N·s (walk-in contacts stay below by physics — measured), cap 95; measured constants recorded in BUGLOG §10; `test_combat_damage.py` |
+| 24 | Health, incapacitation, match termination | 1 | M4: per-agent health consumes the measured damage; incapacitation is PHYSICAL — real `put_down` + `incapacitate_rig` (gait None, that agent's PD entries deleted → gravity crumple, `set_gait` refuses them); `match_ended` emitted with the surviving winner when a team is eliminated (`_check_match`); `test_combat_match.py` 7 |
 | 25 | Agents make independent tactical decisions in combat | 4 | LLM loop + tools exist generally; no arena session mode exists to place an agent in one (steered design: arena solo + arena coop prompt variants, see M5) |
 | 26 | Duels and team-based encounters | 4 | `arena/` ArenaMatch/Scorer/modes with validated plans — but play() is injected-callable orchestration tested with fake worlds/sessions only; scorer maps proj_id→agent by its own admission |
 | 27 | Record and replay matches | 3 | per-session replay real (frames + three.js + checkpoints); match-format report JSON has `timeline: []` placeholder |
@@ -83,7 +83,7 @@ simulator run shown, not a function returning.
 | # | Claim | Class | Evidence / gap |
 |---|-------|-------|----------------|
 | 35 | Preserve 3D island + free exploration | 1 | default mode `playground` unchanged; `simulation.mode` documented, default test |
-| 36 | Multiple agents sharing a world | **5** | same root gap as 17; today multiple agents run in *separate* worlds (manager.py: "Agents never share anything") |
+| 36 | Multiple agents sharing a world | **1** | M3 CLOSED (2026-11-17): `PhysicsWorld` accepts an agents list and builds the multi-agent MJCF; the runtime data plane still isolates identities/memories per agent (manager.py unchanged for separate worlds) — see "M3 — CLOSED" below |
 | 37 | Preserve individual agent identities and memories | 1 | 13-agent roster, per-agent memory dirs + sessions |
 | 38 | Record actions and physical events | 1 | action log + events, per-tool physics events |
 | 39 | SHA-256-chained logs | 1 | append-only chain + `verify-log` CLI + `db.verify_chain` |
@@ -190,5 +190,62 @@ commit range 828a159..M3:
 
 **Still honest limits (documented, not hidden):** long straight walks drift
 course (waist-twist vs foot friction — report-don't-raise); walk-into contact
-stays under the event threshold by design; equipment/combat tools remain
-inline no-op stubs (M4), arena factories are still the lightweight ones (M5).
+stays under the event threshold by design; equipment/combat landed in M4
+(below); arena factories are still the lightweight ones (M5).
+
+## M4 — CLOSED (2026-11-17 late, evidence-backed)
+
+Combat/equipment rows 18–24 (root rows 17/36 closed with M3, above) landed on
+top of `0f8b9ee` in the in-flight commit `cbb5c3d` and are closed by this
+milestone:
+
+- `combat/equipment.py`: registry grew `combat_class` (ranged/throwable/melee/
+  shield), `damage_scale` (damage points per measured impulse N·s), `dims_m` +
+  `shape` for real bodies, `guard_height`/`guard_forward` (shield),
+  `charge_speed` (melee); per-class `validate_equipment`; `EquipmentItem`
+  gained `object_id` (the real equipped body) + `ammo_capacity`.
+- `world/spec.py`: `cfg["combat"]` builds REAL equipment bodies + a latent
+  parked pellet pool; a world WITHOUT `cfg["combat"]` is byte-identical to
+  pre-M4 (default island untouched).
+- `combat/runtime.py` (new): CombatRuntime rides the existing step callback —
+  holds via the real carry pin; damage = measured collision impulse × item
+  scale × part multiplier (head/neck 1.5, torso 1.0, hip 0.9, limbs 0.6) ×
+  shield absorb, floor 0.8 N·s, cap 95; `fire` through the real
+  ProjectileSystem pool; `attack` = PD straight-arm thrust with the hand-
+  pinned weapon's measured velocity; `defend` = guard pose; health 0 → real
+  `put_down` + `incapacitate_rig` (gait None, PD entries deleted → gravity
+  crumple); `match_ended` with winner on elimination.
+- `world/physics.py`: `setup_agent_pose` (honest facings), combat_* world
+  methods + AgentView delegates, shields kept collidable while equipped,
+  `incapacitate_rig`, `set_gait` refuses incapacitated agents, `_agent_parts`
+  names the exact struck body part from the contact geom.
+- `interface/schema.py` + `interface/physical.py`: 7 combat tools
+  (equip/unequip/combat_state/fire/reload/attack/defend) registered in the
+  shipped catalogue with facts-only text, delegated through the views.
+
+**Measured evidence (M4 close):**
+
+- Targeted 8 suites (combat world 7 / damage 6 / match 7 = the 20 contract
+  tests, + equipment 5, projectiles 3, multiagent 10, arena 5, skills 5):
+  **48/48 green**.
+- Full suite TWICE consecutively: **579 passed, 1 skipped, 0 failed** (580
+  collected, exit 0) in both runs — M3 baseline 557+3=560 plus the 20 M4
+  tests; two formerly environment-skipped tests now run under M4's code.
+- Explicit Gate 1: `pytest tests/test_hve.py tests/test_smoke.py -v` →
+  **83 passed** in 48.97 s.
+- `scripts/health_check.py` → `{"healthy": true, "failed": []}`; determinism
+  PASS (hashes equal), physics speed 12.7× real time.
+- `scripts/profile_multiagent.py --agents 1 2 4` → **2679.3 / 1661.9 / 878.9
+  steps/s** (5.4× / 3.3× / 1.8× real time) — equal-or-better than the
+  M3-close numbers (2473 / 1604.6 / 818.3), i.e. the M4 step-hook cost on
+  non-combat worlds is unmeasurable (`combat is None` guard + 2 dict
+  reads/step); all agents upright (z 0.793), max |qacc| 49.4.
+- Physics pitfalls and measured damage constants:
+  `BUGLOG_2026-11-17.md` §10.
+
+**Still honest limits (M4, documented, not hidden):** no dodge verb (mobility
+verbs remain the movement options); the arena is still library-only —
+`ArenaMatch.play()` takes caller-injected factories, and the M5 factory's
+input contract is exactly the `cfg["combat"]` shape built by `world/spec.py`;
+no live arena/session run exists yet, so no "versus" capability claim is made
+until M5 lands it.
