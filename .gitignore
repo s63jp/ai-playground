@@ -9,3 +9,4 @@ experiments/
 *.db-shm
 experiments_archive/
 backups/
+MUJOCO_LOG.TXT
