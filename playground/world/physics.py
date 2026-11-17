@@ -819,7 +819,8 @@ class PhysicsWorld:
         recovery behaviour and reward evaluation all depend on this).
         """
         rt = self._ag(agent)
-        up_z = float(np.asarray(self.d.xmat[rt.torso_bid], dtype=float).reshape(3, 3)[2, 2])
+        up_bid = rt.torso_bid if rt.torso_bid is not None else rt.bid
+        up_z = float(np.asarray(self.d.xmat[up_bid], dtype=float).reshape(3, 3)[2, 2])
         # Height threshold. The humanoid cannot tip (rigid slide-root column,
         # no pitch dof) so "fallen" means leg collapse: the folded-leg floor of
         # the rig is ~0.42 m = 0.52x the 0.81 m stand height, while standing is
@@ -2393,8 +2394,11 @@ class PhysicsWorld:
                     self._set_agent_mass(self._ag(rt_holder).base_mass + s.mass, self._ag(rt_holder))
         else:
             mass = self.base_mass + (float(self.specs[self.held].mass) if self.held else 0.0)
-            self.m.body_mass[self.agent_bid] = mass
-        mujoco.mj_setConst(self.m, self.d)
+            # NEVER call mj_setConst directly here: it uses mjData as a scratch
+            # buffer and leaves d.qpos at qpos0 (home/spawn), silently wiping a
+            # just-restored mj state. _set_agent_mass guards qpos/qvel/time
+            # around it (Nov 17 bug log).
+            self._set_agent_mass(mass)
         if self._multi:
             # Multi-agent: per-agent target/climb/air/jump state was restored
             # above from st["agents"]; just refresh contact bookkeeping.
@@ -2503,7 +2507,11 @@ _AGENT_DELEGATED_ATTRS = (
 )
 
 # Legacy attribute -> runtime field where the names differ.
-_DELEGATE_ALIAS = {"_gait_controller": "gait"}
+# ("ac"/"agent_bid"/"agent_gid" were pre-M3 world attributes whose data now
+# lives on AgentRuntime under different names; the alias keeps every pre-M3
+# caller — including physics.py's own body-mass writes — working.)
+_DELEGATE_ALIAS = {"_gait_controller": "gait", "ac": "spec",
+                   "agent_bid": "bid", "agent_gid": "gid"}
 
 
 def _delegate(attr: str) -> property:

@@ -172,6 +172,8 @@ def test_e_agent_agent_contact_attribution(two_agents):
     world.set_gait("walk", speed=1.0, heading=90.0, agent="agent_001")
     contacts = []
     contact_seen = 0
+    min_gap = float(np.linalg.norm(
+        world.agent_pos("agent_001")[:2] - world.agent_pos("agent_002")[:2]))
     for _ in range(int(14.0 / world.dt)):
         world._step()
         # live count of agent-agent MuJoCo contacts this step
@@ -182,24 +184,30 @@ def test_e_agent_agent_contact_attribution(two_agents):
             if {a, b} == {world.oidx["agent_001"], world.oidx["agent_002"]}:
                 seen_now += 1
         contact_seen = max(contact_seen, seen_now)
+        gap = float(np.linalg.norm(
+            world.agent_pos("agent_001")[:2] - world.agent_pos("agent_002")[:2]))
+        min_gap = min(min_gap, gap)
         if len(contacts) < 5:
             for e in world.events[-4:]:
                 if e["type"] == "collision":
                     objs = e["data"].get("objects") or []
                     if "agent_001" in objs and "agent_002" in objs:
                         contacts.append(e)
-        if contacts:
+        # stop on the first threshold-level impact event, or on first physical
+        # touch — never on a centre-distance guess (0.5 m apart is still air).
+        if contacts or seen_now:
             break
-        gap = float(np.linalg.norm(world.agent_pos("agent_001")[:2] - world.agent_pos("agent_002")[:2]))
-        if gap < 0.5:
-            break  # bodies met but chatter stayed under the collision threshold
     if contacts:
         ev = contacts[0]
         assert sorted(ev["data"]["objects"]) == ["agent_001", "agent_002"]
         assert ev["data"].get("contact_normal") is not None
     else:
-        # Bodies touched without a threshold-level impact: prove the physical
-        # link directly — MuJoCo contacts must exist between the two agents.
+        # A stroll into a standing defender stays under the impact-event
+        # threshold (a 0.06 m/s push is no impact); the physical link itself is
+        # what E proves: the walker closes on the defender and MuJoCo must
+        # register agent-agent geoms touching (first contact at ~0.41 m gap).
+        assert min_gap < 0.45, \
+            f"walker never reached the defender: min gap {min_gap:.2f} m over 14 s"
         assert contact_seen > 0, "walking into a standing agent produced no MuJoCo agent-agent contact"
 
 

@@ -140,9 +140,10 @@ M1 verify physics integrity  ──► M2 verify interaction  ──► M3 multi
 4. Existing 547-suite numbers include stub-level unit tests (arena/equipment) that do not
    constitute integration evidence for 17–27.
 
-## M3 progress (2026-11-17, in flight — see session handoff summary)
+## M3 — CLOSED (2026-11-17, evidence-backed)
 
-Commit range 828a159..(M3 WIP). Multi-agent world architecture landed:
+Root gaps #17 and #36 addressed. Multi-agent world architecture landed in
+commit range 828a159..M3:
 
 - `world/spec.py`: N-body MJCF via `agent_rigs()` + `_prefix_names()` (per-agent prefixed
   names e.g. `agent_002:left_hip`); legacy single-rig output byte-identical (verified vs
@@ -158,16 +159,36 @@ Commit range 828a159..(M3 WIP). Multi-agent world architecture landed:
   normal added in multi), `agents_report()` (measured other-agent perception),
   `held_by_any()`, exclusive holds (`object_taken` naming the holder), get/set_state with
   per-agent gait checkpoint (GaitController.get_state/set_state exist), legacy-compat
-  delegation properties (incl. `_gait_controller`→`gait` alias).
+  delegation properties (incl. `_gait_controller`→`gait`, `ac`→`spec`, `agent_bid`→`bid`,
+  `agent_gid`→`gid` aliases).
 - `playground/interface/physical.py`: `PhysicalTools(world, agent_id=...)` binds via
   AgentView; `look_around` gains `agents_nearby` (multi only). `environment.py`
   `Environment(world=...)` world-injection seam + session-agent tool binding.
 - Real MuJoCo contact filter verified working (minimal model: agent-agent push-apart).
 
-`tests/test_multiagent_world.py` (16 tests): 15 green, 1 failing —
-`test_e_agent_agent_contact_attribution` (walker-vs-standing-defender contact not yet
-detected at 14 s); first task on resume. Targeted green: locomotion/pd_walk/world suites
-still pass on the refactored engine.
+**Measured evidence (M3 close):**
 
-Remaining M3: E contact test, full-suite run, `scripts/profile_multiagent.py` numbers
-(1/2/4 humanoids), `git diff --check`, CLAIMS_MATRIX update, milestone commit.
+- `tests/test_multiagent_world.py`: **10/10 green** — spawn, mappings, independent
+  walks, stop/continue, manipulation+attribution, isolation, legacy surface,
+  cross-agent holds, determinism, agent-agent contact attribution. Contact fact
+  (measured per-step): walking into a standing defender registers first MuJoCo
+  agent-agent contact at ~0.41 m centre gap (t≈5.75 s from 0.72 m at walk speed
+  1.0); a stroll never crosses the impact-event threshold, so the physical link is
+  proven directly (min_gap + contact_seen) and the event branch is kept for real
+  impacts (M4).
+- Full-suite gate caught and fixed four integration regressions on the way
+  (box-rig `agent_fallen` crash, three missing legacy delegation aliases, the
+  `mj_setConst`-after-`mj_setState` state clobber, and a premature gap-based test
+  break) — details and probe evidence in `BUGLOG_2026-11-17.md` §9. Final gate:
+  **557 passed, 3 skipped**, three consecutive full-suite greens.
+- Explicit Gate 1: `pytest tests/test_hve.py tests/test_smoke.py -v` → **83 passed**;
+  `health_check.py` → `{"healthy": true, "failed": []}` (determinism PASS, 12.2× real time).
+- Multi-agent speed (measured, `scripts/profile_multiagent.py --agents 1 2 4`,
+  steady-state walking humanoids): **1 agent 2473 steps/s (4.9× real time),
+  2 agents 1604.6 (3.2×), 4 agents 818.3 (1.6×)**; every agent upright (z 0.793)
+  through the run, max |qacc| 49.4 (`experiments/multiagent_perf.json`).
+
+**Still honest limits (documented, not hidden):** long straight walks drift
+course (waist-twist vs foot friction — report-don't-raise); walk-into contact
+stays under the event threshold by design; equipment/combat tools remain
+inline no-op stubs (M4), arena factories are still the lightweight ones (M5).
