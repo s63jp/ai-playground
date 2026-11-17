@@ -1,6 +1,7 @@
 
 import numpy as np
 from ..world import PhysicsWorld
+from ..world.physics import ActionError
 
 
 class LocoEnv:
@@ -9,6 +10,17 @@ class LocoEnv:
         14 joint positions, 14 joint velocities,
         torso up-vector (3), torso linear velocity (3), upright margin (1).
     Action: 14 normalized [-1,1] joint targets -> radians via simple linear scaling.
+
+    B1 boundary guards (defence in depth behind the world's own validation):
+    - non-finite actions (NaN / ±Inf) are REJECTED with ActionError before any
+      mapping — the caller's transition never touches the physics;
+    - finite out-of-range actions are CLIPPED into the documented encoding
+      boundary [-1, 1]; the clipping frequency is counted per episode (see
+      action_clipping()) so excessive clipping is detectable;
+    - after every world step, MuJoCo numerical warnings (mjWARN_*, e.g.
+      BADQACC) mark the just-completed transition FAULTED (info['faulted']):
+      its physics was (partially) suppressed by the engine and it must not
+      enter training data; the episode terminates.
     """
     obs_dim = 14 + 14 + 3 + 3 + 1
     action_dim = 14
@@ -90,10 +102,29 @@ class LocoEnv:
         }
         for name in self.joint_names:
             kp, kd = self._gains.get(name, (15.0, 1.5))
-            self.world.set_joint_target(name, 0.0, kp=kp, kd=kd)
+            self.world.set_joint_target(name, 0.0, kp=kp, kd=kd, source="neural_policy")
         self.prev_action = np.zeros(self.action_dim, dtype=np.float32)
         self.step_count = 0
         self.max_steps = cfg.get('max_steps', 1000)
+        # B1 boundary accounting (per episode; reset() zeroes it):
+        self._reset_boundary_stats()
+
+    def _reset_boundary_stats(self) -> None:
+        self.clip_stats = {"calls": 0, "calls_with_clipping": 0, "elements_clipped": 0,
+                           "max_elements_in_call": 0, "rejected_calls": 0,
+                           "faulted_steps": 0}
+        self._warn_baseline = dict(self.world.physics_warnings())
+
+    def action_clipping(self) -> dict:
+        """B1: record and expose action clipping so excessive clipping is detectable.
+        elements_clipped / calls is the clipping rate over the episode."""
+        cs = dict(self.clip_stats)
+        cs["clipping_rate"] = (cs["calls_with_clipping"] / cs["calls"]) if cs["calls"] else 0.0
+        return cs
+
+    def faulted(self) -> bool:
+        """True once physics went numerically invalid this episode (warnings seen)."""
+        return self.clip_stats["faulted_steps"] > 0
 
     def set_phase(self, phase: dict) -> None:
         """Apply one curriculum phase: {'gravity_scale', 'upright_assist', 'max_steps'}.
@@ -118,21 +149,43 @@ class LocoEnv:
         self.world.m.opt.gravity[:] = self._base_gravity * self._cur_gravity_scale
         for name in self.joint_names:
             kp, kd = getattr(self, "_gains", {}).get(name, (15.0, 1.5))
-            self.world.set_joint_target(name, 0.0, kp=kp, kd=kd)
+            self.world.set_joint_target(name, 0.0, kp=kp, kd=kd, source="neural_policy")
         self.prev_action = np.zeros(self.action_dim, dtype=np.float32)
         self.step_count = 0
+        self._reset_boundary_stats()
         return self._get_obs()
 
     def step(self, action: np.ndarray):
+        # ---- B1 action-boundary guards (before ANY physical effect) ----
         action = np.asarray(action, dtype=np.float32)
-        assert action.shape == (self.action_dim,)
+        if action.shape != (self.action_dim,):
+            self.clip_stats["rejected_calls"] += 1
+            raise ActionError("invalid_action_shape",
+                              f"action must have shape ({self.action_dim},); got {action.shape}",
+                              shape=list(action.shape))
+        if not np.all(np.isfinite(action)):
+            bad = np.nonzero(~np.isfinite(action))[0].tolist()
+            self.clip_stats["rejected_calls"] += 1
+            self.world._safety_log_event("env_action_rejected", joints=[self.joint_names[i] for i in bad],
+                                         source="neural_policy")
+            raise ActionError("non_finite_action",
+                              "action contains NaN or infinity; rejected before joint mapping",
+                              bad_indices=bad)
+        over = np.abs(action) > 1.0
+        if over.any():
+            n = int(over.sum())
+            self.clip_stats["calls_with_clipping"] += 1
+            self.clip_stats["elements_clipped"] += n
+            self.clip_stats["max_elements_in_call"] = max(self.clip_stats["max_elements_in_call"], n)
+            action = np.clip(action, -1.0, 1.0).astype(np.float32)
+        self.clip_stats["calls"] += 1
         # map normalized action to target positions
         for i, name in enumerate(self.joint_names):
             low, high = self.joint_range[name]
             target = low + (action[i] + 1) * 0.5 * (high - low)
             self._last_targets[name] = float(target)
             kp, kd = self._gains.get(name, (15.0, 1.5))
-            self.world.set_joint_target(name, target, kp=kp, kd=kd)
+            self.world.set_joint_target(name, target, kp=kp, kd=kd, source="neural_policy")
         # Optional curriculum assistance (strength 0..1): blend the policy's targets toward
         # a neutral standing posture (0 rad) on the balance-critical joints — spine + hips
         # + knees — through the SAME PD torque path as every other command. Physics-only:
@@ -143,7 +196,7 @@ class LocoEnv:
                 if name in self._last_targets:
                     blended = (1.0 - w) * self._last_targets[name]
                     kp, kd = self._gains.get(name, (15.0, 1.5))
-                    self.world.set_joint_target(name, blended, kp=kp, kd=kd)
+                    self.world.set_joint_target(name, blended, kp=kp, kd=kd, source="neural_policy")
                     self._last_targets[name] = blended
         # advance simulation
         self.world.step()
@@ -161,11 +214,25 @@ class LocoEnv:
         self.step_count += 1
         done = self.step_count >= self.max_steps
         # check fall termination if available
+        info = {}
         if hasattr(self.world, 'agent_fallen') and self.world.agent_fallen():
             done = True
             info = {'fallen': True}
-        else:
-            info = {}
+        # B1 physics-health: a new MuJoCo numerical warning means the engine
+        # suppressed THIS step's physics — the transition is invalid for training,
+        # so mark it faulted and terminate. A non-finite observation is the same
+        # verdict. The step reward is still returned (bookkeeping), but trainers
+        # MUST exclude faulted transitions from any dataset/rollout.
+        warn = self.world.physics_warnings()
+        new_warns = {k: v for k, v in warn.items() if v > self._warn_baseline.get(k, 0)}
+        if new_warns or bool(np.any(~np.isfinite(obs))):
+            self._warn_baseline = dict(warn)
+            self.clip_stats["faulted_steps"] += 1
+            done = True
+            info['faulted'] = True
+            info['physics_warnings'] = sorted(new_warns)
+            obs = np.where(np.isfinite(obs), obs, 0.0).astype(np.float32)
+            reward = 0.0
         return obs, reward, done, info
 
     def _get_obs(self):

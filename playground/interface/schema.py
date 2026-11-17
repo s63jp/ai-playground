@@ -6,6 +6,7 @@ say nothing about how the world's physics behaves: that is for agents to find ou
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from ..integrity import CLAIM_HELP
@@ -332,7 +333,11 @@ TOOLS: list[dict] = [
 ]
 
 SPECS: dict[str, dict] = {t["name"]: t for t in TOOLS}
-CATEGORIES = ("observation", "movement", "object", "combat", "experiment", "world", "memory", "learning")
+# "control" (set_joint_target) and "skill" (run_skill) were used by tools but
+# missing from this enumeration (M6-A audit finding); downstream category
+# listings now match the real tool set.
+CATEGORIES = ("observation", "movement", "object", "combat", "experiment", "world", "memory",
+              "learning", "control", "skill")
 
 
 class ToolError(Exception):
@@ -412,6 +417,12 @@ def normalise_args(tool: str, args: Any) -> dict:
             v, ok = int(v), True
         if not ok:
             raise ToolError("invalid_argument", f"Argument '{k}' of {tool} must be of type {typ}.",
+                            argument=k, received=repr(v)[:80])
+        # B1: JSON admits NaN/Infinity literals; numbers must be finite at the tool
+        # boundary. (Downstream world validation rejects them too — this catches
+        # them before any tool body runs.)
+        if typ in ("number", "integer") and isinstance(v, (int, float)) and not math.isfinite(float(v)):
+            raise ToolError("invalid_argument", f"Argument '{k}' of {tool} must be a finite number.",
                             argument=k, received=repr(v)[:80])
         if "enum" in props[k] and v not in props[k]["enum"]:
             raise ToolError("invalid_argument", f"Argument '{k}' of {tool} must be one of {props[k]['enum']}.",

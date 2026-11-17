@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from numbers import Real
 from typing import Any, Callable
 import os
 
@@ -357,6 +358,31 @@ class PhysicsWorld:
         self._placed_agents: set[str] = set()  # agents positioned by setup_agent (setup_finish keeps them)
         self.fallen_settle_s = 0.3  # sustained-condition window before agent_fallen() is True
 
+        # ---- B1 safety controls: the PD joint-target route was the one force path
+        # without validation. Contract (world/safety below): non-finite values are
+        # REJECTED with ActionError (never converted), finite gains/targets are
+        # CLAMPED into configurable ceilings/bounds with a structured event, the
+        # applied torque is capped per joint, and MuJoCo's numerical warnings are
+        # surfaced instead of silently suppressing steps. All of it observable via
+        # safety_stats() / physics_warnings() / safety_log(). ----
+        _s = self.wc.get("safety") or {}
+        self._safety = {
+            "kp_ceiling": float(_s.get("kp_ceiling", 1000.0)),
+            "kd_ceiling": float(_s.get("kd_ceiling", 100.0)),
+            "clamp_target": bool(_s.get("clamp_target", True)),
+            "enforce_torque_limits": bool(_s.get("enforce_torque_limits", True)),
+            "torque_limits": {str(k): float(v) for k, v in (_s.get("torque_limits") or {}).items()},
+        }
+        self._safety_log: list[dict] = []           # bounded structured safety events (recording-independent)
+        self._pd_cap: dict[str, float | None] = {}  # joint -> resolved torque ceiling (or None)
+        self._pd_last_set: dict[str, tuple[int, str]] = {}  # joint -> (step, source) — warning attribution
+        self._sat_active: set[str] = set()          # joints currently saturated (flank detection)
+        self._safety_stats = {
+            "target_rejects": 0, "target_clamps": 0, "gain_clamps": 0,
+            "torque_saturation": {},                # joint -> {steps, duration_s, max_raw, sources{}, events}
+            "physics_warnings": {},                 # mjWARN name -> count
+        }
+
         spec_list = build_specs(cfg)
         self.specs: dict[str, ObjectSpec] = {s.id: s for s in spec_list}
         self.xml = build_mjcf(cfg, spec_list)
@@ -364,6 +390,7 @@ class PhysicsWorld:
         self.d = mujoco.MjData(self.m)
         self.dt = float(self.m.opt.timestep)
         m = self.m
+        self._warn_seen = np.array(self.d.warning.number).copy()  # B1 watchdog baseline
         self.half = float(self.wc["island"]["half_extent"])
         self.sea = float(self.wc["island"]["sea_level"])
 
@@ -647,15 +674,167 @@ class PhysicsWorld:
         return self.d.qvel[rt.av:rt.av + 3].copy()
 
 
-    def set_joint_target(self, joint: str, position: float, kp: float = 15.0, kd: float = 1.5) -> None:
+    def set_joint_target(self, joint: str, position: float, kp: float = 15.0, kd: float = 1.5,
+                         source: str | None = None) -> None:
         """Register a PD controller for a named joint.
         The target position (radians) will be tracked each simulation step.
         kp – proportional gain, kd – derivative gain.
+
+        B1 safety contract — this is the world's single joint-force hook, so every
+        caller (scripted controllers, tools, neural policies) is protected here:
+        - Non-finite `joint`, `position`, `kp` or `kd` (NaN / ±Infinity, or a
+          non-numeric) is REJECTED with ActionError and recorded; nothing is
+          stored. Invalid values are never silently converted into commands.
+        - Finite gains beyond the configured ceilings (and negative gains, which
+          would be positive feedback) are clamped with a `joint_gains_clamped`
+          event; the per-joint torque caps bound the resulting force regardless.
+        - A finite target beyond a limited joint's real range is saturated into
+          that range (what an actuator ctrlrange would do) with a
+          `joint_target_clamped` event.
+        - `source` labels the demanding controller ("neural_policy" from the RL
+          env, "tool" from the manual tool, None = internal scripted control) so
+          torque saturation can be attributed (see safety_stats()).
         """
-        self._pd[joint] = {"target": position, "kp": kp, "kd": kd}
+        if not isinstance(joint, str) or not joint:
+            self._safety_stats["target_rejects"] += 1
+            self._safety_log_event("joint_target_rejected", joint=repr(joint)[:40],
+                                   param="joint", value=repr(joint)[:32])
+            raise ActionError("invalid_joint_target",
+                              "set_joint_target: joint must be a non-empty string",
+                              joint=repr(joint)[:40])
+        source = str(source) if source else "unspecified"
+        for pname, val in (("position", position), ("kp", kp), ("kd", kd)):
+            # A real number (int/float, incl. numpy scalars via numbers.Real) that is
+            # finite. Strings and other types are NOT silently converted here — the
+            # tool layer owns string→number coercion; the world accepts numbers only.
+            if isinstance(val, bool) or not isinstance(val, Real) \
+                    or not math.isfinite(float(val)):
+                self._safety_stats["target_rejects"] += 1
+                self._safety_log_event("joint_target_rejected", joint=joint, param=pname,
+                                       value=repr(val)[:32], source=source)
+                raise ActionError("invalid_joint_target",
+                                  f"set_joint_target('{joint}'): {pname} must be a finite number "
+                                  f"(got {repr(val)[:32]}); the command was rejected, not converted.",
+                                  joint=joint, param=pname, value=repr(val)[:32], source=source)
+        target, kp, kd = float(position), float(kp), float(kd)
+        # Gain ceilings: clamp (never reject — saturation is an actuator-honest
+        # bound), observable, and safe because the torque caps bound final force.
+        if not (0.0 <= kp <= self._safety["kp_ceiling"]) or not (0.0 <= kd <= self._safety["kd_ceiling"]):
+            kp2 = min(max(0.0, kp), self._safety["kp_ceiling"])
+            kd2 = min(max(0.0, kd), self._safety["kd_ceiling"])
+            self._safety_stats["gain_clamps"] += 1
+            self._safety_log_event("joint_gains_clamped", joint=joint, source=source,
+                                   kp=[kp, kp2], kd=[kd, kd2])
+            kp, kd = kp2, kd2
+        # Target saturation into the joint's REAL range (limited joints only; unknown
+        # joints keep the legacy step-time drop so box-agent worlds are unaffected).
+        try:
+            jid = int(self.m.joint(joint).id)
+            if self._safety["clamp_target"] and int(self.m.jnt_limited[jid]):
+                lo, hi = (float(self.m.jnt_range[jid][0]), float(self.m.jnt_range[jid][1]))
+                if target < lo or target > hi:
+                    clamp = min(max(target, lo), hi)
+                    self._safety_stats["target_clamps"] += 1
+                    self._safety_log_event("joint_target_clamped", joint=joint, source=source,
+                                           target=[target, clamp], range=[lo, hi])
+                    target = clamp
+            self._pd_last_set[joint] = (self.steps, source)
+        except (ValueError, KeyError):
+            pass  # unknown joint: existing step-time handling (drop + event) applies
+        else:
+            # Resolve the dof's torque ceiling ONCE per joint (config + joint type are
+            # static per world instance); the per-step PD loop does a dict lookup only.
+            self._pd_cap[joint] = (self._torque_cap(joint)
+                                   if int(self.m.jnt_type[jid]) == int(mujoco.mjtJoint.mjJNT_HINGE)
+                                   else None)
+        self._pd[joint] = {"target": target, "kp": kp, "kd": kd, "source": source}
         # Removed hip forward displacement hack – movement now relies on PD torques and contact forces.
 
-        self.emit("joint_control", hidden=None, joint=joint, target=position, kp=kp, kd=kd)
+        self.emit("joint_control", hidden=None, joint=joint, target=target, kp=kp, kd=kd,
+                  source=source)
+
+    # ------------------------------------------------------------------ B1: safety
+    def _safety_log_event(self, etype: str, **data: Any) -> None:
+        """Record a safety event both in the bounded always-on log and the
+        recording-gated event stream. Recording is OFF in RL training worlds, so
+        the plain log is what makes violations observable there."""
+        rec = {"step": self.steps, "t": round(self.time, 4), "type": etype}
+        rec.update(_plain(data))
+        self._safety_log.append(rec)
+        if len(self._safety_log) > 512:
+            del self._safety_log[:-256]
+        self.emit(etype, **data)
+
+    def _torque_cap(self, joint: str) -> float | None:
+        """Configured N*m ceiling for `joint` (hinge dofs only). Resolution order:
+        exact name -> agent-prefix-stripped -> left_/right_-stripped family ->
+        head_* family -> 'default'."""
+        if not self._safety["enforce_torque_limits"]:
+            return None
+        tl = self._safety["torque_limits"]
+        if joint in tl:
+            return float(tl[joint])
+        name = joint.split(":", 1)[1] if ":" in joint else joint
+        if name in tl:
+            return float(tl[name])
+        if name.startswith(("left_", "right_")):
+            fam = name.split("_", 1)[1]
+            if fam in tl:
+                return float(tl[fam])
+        if name.startswith("head_"):
+            return float(tl["head"]) if "head" in tl else None
+        return float(tl["default"]) if "default" in tl else None
+
+    def _check_physics_warnings(self) -> None:
+        """B1: surface MuJoCo's numerical warnings (mjWARN_*) instead of letting the
+        engine silently suppress the affected step's physics. Counts new warnings,
+        attributes them to the agents whose joints were commanded recently, records
+        them in the safety log and counters. Recoverable warnings are monitored;
+        episode-level responses (termination on BADQACC) belong to the env."""
+        num = self.d.warning.number
+        diffs = np.asarray(num) - self._warn_seen
+        if not np.any(diffs > 0):
+            return
+        new = []
+        for i in range(min(len(diffs), int(mujoco.mjtWarning.mjNWARNING))):
+            if diffs[i] > 0:
+                try:
+                    name = str(mujoco.mjtWarning(int(i))).split(".")[-1]
+                except Exception:
+                    name = f"mjWARN_{i}"
+                self._safety_stats["physics_warnings"][name] = \
+                    self._safety_stats["physics_warnings"].get(name, 0) + int(diffs[i])
+                new.append({"name": name, "count": int(diffs[i])})
+        self._warn_seen = np.array(self.d.warning.number).copy()
+        # Attribution "where possible": joints commanded within the last 100 steps
+        # map to their owning agent (prefixed names in multi-agent worlds).
+        recent = {j: src for j, (st, src) in self._pd_last_set.items() if self.steps - st <= 100}
+        agents = sorted({j.split(":", 1)[0] if ":" in j else self._default_agent
+                         for j in recent}) or ["none"]
+        sources = sorted(set(recent.values()))
+        self._safety_log_event("physics_warning", warnings=new, agents=agents,
+                               sources=sources,
+                               note="MuJoCo suppressed the affected step's physics (mjWARN)")
+
+    def physics_warnings(self) -> dict:
+        """B1: cumulative MuJoCo numerical-warning counters (e.g. 'mjWARN_BADQACC').
+        Empty dict == a world whose physics has never been numerically suppressed."""
+        return _plain(dict(self._safety_stats["physics_warnings"]))
+
+    def safety_stats(self) -> dict:
+        """B1: observable safety counters. Includes per-joint torque saturation
+        (steps, duration, peak magnitude, and per-source attribution so scripted
+        and neural demands are distinguishable) and clamping/reject counts."""
+        s = dict(self._safety_stats)
+        s["torque_saturation"] = _plain(dict(self._safety_stats["torque_saturation"]))
+        s["physics_warnings"] = _plain(dict(self._safety_stats["physics_warnings"]))
+        return _plain(s)
+
+    def safety_log(self, last: int = 200) -> list[dict]:
+        """B1: the last `last` structured safety events (clamps, rejections,
+        saturation, physics warnings), recording-independent."""
+        return [dict(e) for e in self._safety_log[-int(last):]]
+
 
 
     def total_mass(self, agent: str | None = None) -> float:
@@ -801,6 +980,32 @@ class PhysicsWorld:
             qpos = d.qpos[qaddr]
             qvel = d.qvel[dofadr]
             torque = kp * (target - qpos) - kd * qvel
+            # B1: cap the ACTUAL applied generalized force on hinge dofs. The rig has
+            # no actuators (nu=0) — this torque IS the full force entering MuJoCo at
+            # this dof, so saturating it here is the effective actuator limit. Slide
+            # dofs carry the root-traction force (N, bounded by walk_force) and are
+            # not torque-capped. Cap resolved per joint at registration (self._pd_cap).
+            cap = self._pd_cap.get(jname)
+            if cap is not None and abs(torque) > cap:
+                raw = float(torque)
+                torque = math.copysign(cap, torque)
+                src = cfgj.get('source') or 'unspecified'
+                sat = self._safety_stats["torque_saturation"].setdefault(
+                    jname, {"steps_saturated": 0, "duration_s": 0.0, "max_raw": 0.0,
+                            "events": 0, "sources": {}})
+                sat["steps_saturated"] += 1
+                sat["duration_s"] = round(sat["steps_saturated"] * self.dt, 4)
+                if abs(raw) > sat["max_raw"]:
+                    sat["max_raw"] = abs(raw)
+                    sat["max_raw_source"] = src
+                sat["sources"][src] = sat["sources"].get(src, 0) + 1
+                if jname not in self._sat_active:
+                    self._sat_active.add(jname)
+                    sat["events"] += 1
+                    self._safety_log_event("joint_torque_saturated", joint=jname,
+                                           raw=round(raw, 2), limit=cap, source=src)
+            elif jname in self._sat_active:
+                self._sat_active.discard(jname)
             d.qfrc_applied[dofadr] += torque
         for rt in self._agents.values():
             if rt.held:
@@ -815,6 +1020,7 @@ class PhysicsWorld:
         # every world ran in time 0.0, no falls/flights/collisions ever happened) ---
         self._prev_qvel[:] = d.qvel
         mujoco.mj_step(self.m, d)
+        self._check_physics_warnings()  # B1: numerical warnings surface, never silently suppress
         for rt in self._agents.values():
             if rt.held:
                 self._pin_held(rt)

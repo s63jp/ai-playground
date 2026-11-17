@@ -30,6 +30,72 @@ world:
   ring: {id: ring, name: "The Ring", position: [3.0, 3.0], major_radius: 0.7, tube_radius: 0.06, mass: 2.0,
          friction: 0.8, colour: "#f2c14e", segments: 16}
 
+  # ---------------------------------------------------------------------------
+  # Safety controls (M6-B stage B1). The PD joint-target route (set_joint_target
+  # -> the _step PD loop -> d.qfrc_applied) was the ONE force path into MuJoCo
+  # without validation: the M6-A audit demonstrated kp=1e6 producing 10 MN*m of
+  # torque and NaN targets silently tripping MuJoCo's BADQACC guard. These
+  # settings close that route for EVERY caller (scripted controllers, tools,
+  # neural policies) at the single shared hook.
+  safety:
+    # |kp|/|kd| above these are clamped (and emit joint_gains_clamped). Clamped
+    # gains cannot create unbounded force because the torque caps below bound
+    # the final torque. Scripted peaks (recovery kp up to 600 at the stance
+    # ankle) sit far below the ceilings.
+    kp_ceiling: 1000.0
+    kd_ceiling: 100.0
+    # Target saturation into the joint's real range is a CONFIGURABLE MODE and
+    # defaults OFF: the repo's existing controllers intentionally command beyond
+    # model joint ranges (the combat strike raises the elbow to 2.35 rad against a
+    # +-pi/2 limit and relies on MuJoCo's limit stop as part of its measured
+    # dynamics; the recovery IK knee target is likewise over-range). Saturating
+    # those targets rewrites them silently and changes their contact dynamics
+    # (measured 2026-11-17: it destabilised the melee strike until the holder was
+    # hit by its own weapon). Safety does not depend on it: the per-joint torque
+    # caps bound the ACTUAL force of any finite target (e.g. 1e30 rad with kp 60
+    # still writes at most the cap in N*m), and non-finite values are rejected.
+    # Turn on (clamp_target: true) only for envs that want actuator-stop
+    # semantics for policy-mapped targets.
+    clamp_target: false
+    # Per-joint PD torque caps, N*m, enforced in the PD loop.
+    # EVIDENCE BASE (raw envelope measured 2026-11-17, caps disabled during
+    # measurement, per-step sampling via register_step_callback so controller-internal
+    # stepping is included; ai-playground-audit/probe_torque_results.json and
+    # combat_envelope_probe.json):
+    #   - standing, walking, running, 45/120-deg turning, two collapse+recovery poses
+    #     (deep-fold and the canonical test_locomotion fold), scripted controller only:
+    #     ankle 326.7 (walk; turns 305-314), hip 310.0 (recovery, kp 200), knee 452.3
+    #     (canonical-recovery catch, kp 250), waist_yaw 41.3 (straight walk; turns <=
+    #     23.7), spine 41.9 (recovery), head 10.6 (run pitch), foot_yaw 3.5;
+    #   - M4 melee baton strike (swing raise kp 60/48): shoulder 124.3, elbow 166.3 —
+    #     an earlier cap pair (40/30) clipped the strike's raise/strike transients and
+    #     measurably altered its contact trajectory (self-contact impulse 15.92 vs
+    #     17.70 N*s clean); the caps must clear the measured combat envelope.
+    # FORCE PATH: the compiled humanoid has NO actuators (m.nu == 0) and there is no
+    # gear or transmission — the PD loop writes generalized force directly into
+    # d.qfrc_applied (N*m per hinge dof). The asset XML motor ctrlranges (hips +-30,
+    # knees +-24) are the ASSET's hardware specification and do NOT bound this
+    # controller stack; they are NOT used here. Caps sit ABOVE every measured
+    # legitimate scripted peak (min ~1.22-1.33x margin) and far BELOW the runaway
+    # scale demonstrated in the M6-A audit (~1e6 Nm, kp=1e6), bounding a rogue
+    # controller 3+ orders of magnitude. For the small-torque families the cap is a
+    # modest absolute value (~20-120 Nm) because extra headroom there costs nothing
+    # and a runaway neural or noisy-gain command must still be bounded.
+    # Keys: exact joint name wins, then the name with a left_/right_ prefix stripped,
+    # then the head_* family, then 'default'.
+    enforce_torque_limits: true
+    torque_limits:
+      default: 600.0
+      spine_L2: 60.0
+      waist_yaw: 120.0
+      shoulder: 160.0
+      elbow: 220.0
+      hip: 400.0
+      knee: 570.0
+      ankle: 400.0
+      head: 20.0
+      foot_yaw: 20.0
+
 agent_body:
   type: "box"
   limb_friction_engine: false  # humanoid walks CONTACT-DRIVEN (needs foot grip). true = frictionless/normal-only limbs (root-traction pairing; kept switchable for A/B).

@@ -236,11 +236,23 @@ class PhysicalTools:
     def jump(self, wait: str = "landing") -> dict:
         return self.w.jump(wait)
 
-    def set_joint_target(self, joint: str, position: float, kp: float = 0.0, kd: float = 0.0) -> dict:
+    def set_joint_target(self, joint: str, position: float, kp: float | None = None,
+                         kd: float | None = None) -> dict:
         """Register a PD controller for a joint. Returns acknowledgment.
         The controller will be applied each physics step.
+
+        B1: gains left out now use the world's defaults (kp 15 / kd 1.5) instead of a
+        silent zero-gain (force-less) registration, and every call is tagged
+        source="tool" so torque saturation can distinguish manual/LLM demands from
+        scripted-controller and neural-policy demands. Non-finite or over-range
+        values are rejected/clamped by the world's B1 validation (ActionError
+        surfaces as a structured tool error).
         """
-        self.w.set_joint_target(joint, float(position), float(kp), float(kd))
+        if kp is None and kd is None:
+            self.w.set_joint_target(joint, float(position), source="tool")
+        else:
+            self.w.set_joint_target(joint, float(position), float(kp or 0.0),
+                                    float(kd or 0.0), source="tool")
         return {"joint": joint, "target": position, "kp": kp, "kd": kd}
 
 
