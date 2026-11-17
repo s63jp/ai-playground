@@ -342,9 +342,11 @@ modes the backend actually runs.
   floor-height contacts, time-stamped so a scrubbed replay shows only impacts
   it has reached); short-lived impact particles from recorded
   `agent_damaged` contact positions in the shooter's colour. Extra combatant
-  rigs take their team colour from the manifest. Equipment stays a plain box
-  only for recordings with neither manifest nor equip evidence (documented
-  legacy gap, see BUGLOG §12c).
+  rigs take their team colour from the manifest. Equipment without manifest or
+  equip evidence renders as a compact neutral marker (recordings with no
+  evidence at all keep an honest, non-anonymous silhouette — see BUGLOG §13a);
+  legacy sessions get item/team attribution from the recorded equip results,
+  `equipment_equipped` events and M5 factory item naming (BUGLOG §13a-13b).
 
 **Recorded evidence (this milestone):** duel #122/#123 (driven, measured aim,
 13 shots→13 hits, report `experiments/arena_paint_demo_report.json`) and dashboard-

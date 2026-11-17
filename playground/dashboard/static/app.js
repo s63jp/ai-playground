@@ -27,7 +27,7 @@ const sanitizeWords = (s) => {
   return t;
 };
 import { HumanoidView } from './js/humanoid_view.js';
-import { CombatFX, makeMarker, makePellet, teamColour, _oid } from './js/combatfx.js?v=m61';
+import { CombatFX, makeMarker, makePellet, teamColour, _oid, isAccentSlug } from './js/combatfx.js?v=m62';
 
 const api = async (p, opt) => { const r = await fetch(p, opt); if (!r.ok) throw new Error(`${p}: ${r.status} ${await r.text()}`); return r.json(); };
 
@@ -95,6 +95,14 @@ const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 400);
 camera.position.set(-14, 18, 20);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(1, 1, 0);
+// 2026-11-17 jank fixes: grazing-angle orbits showed the dark sea plane past the island
+// edge as a broken void, and dipping below the floor plane hid the world. Clamp the orbit
+// and fade the far sea into the background with scene fog.
+scene.fog = new THREE.Fog(0x0d1014, 30, 110);
+controls.maxPolarAngle = 1.45;   // ~83 deg — the camera never goes under/below the floor
+controls.minPolarAngle = 0.12;
+controls.minDistance = 2.5;
+controls.maxDistance = 90;
 scene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 1.6));
 const sun = new THREE.DirectionalLight(0xffffff, 1.6);
 sun.position.set(-10, 25, 12);
@@ -108,7 +116,7 @@ const grid = new THREE.GridHelper(2 * H, 2 * H, 0x555555, 0x3a3a3a);
 grid.rotation.x = Math.PI / 2;
 grid.position.z = 0.005;
 world.add(grid);
-const axes = new THREE.AxesHelper(3);
+const axes = new THREE.AxesHelper(1.2);   // a 3 m pole read as a weird tower in arena frames
 axes.position.set(0, 0, 0.01);
 world.add(axes);
 for (let k = -H; k <= H; k += 4) {          // coordinate labels every 4 m
@@ -163,7 +171,11 @@ function pelletColour(pid) {
   return owner && (owner.agent || owner.team) ? teamColour(team || owner.agent) : 0xd8d8d8;
 }
 function itemColour(oid) {
-  return teamColour(itemTeam[oid] || 'neutral');
+  // Colour chain: manifest '<slug>_item_<k>' slug <-> team-name match ->, failing that, the
+  // M5 factory naming contract (the recorded object id itself names the owning team slug)
+  // -> neutral. Keeps legacy no-manifest duels (#120/#121-style) off the anonymous white.
+  const slug = itemTeam[oid] || (/^[a-z]+_item_/i.test(oid) ? oid.split('_item_')[0] : null);
+  return teamColour(slug || 'neutral');
 }
 function damageColour(src) {
   if (combatCtx.pellets[src]) return pelletColour(src);
@@ -193,6 +205,15 @@ function combatEvents(evs) {
     if (e.type === 'pellet_launched') {
       if (d.object) combatCtx.pellets[d.object] = { agent: d.agent, item: d.item };
     } else if (e.type === 'weapon_reload') {
+      if (d.object && d.item) {
+        combatCtx.items[d.object] = { item: d.item };
+        const slug = String(d.object).split('_item_')[0];
+        if (slug) itemTeam[d.object] = Object.keys(combatCtx.teamOf).find((t) => _oid(t) === slug) || itemTeam[d.object];
+      }
+    } else if (e.type === 'equipment_equipped') {
+      // Legacy recorders log the equip as a raw event (same payload shape as weapon_reload):
+      // without it, pre-M5.5 duel items stay unclassified white template blocks (screenshots
+      // 2026-11-17, session #120). Same classification as the action-result path below.
       if (d.object && d.item) {
         combatCtx.items[d.object] = { item: d.item };
         const slug = String(d.object).split('_item_')[0];
@@ -255,7 +276,10 @@ function ensureMesh(id) {
     return g;
   }
   const colour = spec.colours[id] || '#ffffff';
-  meshes[id] = makeMesh({ ...blockTemplate, id, colour, position: [0, 0, -50] });   // generated in-world
+  // Generated object with no recorded classification (no manifest, no equip/reload evidence)
+  // stays the block silhouette but at a COMPACT size: the 0.5 m template block read as a giant
+  // tumbling white "moth" in replay close-ups; real equipment bodies are much smaller than that.
+  meshes[id] = makeMesh({ ...blockTemplate, id, colour, dimensions: { x: 0.22, y: 0.22, z: 0.22 }, position: [0, 0, -50] });
   return meshes[id];
 }
 // ------------------------------------------------------------------ agent player model
@@ -280,13 +304,15 @@ function ensureExtraRig(aid) {
   const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.17, 0.55, 4, 10),
                               new THREE.MeshStandardMaterial({ color, roughness: 0.8 }));
   body.rotation.x = Math.PI / 2;   // build along +Z like every other mesh (the world group is z-up)
-  body.position.set(0, 0, 0.05);
+  body.position.set(0, 0, -0.18);
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 10),
                               new THREE.MeshStandardMaterial({ color, roughness: 0.8 }));
-  head.position.set(0, 0, 0.55);
-  const legs = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.42, 0.2),
+  head.position.set(0, 0, 0.42);
+  // A standing leg column (0.42 tall, near the ground) — the old 0.2-tall slab sat at mid-torso
+  // height and the whole statue read as floating (screenshots 2026-11-17).
+  const legs = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.09, 0.42),
                               new THREE.MeshStandardMaterial({ color: 0x3a4453, roughness: 0.85 }));
-  legs.position.set(0, 0, -0.4);
+  legs.position.set(0, 0, -0.58);
   group.add(body, head, legs);
   world.add(group);
   rig = { group };
@@ -377,7 +403,22 @@ function animateRig(p, prev) {
   u.armR.shoulder.rotation.y = p.held ? -0.5 : (airborne === 0 ? -swing * s : -0.55 * airborne);
   u.armL.elbow.rotation.y = airborne === 0 ? -0.2 * Math.abs(s) : 0.6;
   u.armR.elbow.rotation.y = p.held ? -1.2 : (airborne === 0 ? -0.2 * Math.abs(s) : 0.6);
-  agentMesh.rotation.z = heading;
+  applyTilt(agentMesh, heading, fallenTilt(p.agent[2]));
+}
+
+// 2026-11-17 jank fixes: a fallen combatant (incapacitated/lost balance — the MuJoCo torso
+// root drops from ~0.8 m to ~0.15 m) rendered as an upright figure with its legs buried under
+// the floor plane. Tilt the model down onto its recorded torso once the recorded root height
+// says "lying": a derived presentation of the recorded pose, no invented motion.
+function fallenTilt(rootZ) { return Math.max(0, Math.min(1, (0.5 - rootZ) / 0.24)); }
+const _TILT_Q = new THREE.Quaternion(), _YAW_Q = new THREE.Quaternion();
+const _TILT_AXIS = new THREE.Vector3(0, 1, 0), _YAW_AXIS = new THREE.Vector3(0, 0, 1);
+function applyTilt(obj3d, heading, tilt) {
+  if (tilt <= 0) { obj3d.rotation.set(0, 0, heading || 0); return; }
+  obj3d.rotation.set(0, 0, 0);                       // clear the euler before composing
+  _TILT_Q.setFromAxisAngle(_TILT_AXIS, 1.5 * tilt);  // face-down: model +Z (up) -> model +X (front)
+  _YAW_Q.setFromAxisAngle(_YAW_AXIS, heading || 0);  // topple about ITS facing direction
+  obj3d.quaternion.copy(_YAW_Q).multiply(_TILT_Q);
 }
 
 const trails = new THREE.Group(); world.add(trails);
@@ -439,6 +480,7 @@ function show(i) {
       const rig = ensureExtraRig(aid);
       rig.group.visible = true;
       rig.group.position.set(xyz[0], xyz[1], xyz[2]);
+      applyTilt(rig.group, 0, fallenTilt(xyz[2]));   // other combatants fall with their recorded pose too
     }
   }
   animateRig(p, poses[cur - 1] || null);
@@ -519,7 +561,7 @@ async function refresh(first = false) {
   const [fr, acts, evs, msgs, detail] = await Promise.all([
     api(`/api/sessions/${sid}/frames?start=${frames.length}&limit=5000`),
     api(`/api/sessions/${sid}/actions?after=${lastSeen.a}`),
-    api(`/api/sessions/${sid}/events?after=${lastSeen.e}&types=flight_end,object_appeared,object_lost,collision,pellet_launched,agent_damaged,weapon_reload`),
+    api(`/api/sessions/${sid}/events?after=${lastSeen.e}&types=flight_end,object_appeared,object_lost,collision,pellet_launched,agent_damaged,weapon_reload,equipment_equipped`),
     api(`/api/sessions/${sid}/messages?after=${lastSeen.m}`),
     api(`/api/sessions/${sid}`),
   ]);
@@ -541,13 +583,28 @@ async function refresh(first = false) {
         <span class="small muted">result:</span> ${esc(a.args.actual_result)} · <span class="small">${a.args.supported ? 'supported' : 'not supported'}</span>
         · evidence <span class="${v.counts_as_evidence ? 'ok' : 'bad'}">${esc(v.verdict)}</span></div>`);
     }
-    if (a.tool === 'equip' && r.success && r.object && r.item) {
-      // equip results carry the real equipped_dict (object id + EQUIPMENT registry id):
-      // markers become classifiable even for sessions recorded before the manifest existed.
-      combatCtx.items[r.object] = { item: r.item };
-      const slug = String(r.object).split('_item_')[0];
-      if (slug) itemTeam[r.object] = Object.keys(combatCtx.teamOf).find((t) => _oid(t) === slug) || itemTeam[r.object];
+    if (a.tool === 'equip' && r.success && (r.object || r.equipped) && r.item) {
+      // equip results carry the real equipped_dict (the 'equipped' object id + EQUIPMENT
+      // registry id): markers become classifiable even for sessions recorded before the
+      // manifest existed. The M5 factory names items '<team>_item_<k>' — a team-accent slug
+      // (red/blue/...) is honest recorded provenance, so the session agent wears that team
+      // for pellets/extra rigs too, when nothing else already named it.
+      const oid = r.object || r.equipped;
+      combatCtx.items[oid] = { item: r.item };
+      const slug = String(oid).split('_item_')[0];
+      if (slug) {
+        itemTeam[oid] = Object.keys(combatCtx.teamOf).find((t) => _oid(t) === slug) || itemTeam[oid];
+        const word = slug.split('_')[0];
+        if (isAccentSlug(word) && !combatCtx.teamOf[sessionAgent]) combatCtx.teamOf[sessionAgent] = word;
+      }
       lastSeen.equipLearned = true;
+    }
+    if (a.tool === 'look_around' && r.success) {
+      // Recorded neighbours carry their team name (arena factory naming) — legacy sessions
+      // have no manifest teams, so the opponent rig/pellets otherwise hash-paint.
+      for (const n of (r.agents_nearby || [])) {
+        if (n && n.id && n.team && !combatCtx.teamOf[n.id]) combatCtx.teamOf[n.id] = String(n.team);
+      }
     }
   }
   if (evs.events.length) { lastSeen.e = evs.events[evs.events.length - 1].n; combatEvents(evs.events); drawFlights(evs.events); }

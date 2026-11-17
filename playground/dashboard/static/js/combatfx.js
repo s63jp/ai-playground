@@ -26,6 +26,12 @@ export function teamColour(team) {
   return new THREE.Color().setHSL((h % 360) / 360, 0.62, 0.52).getHex();
 }
 
+export function isAccentSlug(s) {
+  // True when a '<team>_item_<k>' id slug names one of the known team accents (red, blue, ...)
+  // rather than hashing to an arbitrary colour. Used for legacy-session team inference only.
+  return TEAM_COLORS.some((t) => t.re.test(String(s || '')));
+}
+
 // The paintball marker (M5.5 Part 1). `spec` = the equipment registry entry served by
 // /api/run/modes (dims_m [x width, y length, z height], combat_class, grip), `accent` =
 // team colour. Proportions follow the registered dims; local +Y is the muzzle direction.
