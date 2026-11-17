@@ -155,9 +155,12 @@ for the full catalogue):
 * **Human players** (`playground/player.py` + dashboard Player pane): a human joins
   the same world through the same tool contract — the dashboard serves the live
   humanoid skeleton (23 bodies) and agent state over `/api/player/state`.
-* **RL** (`playground/rl/`): env (14 DoF humanoid), reward shaping with
-  anti-exploit gating tied to the Phase-3 gait, curriculum, checkpoints, and a
-  CLI for offline training.
+* **RL** (`playground/rl/`): the authoritative locomotion environment
+  contract (14-action / 40-dimensional observation `rl_env/2`,
+  `docs/RL_ENVIRONMENT.md`), one consolidated reward pipeline with a
+  measured anti-exploit structure, and a deterministic env-side curriculum.
+  No training algorithm exists yet (M6-B B3 introduces the trainer); the
+  scripted gait is a benchmark, not a learned policy.
 
 ---
 

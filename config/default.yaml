@@ -187,6 +187,37 @@ ml:
   enabled: true
   agents: {}
 
+# ---------------------------------------------------------------------------
+# RL environment contract (M6-B stage B2). The single authoritative contract
+# is docs/RL_ENVIRONMENT.md; observation_layout()/action_layout() expose it
+# to code (and later to the .aipg manifest). Every key here has a fallback
+# constant in playground/rl/rewards.py + env.py; this block makes runs
+# reproducible. Units: m, s, rad/s, N.
+rl:
+  contract_version: 2
+  action_repeat: 10          # decisions = 10 x dt (0.002) = 20 ms policy period; PD still 500 Hz
+  max_episode_steps: 400     # decision budget per episode (400 x 20 ms = 8 s benchmark horizon)
+  start_pose_jitter: 0.15    # seeded reset start-position jitter box (+-m; spawn area is clear)
+  target_velocity: [0.5, 0.0, 0.0]   # default world-frame walking target (heading 0 = +X)
+  observation:
+    joint_vel_scale: 6.0     # rad/s  (measured walk peak 4.83 -> 1.24x margin)
+    root_vel_scale: 5.0      # m/s    (max_speed cap 4.0 -> 1.25x margin)
+    contact_force_scale: 1000.0   # N per obs unit (stance loads measured 300-1000 N)
+  # Reward weights (per 20-ms decision window). Justification from measured
+  # envelopes lives in reports/m6b/B2_ENVIRONMENT.md and docs/RL_ENVIRONMENT.md.
+  reward:
+    progress: 8.0            # per metre of measured heading progress (clamped at |v*|*dt)
+    velocity_tracking: 1.0
+    tracking_sigma: 0.1      # kept at the v1 value for baseline comparability
+    upright: 0.5
+    alive: 1.0
+    alive_margin: 0.4
+    effort: 0.005            # per joule; scripted walk ~3.3 J/window -> ~-0.017/window
+    smoothness: 0.1
+    stability: 0.2
+    stability_window: 25     # decisions (0.5 s) variance window on up_z
+    fall: 5.0                # one-shot penalty magnitude at fall termination
+
 server:
   host: 127.0.0.1
   port: 8765

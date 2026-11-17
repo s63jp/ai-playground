@@ -114,6 +114,13 @@ its displacement assertion — rewrite it to assert real contact-driven displace
 ## 3. Frozen cross-package interfaces
 
 ### P2 RL consumes world
+> **M6-B B2 supersession note (2026-11-17).** The authoritative RL environment
+> contract is now `docs/RL_ENVIRONMENT.md` (contract version `rl_env/2`, 40-dim
+> observation, one measured reward pipeline in `playground/rl/rewards.py`, one
+> curriculum in `playground/rl/curriculum.py`). The pre-M6 text below is kept for
+> history; its reward-component list (`energy_penalty`, `joint_limit`) and its
+> `train(cfg)`/checkpoint artifact requirements describe the REMOVED broken pre-M6
+> trainer, not the current system.
 `LocoEnv(cfg)` wraps a `PhysicsWorld` directly (build via `PhysicsWorld(load_config())` with
 `agent_body.type: "humanoid"`). OBS: fixed-size float32 vector (humanoid: 14 joint positions +
 14 joint velocities + torso up-vector(3) + torso linear vel(3) + upright margin(1) — document
@@ -267,7 +274,7 @@ DO NOT break existing tabs/loaders (`showTab()` mapping is load-bearing).
 - `tests/test_mode_integration.py`: cfg `simulation.mode` in {playground, training, arena,
   interactive} — assert default.yaml documents the key (parent adds it; test reads the
   parent-applied YAML via `load_config()` and validates dispatch table wiring points:
-  importable entry symbols `playground.arena.ArenaMatch`, `playground.rl.train`,
+  importable entry symbols `playground.arena.ArenaMatch`, `playground.rl.curriculum`,
   `playground.player.PlayerController`; if a symbol is missing at your runtime, xfail-skip
   with reason, do NOT fail the suite for other packages' latency).
 - `scripts/health_check.py`: extend: import-check new subsystems, report module status + skip

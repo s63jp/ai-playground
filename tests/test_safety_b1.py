@@ -188,7 +188,7 @@ def test_env_rejects_non_finite_actions():
     assert env.clip_stats["rejected_calls"] == 3
     assert env.world.physics_warnings() == {}
     # a corrected action steps cleanly afterwards
-    obs, r, done, info = env.step(np.zeros(LocoEnv.action_dim, dtype=np.float32))
+    obs, r, term, trunc, info = env.step(np.zeros(LocoEnv.action_dim, dtype=np.float32))
     assert obs.shape == (LocoEnv.obs_dim,) and not info.get("faulted")
 
 
@@ -200,10 +200,24 @@ def test_nan_neural_network_output_rejected():
     on the boundary (an upstream head that bypasses tanh, e.g. an exploded linear
     output layer)."""
     torch = pytest.importorskip("torch")
-    from playground.rl.train import Policy
+
+    class _TinyPolicy(torch.nn.Module):
+        """Minimal poisoned-weights stand-in (the old rl.train.Policy is gone:
+        B2 deleted the broken pseudo-trainer; the guard's contract is what is
+        tested here, not that class)."""
+
+        def __init__(self, obs_dim: int, act_dim: int):
+            super().__init__()
+            self.net = torch.nn.Sequential(
+                torch.nn.Linear(obs_dim, 16), torch.nn.Tanh(),
+                torch.nn.Linear(16, act_dim), torch.nn.Tanh())
+
+        def forward(self, x):
+            return self.net(x)
+
     env = LocoEnv(humanoid_cfg())
     env.reset()
-    policy = Policy(LocoEnv.obs_dim, LocoEnv.action_dim)
+    policy = _TinyPolicy(LocoEnv.obs_dim, LocoEnv.action_dim)
     with torch.no_grad():
         policy.net[-2].weight[0, 0] = float("nan")     # NaN output ([-1] is the output Tanh)
     with pytest.raises(ActionError):
@@ -237,7 +251,7 @@ def test_env_clips_and_counts_out_of_range_actions():
     a = np.zeros(LocoEnv.action_dim, dtype=np.float32)
     a[0] = 2.5
     a[1] = -3.0
-    obs, r, done, info = env.step(a)
+    obs, r, term, trunc, info = env.step(a)
     assert not info.get("faulted")
     cs = env.action_clipping()
     assert cs["elements_clipped"] == 2
@@ -251,7 +265,7 @@ def test_env_clips_and_counts_out_of_range_actions():
         assert env.world._pd[name]["target"] == pytest.approx(bound, abs=1e-6)
     # clipping rate is recorded and declines once the policy behaves
     for _ in range(2):
-        obs, r, done, info = env.step(np.zeros(LocoEnv.action_dim, dtype=np.float32))
+        obs, r, term, trunc, info = env.step(np.zeros(LocoEnv.action_dim, dtype=np.float32))
     assert env.action_clipping()["clipping_rate"] == pytest.approx(1.0 / 3.0)
 
 
@@ -292,8 +306,8 @@ def test_env_flags_faulted_after_numerical_warning():
     env = LocoEnv(cfg)
     env.reset()
     env.world._pd["waist_yaw"] = {"target": 1e30, "kp": 1e6, "kd": 0.0, "source": "rogue"}
-    obs, r, done, info = env.step(np.zeros(LocoEnv.action_dim, dtype=np.float32))
-    assert done and info.get("faulted") is True
+    obs, r, term, trunc, info = env.step(np.zeros(LocoEnv.action_dim, dtype=np.float32))
+    assert term and info.get("faulted") is True
     assert "mjWARN_BADQACC" in info["physics_warnings"]
     assert env.faulted()
     assert r == 0.0  # faulted transition carries a zero training reward

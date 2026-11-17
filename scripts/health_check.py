@@ -194,7 +194,8 @@ def main() -> int:
     # === Physics extension modules (informational - never fails) ===
     @check("physics extension modules (optional)")
     def _():
-        mods = ["playground.locomotion", "playground.rl.env", "playground.rl.train",
+        mods = ["playground.locomotion", "playground.rl.env", "playground.rl.rewards",
+                "playground.rl.curriculum",
                 "playground.skills.library", "playground.combat.projectiles",
                 "playground.combat.equipment", "playground.arena.match",
                 "playground.manipulation", "playground.player",

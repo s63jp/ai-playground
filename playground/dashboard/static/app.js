@@ -41,6 +41,7 @@ const PAGE_META = {
   compare: ['Observe', 'Compare agents', 'Review all agents side by side, from memory quality and beliefs to benchmark completion.'],
   bench: ['Evaluate', 'Benchmarks', 'Compare task performance across experienced agents, fresh controls, and memory ablations.'],
   nn: ['Evaluate', 'Neural networks', 'Generate datasets, train models, and inspect quality, metrics, and model lineage.'],
+  rl: ['Evaluate', 'RL environment', 'Inspect the consolidated locomotion environment contract, curriculum stages, and bounded measured probe episodes (no trainer yet).'],
   lab: ['Evaluate', 'Run & models', 'Launch exploration runs, compare model behaviour, and audit session provenance.'],
   infra: ['System', 'Infrastructure', 'Monitor provider health, hardware utilisation, and live request queues.'],
   providers: ['System', 'Providers', 'Inspect discovered model providers, connectivity, capabilities, and available models.'],
@@ -66,7 +67,7 @@ function showTab(name) {
   }
   if (location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);   // deep link to a view
   window.scrollTo(0, 0);
-  ({ memory: loadMemory, analytics: loadAnalytics, compare: loadCompare, bench: loadBench, nn: loadNn, lab: loadLab,
+  ({ memory: loadMemory, analytics: loadAnalytics, compare: loadCompare, bench: loadBench, nn: loadNn, rl: loadRl, lab: loadLab,
      infra: loadInfra, providers: loadProviders, monitor: loadMonitor, resources: loadResources }[name] || (() => {}))();
   if (name === 'watch') resize();
 }
@@ -993,6 +994,66 @@ async function loadColumnsForDataset(datasetName) {
     ).join('');
   } catch (e) { console.error('loadColumnsForDataset:', e); }
 }
+
+// ------------------------------------------------------------------ RL environment (M6-B B2)
+// Read-only: the authoritative contract, curriculum stages, and bounded
+// measured probe episodes. There is no trainer yet (M6-B B3) — nothing here
+// renders a learning claim; scripted-gait probe legs are benchmarks.
+const RL_COMPONENTS = ['progress', 'velocity_tracking', 'upright', 'alive',
+                       'effort', 'smoothness', 'stability', 'fall'];
+async function loadRl() {
+  const status = $('#rl-status');
+  try {
+    const c = await api('/api/rl/contract');
+    $('#rl-obs-head').textContent = `float32[${c.obs_dim}] · layout v${c.observation.layout_version}`;
+    $('#rl-act-head').textContent = `14 normalized joints · v${c.action.layout_version}`;
+    $('#rl-obs').innerHTML = `<table><tr><th>#</th><th>slice</th><th>field</th><th>unit</th><th>note</th></tr>${c.observation.sections.map((s, i) =>
+      `<tr><td>${i + 1}</td><td>[${s.slice[0]},${s.slice[1]})</td><td><b>${esc(s.name)}</b></td><td>${esc(s.unit)}</td><td class="small">${esc(s.note)}</td></tr>`).join('')}</table>` +
+      `<div class="small muted">${esc(c.observation.joint_order.join(', '))}</div>`;
+    $('#rl-act').innerHTML =
+      `<div class="small">encoding: ${esc(c.action.encoding)} · mapping: ${esc(c.action.mapping)}</div>` +
+      `<table><tr><th>joint</th><th>range (rad)</th><th>kp / kd</th></tr>${c.action.joints.map((j) =>
+        `<tr><td>${esc(j.name)}</td><td>${fmt(j.range_rad[0], 4)} … ${fmt(j.range_rad[1], 4)}</td><td>${fmt(j.kp, 1)} / ${fmt(j.kd, 2)}</td></tr>`).join('')}</table>` +
+      `<div class="small">passive conventional PD (outside the action space): ${c.action.passive_conventional_pd.map((p) => `${esc(p.name)} → ${fmt(p.target_rad, 1)} (${fmt(p.kp, 1)}/${fmt(p.kd, 1)})`).join(', ')}</div>` +
+      `<div class="small muted">decimation: policy every ${fmt(c.action.control_period_ms, 0)} ms (PD at ${fmt(c.action.pd_control_hz, 0)} Hz) · actuation: ${esc(c.action.actuation_mode)} · tagged "${esc(c.action.source_tag)}"</div>`;
+    const curriculum = await api('/api/rl/curriculum');
+    $('#rl-curriculum').innerHTML = `<table><tr><th>stage</th><th>name</th><th>target v*</th><th>upright assist</th><th>duration (decisions)</th><th>status</th></tr>${curriculum.stages.map((s) =>
+      `<tr><td><b>${esc(s.id)}</b></td><td>${esc(s.name)}</td><td>${s.phase.target_velocity ? `[${s.phase.target_velocity.map((v) => fmt(v, 2)).join(', ')}]` : '–'}</td><td>${s.phase.upright_assist != null ? fmt(s.phase.upright_assist, 1) : '–'}</td><td>${s.duration_decisions || '–'}</td><td class="${s.env_ready ? 'ok' : ''}">${s.env_ready ? 'ready' : 'reserved (needs env-side hook)'}</td></tr>`).join('')}</table>` +
+      `<div class="small muted">${esc(curriculum.note)}</div>`;
+    status.textContent = `contract v${c.contract_version}`;
+    status.className = 'muted small';
+  } catch (e) {
+    status.textContent = `contract unavailable: ${e.message}`;
+    status.className = 'bad small';
+  }
+}
+
+async function runRlProbe() {
+  const st = $('#rl-probe-status');
+  const btn = $('#rl-run');
+  btn.disabled = true;
+  st.textContent = 'running bounded episode…';
+  try {
+    const body = { leg: $('#rl-leg').value, seconds: Number($('#rl-seconds').value || 8), speed: 1.0 };
+    const r = await api('/api/rl/probe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const s = r.summary;
+    $('#rl-probe-result').innerHTML =
+      `<div class="small muted">${esc(r.note)}</div>` +
+      `<table><tr><th>leg</th><th>steps</th><th>sim s</th><th>net displacement (m)</th><th>path (m)</th><th>progress paid (m)</th><th>upright frac</th><th>effort mean (W)</th><th>falls</th><th>faulted windows</th><th>reward total</th></tr>` +
+      `<tr><td>${esc(s.leg)}</td><td>${s.steps}</td><td>${fmt(s.sim_time_s)}</td><td>${fmt(s.net_displacement_m, 4)}</td><td>${fmt(s.path_len_m)}</td><td>${fmt(s.heading_progress_rewarded_m)}</td><td>${fmt(s.upright_fraction, 4)}</td><td>${fmt(s.effort_mean_w, 1)}</td><td>${s.falls}</td><td>${s.faulted_windows}</td><td>${fmt(s.reward_total, 1)}</td></tr></table>` +
+      `<div class="small">per-component sums: ${RL_COMPONENTS.map((k) => `${esc(k)} ${fmt((s.components || {})[k], 2)}`).join(' · ')}</div>`;
+    st.textContent = 'measured via episode_summary() (engine measurements only)';
+    st.className = 'muted small';
+  } catch (e) {
+    st.textContent = `probe failed: ${e.message}`;
+    st.className = 'bad small';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('rl-refresh').onclick = loadRl;
+document.getElementById('rl-run').onclick = runRlProbe;
 
 async function loadNn() {
   loadBehaviourKinds();

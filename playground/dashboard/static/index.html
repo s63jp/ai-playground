@@ -53,6 +53,10 @@
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><path d="m7.4 7.4 3.2 3.2m2.8 0 3.2-3.2m-9.2 9.2 3.2-3.2m2.8 0 3.2 3.2"/></svg>
         <span>Neural networks</span>
       </button>
+      <button type="button" data-tab="rl">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v3m0 12v3M4.9 4.9l2.2 2.2m9.8 9.8 2.2 2.2M3 12h3m12 0h3M4.9 19.1l2.2-2.2m9.8-9.8 2.2-2.2"/><circle cx="12" cy="12" r="3.2"/></svg>
+        <span>RL environment</span>
+      </button>
       <button type="button" data-tab="lab">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 3h6M10 3v6l-5.5 9.5A1.8 1.8 0 0 0 6 21h12a1.8 1.8 0 0 0 1.5-2.5L14 9V3M7.5 15h9"/></svg>
         <span>Run &amp; models</span>
@@ -339,6 +343,31 @@
         <div id="nn-job"></div>
       </div>
     </div>
+  </div>
+</section>
+
+<section id="tab-rl" class="tab">
+  <div class="bar">
+    <button id="rl-refresh" class="btn">Refresh contract</button>
+    <span class="muted small">Read-only: the environment contract and bounded
+      measured probes. There is no trainer yet (M6-B B3) and no learned
+      locomotion claim anywhere on this page.</span>
+    <span id="rl-status" class="muted small" style="margin-left:auto"></span>
+  </div>
+  <div class="cols2">
+    <div class="card"><h3>Observation contract <span class="muted small" id="rl-obs-head"></span></h3><div id="rl-obs"></div></div>
+    <div class="card"><h3>Action contract <span class="muted small" id="rl-act-head"></span></h3><div id="rl-act"></div></div>
+  </div>
+  <div class="card"><h3>Curriculum stages</h3><div id="rl-curriculum"></div></div>
+  <div class="card">
+    <h3>Measured probe episode</h3>
+    <div class="form-row">
+      <label>Leg <select id="rl-leg"><option value="zero">zero action (standing baseline)</option><option value="gait">scripted gait (benchmark)</option></select></label>
+      <label>Seconds <input type="number" id="rl-seconds" value="8" min="0.5" max="10" step="0.5"></label>
+      <button type="button" id="rl-run" class="btn">Run probe</button>
+      <span id="rl-probe-status" class="muted small"></span>
+    </div>
+    <div id="rl-probe-result"></div>
   </div>
 </section>
 

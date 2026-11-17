@@ -388,6 +388,98 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
         return {"tasks": [{"id": t.id, "title": t.title, "prompt": t.prompt, "max_steps": t.max_steps}
                           for t in TASKS.values()]}
 
+    # ---------------------------------------------------------------- RL environment (M6-B B2)
+    # Read-only research surface for the consolidated locomotion environment:
+    # the authoritative observation/action contract, the curriculum stage
+    # table, and a BOUNDED measured probe episode. No trainer exists yet
+    # (M6-B B3); nothing here claims learning — probe metrics are engine
+    # measurements of a zero-action or scripted-gait leg, nothing more.
+    rl_state = {"env": None, "busy": False}
+    rl_lock = threading.Lock()
+
+    def _rl_env():
+        """One lazily-built env used for contract schemas only (never stepped)."""
+        import time as _t
+        with rl_lock:
+            if rl_state["env"] is None:
+                from ..rl.env import LocoEnv
+                t0 = _t.perf_counter()
+                rl_state["env"] = LocoEnv()
+                rl_state["build_s"] = round(_t.perf_counter() - t0, 3)
+            return rl_state["env"]
+
+    @app.get("/api/rl/contract")
+    def rl_contract():
+        env = _rl_env()
+        return {
+            "contract_version": env.contract_version,
+            "obs_dim": env.obs_dim,
+            "action_dim": env.action_dim,
+            "observation": env.observation_layout(),
+            "action": env.action_layout(),
+            "note": "Authoritative environment contract (docs/RL_ENVIRONMENT.md); "
+                    "the .aipg manifest must reproduce this schema. Read-only.",
+        }
+
+    @app.get("/api/rl/curriculum")
+    def rl_curriculum():
+        from ..rl.curriculum import Curriculum
+        snap = Curriculum().snapshot()
+        return {"stages": snap["stages"],
+                "note": "Stage application goes through LocoEnv.set_phase "
+                        "(non-cumulative). Reserved stages (env_ready=false) "
+                        "raise on advance until their env-side hooks land."}
+
+    @app.post("/api/rl/probe")
+    def rl_probe(body: dict = Body(default={})):
+        """Run ONE bounded measured episode (zero action or the scripted gait
+        benchmark) and return its engine-measured summary. Synchronous by
+        design (<= 400 decisions ~ 8 s sim), single-flight (409 when busy),
+        and honest by construction: the metrics come from the same
+        episode_summary() the tests consume."""
+        if rl_state["busy"]:
+            raise HTTPException(409, "an RL probe is already running")
+        leg = str(body.get("leg", "zero"))
+        if leg not in ("zero", "gait"):
+            raise HTTPException(400, "leg must be 'zero' or 'gait'")
+        try:
+            seconds = float(body.get("seconds", 8.0))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "seconds must be a number")
+        if not (0.5 <= seconds <= 10.0):
+            raise HTTPException(400, "seconds must be within [0.5, 10.0]")
+        speed = body.get("speed", 1.0)
+        try:
+            speed = float(speed)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "speed must be a number")
+        if not (0.1 <= speed <= 2.0):
+            raise HTTPException(400, "speed must be within [0.1, 2.0]")
+        with rl_lock:
+            if rl_state["busy"]:
+                raise HTTPException(409, "an RL probe is already running")
+            rl_state["busy"] = True
+            try:
+                from ..rl.env import LocoEnv
+                probe = LocoEnv(cfg={"rl": {
+                    "max_episode_steps": max(1, min(500, int(round(seconds / 0.02))))}})
+                probe.reset()
+                if leg == "gait":
+                    probe.world.set_gait("walk", speed=speed, heading=0.0)
+                zero = [0.0] * probe.action_dim
+                while True:
+                    _, _, term, trunc, _ = probe.step(zero)
+                    if term or trunc:
+                        break
+                summary = probe.episode_summary()
+                summary["leg"] = leg
+                return {"summary": summary,
+                        "note": "scripted-gait legs are benchmarks, not learned "
+                                "policies; zero-action legs measure the standing "
+                                "physics baseline"}
+            finally:
+                rl_state["busy"] = False
+
     # ---------------------------------------------------------------- ML lab
     ml_jobs: dict[str, dict] = {}
     ml_lock = threading.Lock()

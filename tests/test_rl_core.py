@@ -1,119 +1,191 @@
-import math
+"""Core RL-component semantics (M6-B B2 contract).
 
+Rewritten at B2: reward components now consume ENGINE MEASUREMENTS (never
+normalized observation slices), the step protocol is 5-tuple gym-style, and
+the observation is the v2 40-dim layout. The anti-exploit semantics from the
+original suite are preserved and strengthened (see test_rl_env_b2.py for the
+full B2 battery)."""
 import numpy as np
+import pytest
+
+import playground.rl.rewards as R
 from playground.rl.env import LocoEnv
-from playground.rl.rewards import DEFAULTS, velocity_tracking, upright, alive, energy_penalty, smoothness, joint_limit
+from playground.rl.rewards import (COMPONENT_KEYS, DEFAULTS, MeasuredStep,
+                                   alive_reward, compute_reward,
+                                   heading_progress_raw, progress_reward,
+                                   upright_reward, velocity_tracking_reward)
+
+_TARGET = np.array([0.5, 0.0, 0.0])
+
 
 def test_shapes():
     env = LocoEnv()
     obs = env.reset()
-    assert obs.shape == (LocoEnv.obs_dim,)
+    assert obs.shape == (LocoEnv.obs_dim,) == (40,)
     act = np.zeros(LocoEnv.action_dim, dtype=np.float32)
-    nxt, rew, done, info = env.step(act)
-    assert nxt.shape == (LocoEnv.obs_dim,)
+    obs2, rew, term, trunc, info = env.step(act)
+    assert obs2.shape == (LocoEnv.obs_dim,)
     assert isinstance(rew, float)
+    assert isinstance(term, bool) and isinstance(trunc, bool)
+    assert set(info["components"]) == set(COMPONENT_KEYS)
 
-def test_anti_exploit():
-    # Velocity-tracking semantics: a standing body with a nonzero target velocity scores
-    # ~exp(-||target||^2/sigma) (small); a body matching the target scores ~1. There is no
-    # action-magnitude term, so fabricating reward via large/random actions is impossible.
-    standing = np.zeros(LocoEnv.obs_dim, dtype=np.float32)
-    moving = np.zeros(LocoEnv.obs_dim, dtype=np.float32)
-    moving[31:34] = np.array([0.5, 0.0, 0.0], dtype=np.float32)
-    r_stand = velocity_tracking(standing)
-    r_move = velocity_tracking(moving)
+
+def test_obs_v2_layout_and_finiteness():
+    env = LocoEnv()
+    obs = env.reset()
+    # real spawn posture: joints neutral (q ~ 0, all ranges symmetric) -> ~0
+    assert np.allclose(obs[0:14], 0.0, atol=0.05)
+    # up vector is +Z, forward (chest) is +Y at the neutral waist (0 rad)
+    assert np.allclose(obs[28:31], [0, 0, 1], atol=1e-4)
+    assert float(obs[34]) > 0.99
+    assert np.allclose(obs[35:38], [0, 1, 0], atol=1e-4)
+    assert np.all(np.isfinite(obs))
+    # joint velocity normalisation scale is the documented one
+    env.step(np.zeros(LocoEnv.action_dim, dtype=np.float32))
+    assert np.all(np.isfinite(obs))
+
+
+def test_velocity_tracking_full_vector_semantics():
+    """Anti-exploit v1 semantics preserved on MEASURED velocity: matching the
+    target scores ~1; standing with a nonzero target scores ~exp(-||v*||^2/sigma);
+    sideways and backwards motion cannot out-score honest progress."""
+    r_stand = velocity_tracking_reward(np.zeros(3), _TARGET, DEFAULTS["tracking_sigma"], 1.0)
+    r_move = velocity_tracking_reward(_TARGET, _TARGET, DEFAULTS["tracking_sigma"], 1.0)
     assert r_move > r_stand * 3.0
-    # Full-vector tracking error: sideways motion cannot out-score honest progress.
-    sideways = np.zeros(LocoEnv.obs_dim, dtype=np.float32)
-    sideways[31:34] = np.array([0.0, 2.0, 0.0], dtype=np.float32)
-    assert velocity_tracking(sideways) <= r_stand
-    # Backwards motion is penalised like any non-target velocity.
-    backwards = np.zeros(LocoEnv.obs_dim, dtype=np.float32)
-    backwards[31:34] = np.array([-0.5, 0.0, 0.0], dtype=np.float32)
-    assert velocity_tracking(backwards) < r_move
+    assert r_move > 0.95 and r_stand < 0.2
+    sideways = velocity_tracking_reward(np.array([0.0, 2.0, 0.0]), _TARGET,
+                                        DEFAULTS["tracking_sigma"], 1.0)
+    assert sideways <= r_stand
+    backwards = velocity_tracking_reward(np.array([-0.5, 0.0, 0.0]), _TARGET,
+                                         DEFAULTS["tracking_sigma"], 1.0)
+    assert backwards < r_move
 
-def test_reward_components():
-    # simple sanity checks on component functions
-    obs = np.zeros(LocoEnv.obs_dim, dtype=np.float32)
-    # set up vector for upright (torso_up occupies indices 28:31)
-    obs[28:31] = np.array([0,0,1],dtype=np.float32)
-    obs[-1] = 1.0
-    act = np.zeros(LocoEnv.action_dim, dtype=np.float32)
-    prev = np.zeros_like(act)
-    assert velocity_tracking(obs) < 0.2  # standing with target 0.5 m/s: exp(-0.25/0.1) ~ 0.08
-    obs[31:34] = np.array([0.5, 0.0, 0.0], dtype=np.float32)
-    assert velocity_tracking(obs) > 0.95  # matching the target ~ 1.0
-    obs[31:34] = np.zeros(3, dtype=np.float32)
-    assert upright(obs) > 0
-    assert alive(obs) > 0
-    assert energy_penalty(act) == 0
-    assert smoothness(act, prev) == 0
-    # joint limit with zero action should be zero
-    joint_range = [(-np.pi/2, np.pi/2)]*LocoEnv.action_dim
-    assert joint_limit(act, joint_range) == 0
 
-import pytest
+def test_progress_net_displacement_and_backward():
+    """The heading-progress rule pays NET forward displacement only:
+    back-and-forth repetition nets ~0 and backward motion pays 0."""
+    v = np.array([0.5, 0.0, 0.0])
+    dt, w = 0.02, DEFAULTS["progress"]
+    # one metre forward in a window: capped at |v*|*dt (anti-burst clamp)
+    assert progress_reward(np.array([1.0, 0, 0]), v, dt, w) == pytest.approx(w * 0.5 * dt)
+    # half the cap forward: pays exactly the measured metres
+    assert progress_reward(np.array([0.005, 0, 0]), v, dt, w) == pytest.approx(w * 0.005)
+    # straight backwards: zero
+    assert progress_reward(np.array([-1.0, 0, 0]), v, dt, w) == 0.0
+    # out-and-back oscillation pays the HALF-rate: forward legs earn, return
+    # legs pay 0 (net round trip can never exceed one-way travel per metre)
+    assert heading_progress_raw(np.array([0.5, 0, 0]), v) \
+        + heading_progress_raw(np.array([-0.5, 0, 0]), v) == pytest.approx(0.5)
+    # pure sideways displacement along +y: perpendicular to heading -> 0
+    assert progress_reward(np.array([0.0, 0.02, 0]), v, dt, w) == 0.0
+    # zero target velocity: standing task, progress pays nothing
+    assert progress_reward(np.array([0.5, 0, 0]), np.zeros(3), dt, w) == 0.0
+
+
+def test_alive_upright_effort_components():
+    assert upright_reward(1.0, DEFAULTS["upright"]) == pytest.approx(0.5)
+    assert alive_reward(1.0, DEFAULTS["alive_margin"], DEFAULTS["alive"]) == 1.0
+    assert alive_reward(0.1, DEFAULTS["alive_margin"], DEFAULTS["alive"]) == -1.0
+    assert upright_reward(0.6, DEFAULTS["upright"]) == pytest.approx(0.3)
+
+
+def _ms(up_z=1.0, dpos=(0.0, 0.0, 0.0), vel=(0.0, 0.0, 0.0), fell=False, effort=0.0,
+        window=0.02, up_window=None):
+    return MeasuredStep(
+        position_before=np.zeros(3), position_after=np.asarray(dpos, dtype=float),
+        velocity=np.asarray(vel, dtype=float), up_z=up_z, effort_j=effort,
+        window_s=window, fell=fell,
+        up_z_window=up_window if up_window is not None else [1.0, 1.0],
+        target_velocity=tuple(_TARGET))
+
+
+def test_compute_reward_sums_observably():
+    """The total is the sum of the observable components (per-transition)."""
+    ms = _ms(fell=True, dpos=(0.0, 0.5, 0.0), vel=(0.0, 0.0, 0.0))
+    total, comp = compute_reward(ms, np.zeros(14), np.zeros(14))
+    assert set(comp) == set(COMPONENT_KEYS)
+    assert abs(total - sum(comp.values())) < 1e-9
+    assert comp["fall"] == -DEFAULTS["fall"]
+    # standing at the 0.5 m/s target: tracking ~exp(-2.5), no progress (0.5 m along y is sideways)
+    assert comp["velocity_tracking"] == pytest.approx(float(np.exp(-2.5)), rel=1e-3)
+    assert comp["progress"] == 0.0
+
+
+def test_fall_penalty_shape():
+    ms = _ms(up_z=0.2, fell=True)
+    total, comp = compute_reward(ms, np.zeros(14), np.zeros(14))
+    assert comp["fall"] == -DEFAULTS["fall"]
+    ms2 = _ms(fell=False)
+    _, comp2 = compute_reward(ms2, np.zeros(14), np.zeros(14))
+    assert comp2["fall"] == 0.0
+
+
+def test_smoothness_and_stability_are_shaping():
+    a = np.full(14, 0.5, dtype=np.float32)
+    total, comp = compute_reward(_ms(), a, np.zeros(14))
+    assert comp["smoothness"] == pytest.approx(-DEFAULTS["smoothness"] * 14 * 0.25)
+    total2, comp2 = compute_reward(
+        _ms(up_window=[0.9, 1.0, 0.8, 1.0, 0.9]), a, a)
+    assert comp2["smoothness"] == 0.0
+    assert comp2["stability"] < 0.0   # jittered up_z window is penalised
+
 
 @pytest.fixture(scope="module")
 def real_env():
     try:
         env = LocoEnv()
-        env.reset()
         return env
-    except Exception as e:
+    except Exception as e:  # pragma: no cover
         pytest.xfail(f"Real PhysicsWorld unavailable: {e}")
         return None
 
 
 def test_realworld_smoke(real_env):
+    """200 decisions (4 s) with zero action: observations valid, upright."""
     if real_env is None:
         pytest.skip("Real environment not available")
-    # 200 steps with zero action, ensure observations valid and upright
+    env = real_env
+    env.reset()
     zero = np.zeros(LocoEnv.action_dim, dtype=np.float32)
     for step in range(200):
-        obs, rew, done, info = real_env.step(zero)
+        obs, rew, term, trunc, info = env.step(zero)
         assert obs.shape == (LocoEnv.obs_dim,)
-        assert isinstance(rew, float)
-        # torso up vector z component (index 30 = torso_up[2] per layout)
-        up_z = obs[30]
-        assert up_z > 0.5
-        if done:
+        assert np.all(np.isfinite(obs))
+        assert float(obs[34]) > 0.5
+        if term or trunc:
             break
+
 
 def test_anti_exploit_real():
-    # Anti-exploit on the REAL humanoid: a scripted gait that moves toward the target
-    # velocity must out-earn a standing policy on the TRACKING component and must
-    # physically displace. Total reward is NOT the discriminator here (alive + upright
-    # constants dominate it); the anti-exploit contract is about movement reward.
+    """Anti-exploit on the REAL humanoid (kept from the original suite): a
+    scripted gait that travels toward the target must out-earn a standing
+    policy on the TRACKING component, must ACCRUE PROGRESS (the v2 rule that
+    pays real metres), and must physically displace."""
     zero = np.zeros(LocoEnv.action_dim, dtype=np.float32)
 
-    env = LocoEnv(); env.reset()
-    tr_zero = []
-    pos0 = env.world.agent_pos().copy()
-    for _ in range(1500):
-        obs, _, done, _ = env.step(zero)
-        tr_zero.append(velocity_tracking(obs))
-        if done:
-            break
-    d_zero = float(np.linalg.norm(np.asarray(env.world.agent_pos()) - np.asarray(pos0)))
+    def run(gait):
+        env = LocoEnv(cfg={"rl": {"max_episode_steps": 400}})
+        env.reset()
+        if gait:
+            env.world.set_gait("walk", speed=1.0, heading=0.0)
+        tracking = []
+        p0 = np.asarray(env.world.agent_pos(), dtype=float).copy()
+        for _ in range(400):
+            obs, _, term, trunc, _ = env.step(zero)
+            tracking.append(velocity_tracking_reward(
+                env.world.agent_vel(), env.target_velocity,
+                DEFAULTS["tracking_sigma"], 1.0))
+            if term or trunc:
+                break
+        d = float(np.linalg.norm(np.asarray(env.world.agent_pos()) - p0))
+        return float(np.mean(tracking)), d, env
 
-    env2 = LocoEnv(); env2.reset()
-    # Scripted mover: the engine's own gait controller (proven contact-driven
-    # walk, docs/PHYSICS_EXTENSION.md) drives the same joint-target pathway
-    # every step; the env's zero actions are overridden by the controller's
-    # per-step targets. Using the honest mover verifies the reward MECHANISM:
-    # real displacement beats standing under the velocity-tracking reward.
-    env2.world.set_gait('walk', speed=1.0)
-    tr_move = []
-    pos1 = env2.world.agent_pos().copy()
-    zero = np.zeros(LocoEnv.action_dim, dtype=np.float32)
-    for step_i in range(1500):
-        obs, _, done, _ = env2.step(zero)
-        tr_move.append(velocity_tracking(obs))
-        if done:
-            break
-    d_move = float(np.linalg.norm(np.asarray(env2.world.agent_pos()) - np.asarray(pos1)))
-
-    assert float(np.mean(tr_move)) > float(np.mean(tr_zero)) * 1.05
+    t_zero, d_zero, _ = run(gait=False)
+    t_move, d_move, env_move = run(gait=True)
+    assert t_move > t_zero * 1.05
     assert d_move > d_zero
-
+    measured = env_move.episode_summary()
+    # the walking episode ACCRUED heading progress (reward pays real metres)
+    assert measured["heading_progress_raw_m"] > 0.25
+    assert measured["path_len_m"] > 0.5
+    assert measured["falls"] == 0 and measured["faulted_windows"] == 0

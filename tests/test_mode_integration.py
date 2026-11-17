@@ -36,8 +36,13 @@ def test_arena_integration_point():
 
 
 def test_rl_integration_point():
-    train = pytest.importorskip("playground.rl.train")
-    assert callable(getattr(train, "train", None)), "playground.rl.train must expose train(cfg)"
+    # B2 migration: the broken pseudo-trainer (playground.rl.train) is removed;
+    # the RL integration seam is the authoritative env + curriculum machinery.
+    env_mod = pytest.importorskip("playground.rl.env")
+    cur_mod = pytest.importorskip("playground.rl.curriculum")
+    assert hasattr(env_mod, "LocoEnv"), "playground.rl.env must expose LocoEnv"
+    assert callable(getattr(cur_mod, "Curriculum", None)), \
+        "playground.rl.curriculum must expose Curriculum"
 
 
 def test_player_integration_point():
