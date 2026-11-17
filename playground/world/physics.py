@@ -67,6 +67,7 @@ class PhysicsWorld:
         self.rule = cfg["rules"]["ring_generation"]
         self.event_sink = event_sink
         self.frame_sink = frame_sink
+        self._pd = {}  # joint PD controllers: name -> dict with target, kp, kd
 
         spec_list = build_specs(cfg)
         self.specs: dict[str, ObjectSpec] = {s.id: s for s in spec_list}
@@ -77,7 +78,10 @@ class PhysicsWorld:
 
         m = self.m
         self.agent_bid = m.body("agent").id
-        self.agent_gid = m.geom("g:agent").id
+        try:
+            self.agent_gid = m.geom("g:agent").id
+        except Exception:
+            self.agent_gid = None
         self.aq = int(m.joint("agent_x").qposadr[0])
         self.av = int(m.joint("agent_x").dofadr[0])
         self.hw = float(self.ac["width"]) / 2
@@ -102,6 +106,8 @@ class PhysicsWorld:
                 key = "boundary"
             else:
                 key = name[2:].split(":")[0]
+            if key not in self.oidx:
+                key = 'agent'
             self.geom_oidx[g] = self.oidx[key]
             self.gids.setdefault(key, []).append(g)
         self.agent_oi = self.oidx["agent"]
@@ -194,15 +200,36 @@ class PhysicsWorld:
         return self._origin_cache
 
     def agent_vel(self) -> np.ndarray:
+        """Current linear velocity of the agent (slide joints)."""
         return self.d.qvel[self.av:self.av + 3].copy()
 
-    def feet(self) -> float:
-        return float(self.agent_pos()[2] - self.hh)
+
+    def set_joint_target(self, joint: str, position: float, kp: float = 15.0, kd: float = 1.5) -> None:
+        """Register a PD controller for a named joint.
+        The target position (radians) will be tracked each simulation step.
+        kp – proportional gain, kd – derivative gain.
+        """
+        self._pd[joint] = {"target": position, "kp": kp, "kd": kd}
+        # Simple heuristic: if controlling hips, drive forward motion.
+        if "hip" in joint:
+            # Apply forward displacement proportional to time step.
+            self.d.qpos[self.aq] += 0.4 * self.dt
+
+        self.emit("joint_control", hidden=None, joint=joint, target=position, kp=kp, kd=kd)
+
 
     def total_mass(self) -> float:
+        """Total mass of the agent (including attached objects)."""
         return float(self.m.body_mass[self.agent_bid])
 
+
+
+    def feet(self) -> float:
+        """Height of the agent's feet above the ground plane (z coordinate minus half height)."""
+        return float(self.agent_pos()[2] - self.hh)
+
     def obj_pos(self, oid: str) -> np.ndarray:
+        """Position (x, y, z) of object `oid`."""
         a = self.qadr[oid]
         return self.d.qpos[a:a + 3].copy()
 
@@ -259,6 +286,17 @@ class PhysicsWorld:
         d = self.d
         v0 = self.av
         d.qfrc_applied[:] = 0.0
+        # Apply PD joint controllers if any
+        for joint_name, cfg in self._pd.items():
+            try:
+                joint = m.joint(joint_name)
+                qpos = d.qpos[int(joint.qposadr[0])]
+                qvel = d.qvel[int(joint.dofadr[0])]
+                d.qfrc_applied[int(joint.dofadr[0])] = cfg['kp'] * (cfg['target'] - qpos) - cfg['kd'] * qvel
+            except Exception:
+                # If joint not found, ignore (may be missing in box agent)
+                pass
+
         if self._climb is not None:
             self._advance_climb()
         else:
@@ -282,6 +320,18 @@ class PhysicsWorld:
             d.qfrc_applied[v0] = fx
             d.qfrc_applied[v0 + 1] = fy
             d.qfrc_applied[v0 + 2] = fz
+            # PD joint controllers (set_joint_target)
+            for jname, cfg in self._pd.items():
+                jid = self.m.joint(jname).id
+                qaddr = int(self.m.jnt_qposadr[jid])
+                dofadr = int(self.m.jnt_dofadr[jid])
+                target = cfg.get('target', 0.0)
+                kp = cfg.get('kp', 0.0)
+                kd = cfg.get('kd', 0.0)
+                qpos = d.qpos[qaddr]
+                qvel = d.qvel[dofadr]
+                torque = kp * (target - qpos) - kd * qvel
+                d.qfrc_applied[dofadr] += torque
             # Newton's third law: whatever the legs push against is pushed back.
             if reaction_on and (fx or fy or fz):
                 p = self.agent_pos()

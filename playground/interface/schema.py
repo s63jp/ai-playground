@@ -55,13 +55,16 @@ TOOLS: list[dict] = [
     _tool("walk_to", "movement", "Walk in a straight line to a point. There is no path-finding.",
           {"x": NUM, "y": NUM, "z": {**NUM, "description": "Optional. The feet height you expect to end at."},
            "speed": NUM}, ["x", "y"]),
+    _tool("climb", "movement", "Climb a ledge in a given direction.",
+          {"direction": DIRECTION}, ["direction"]),
+    # ---------------------------------------------------------------- joint control
     _tool("jump", "movement", "Jump.",
           {"wait": {"type": "string", "enum": ["landing", "apex", "takeoff"],
                     "description": "When this call returns, so that another action can follow at that moment. "
                                    "Default landing."}}),
-    _tool("climb", "movement", "Pull yourself up onto a ledge next to you.",
-          {"direction": {**DIRECTION, "description": DIRECTION["description"] +
-                         " Optional: without it, the nearest ledge around you is used."}}),
+    _tool("set_joint_target", "control", "Set a PD target for a named joint.",
+          {"joint": STR, "position": NUM, "kp": NUM, "kd": NUM},
+          ["joint", "position"]),
     _tool("wait", "movement", "Let time pass.", {"seconds": {**NUM, "description": "0 to 60."}}, ["seconds"]),
     # ---------------------------------------------------------------- objects
     _tool("pick_up", "object", "Pick up an object. You can carry one object at a time.",

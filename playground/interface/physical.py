@@ -195,13 +195,19 @@ class PhysicalTools:
     def jump(self, wait: str = "landing") -> dict:
         return self.w.jump(wait)
 
+    def set_joint_target(self, joint: str, position: float, kp: float = 0.0, kd: float = 0.0) -> dict:
+        """Register a PD controller for a joint. Returns acknowledgment.
+        The controller will be applied each physics step.
+        """
+        self.w.set_joint_target(joint, float(position), float(kp), float(kd))
+        return {"joint": joint, "target": position, "kp": kp, "kd": kd}
+
+
     def climb(self, direction=None) -> dict:
         return self.w.climb(None if direction is None else self._direction(direction))
 
     def wait(self, seconds: float) -> dict:
         return self.w.wait(float(seconds))
-
-    # ------------------------------------------------------------ objects
     def pick_up(self, object_id: str) -> dict:
         return self.w.pick_up(object_id)
 

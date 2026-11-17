@@ -5,7 +5,7 @@ session reset is simply "build the world from the spec again".
 """
 from __future__ import annotations
 
-import math
+import math, os, re
 from dataclasses import dataclass, field, asdict
 from typing import Any
 
@@ -101,8 +101,38 @@ def build_specs(cfg: dict) -> list[ObjectSpec]:
     return specs
 
 
+def _extract_full_body(xml: str, body_name: str) -> str:
+    """Return the full <body name=body_name> ... </body> block, including nested bodies."""
+    start_tag = f'<body name="{body_name}"'
+    start = xml.find(start_tag)
+    if start == -1:
+        return ''
+    # Find end of opening tag
+    open_end = xml.find('>', start)
+    if open_end == -1:
+        return ''
+    idx = open_end + 1
+    depth = 1
+    while idx < len(xml) and depth > 0:
+        next_open = xml.find('<body', idx)
+        next_close = xml.find('</body>', idx)
+        if next_close == -1:
+            break
+        if next_open != -1 and next_open < next_close:
+            depth += 1
+            idx = next_open + 1
+        else:
+            depth -= 1
+            idx = next_close + len('</body>')
+    return xml[start:idx]
+
 def _f(*vals: float) -> str:
     return " ".join(f"{v:.6g}" for v in vals)
+
+
+
+
+
 
 
 def build_mjcf(cfg: dict, specs: list[ObjectSpec]) -> str:
@@ -123,11 +153,21 @@ def build_mjcf(cfg: dict, specs: list[ObjectSpec]) -> str:
     out.append('  <compiler angle="radian" autolimits="true"/>')
     out.append(f'  <option timestep="{w["timestep"]}" gravity="0 0 {-float(w["gravity"])}" cone="elliptic" '
                'impratio="10" integrator="implicitfast"/>')
+    # If humanoid, include its asset block at top level before default.
+    if a.get('type', 'box') == 'humanoid':
+        hum_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'assets', 'humanoid_mujoco.xml'))
+        with open(hum_path, 'r', encoding='utf-8') as f_h:
+            hum_xml = f_h.read()
+        asset_match = re.search(r'<asset>.*?</asset>', hum_xml, re.DOTALL)
+        if asset_match:
+            out.append(asset_match.group(0))
     out.append('  <default>')
-    out.append('    <geom condim="4" friction="0.9 0.005 0.0001" solref="0.004 1" solimp="0.95 0.99 0.001" '
-               'contype="1" conaffinity="1" group="0"/>')
+    out.append('    <geom condim="4" friction="0.9 0.005 0.0001" solref="0.004 1" solimp="0.95 0.99 0.001" contype="1" conaffinity="1" group="0"/>')
     out.append('  </default>')
     out.append('  <worldbody>')
+
+
+
     for s in specs:
         if s.movable:
             continue
@@ -151,9 +191,22 @@ def build_mjcf(cfg: dict, specs: list[ObjectSpec]) -> str:
     out.append('      <joint name="agent_x" type="slide" axis="1 0 0"/>')
     out.append('      <joint name="agent_y" type="slide" axis="0 1 0"/>')
     out.append('      <joint name="agent_z" type="slide" axis="0 0 1"/>')
-    out.append(f'      <geom name="g:agent" type="box" size="{_f(hw, hw, hh)}" mass="{a["mass"]}" '
-               'friction="0 0 0" priority="1" condim="1" contype="1" conaffinity="3" group="1"/>')
+    # Insert humanoid torso body (with limbs)
+    if a.get("type", "box") == "humanoid":
+        hum_path = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "humanoid_mujoco.xml")
+        with open(hum_path, "r", encoding="utf-8") as f_h:
+            hum_xml = f_h.read()
+        # torso body (with limbs)
+        torso_block = _extract_full_body(hum_xml, "torso")
+        if torso_block:
+            out.append(torso_block)
+    else:
+        out.append(f'    <geom name="g:agent" type="box" size="{_f(hw, hw, hh)}" mass="{a["mass"]}" '
++               'friction="0 0 0" priority="1" condim="1" contype="1" conaffinity="3" group="1"/>')
+
+    # close the agent body
     out.append('    </body>')
+    # movable objects
     for s in specs:
         if not s.movable:
             continue
@@ -165,10 +218,10 @@ def build_mjcf(cfg: dict, specs: list[ObjectSpec]) -> str:
         if s.shape == "box":
             d = s.dimensions
             out.append(f'      <geom name="g:{s.id}" type="box" size="{_f(d["x"] / 2, d["y"] / 2, d["z"] / 2)}" '
-                       f'mass="{s.mass}" friction="{fr}" group="{grp}"{col}/>')
++                       f'mass="{s.mass}" friction="{fr}" group="{grp}"{col}/>')
         elif s.shape == "sphere":
             out.append(f'      <geom name="g:{s.id}" type="sphere" size="{_f(s.dimensions["radius"])}" '
-                       f'mass="{s.mass}" condim="6" friction="{_f(s.friction, 0.02, 0.02)}" group="{grp}"/>')
++                       f'mass="{s.mass}" condim="6" friction="{_f(s.friction, 0.02, 0.02)}" group="{grp}"/>')
         elif s.shape == "torus":
             n = int(s.properties.get("segments", 16))
             R, r = s.dimensions["major_radius"], s.dimensions["tube_radius"]
@@ -177,8 +230,8 @@ def build_mjcf(cfg: dict, specs: list[ObjectSpec]) -> str:
                 a1 = 2 * math.pi * (k + 1) / n
                 out.append(
                     f'      <geom name="g:{s.id}:{k:02d}" type="capsule" size="{_f(r)}" '
-                    f'fromto="{_f(R * math.cos(a0), R * math.sin(a0), 0, R * math.cos(a1), R * math.sin(a1), 0)}" '
-                    f'mass="{s.mass / n:.6g}" friction="{fr}" group="{grp}"/>')
++                    f'fromto="{_f(R * math.cos(a0), R * math.sin(a0), 0, R * math.cos(a1), R * math.sin(a1), 0)}" '
++                    f'mass="{s.mass / n:.6g}" friction="{fr}" group="{grp}"/>')
         out.append('    </body>')
     out.append('  </worldbody>')
     out.append('</mujoco>')
