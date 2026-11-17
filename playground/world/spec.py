@@ -98,6 +98,43 @@ def build_specs(cfg: dict) -> list[ObjectSpec]:
         mass=float(g["mass"]), colour=g.get("colour", "#f2c14e"), friction=float(g["friction"]),
         unique=True, properties={"segments": int(g.get("segments", 16))},
     ))
+    # Combat (M4): equipment bodies are real movable objects; pellets are a
+    # latent parked pool the launcher materialises in flight. A world without
+    # a cfg["combat"] section is byte-identical to the pre-M4 island.
+    from ..combat.equipment import EQUIPMENT
+    combat = cfg.get("combat") or {}
+    for entry in combat.get("items") or []:
+        item_id = str(entry.get("item"))
+        if item_id not in EQUIPMENT:
+            raise ValueError(f"combat item '{entry.get('id')}' references unknown equipment '{item_id}'")
+        es = EQUIPMENT[item_id]
+        dx, dy, dz = (float(v) for v in es["dims_m"])
+        shape = es.get("shape", "box")
+        if shape == "sphere":
+            r = dz / 2.0
+            dims = {"radius": r, "diameter": dz}
+            pos = (float(entry["at"][0]), float(entry["at"][1]), r)
+        else:
+            dims = {"x": dx, "y": dy, "z": dz}
+            pos = (float(entry["at"][0]), float(entry["at"][1]), dz / 2.0)
+        specs.append(ObjectSpec(
+            id=str(entry.get("id")), name=es["name"], kind="equipment", shape=shape,
+            movable=True, position=pos, dimensions=dims, mass=float(es["mass_kg"]),
+            colour=entry.get("colour", "#e07020"), unique=True,
+            properties={"equipment": item_id},
+        ))
+    pellets_n = int(combat.get("pellets", 0))
+    pr = float(combat.get("pellet_radius", 0.02))
+    pm = float(combat.get("pellet_mass", 0.06))
+    for i in range(pellets_n):
+        specs.append(ObjectSpec(
+            id=f"pellet_{i + 1:02d}", name=f"Paint Pellet {i + 1}", kind="pellet",
+            shape="sphere", movable=True,
+            position=(PARK_ORIGIN[0] + 2.0 * (i + 1), PARK_ORIGIN[1] + 2.0, PARK_ORIGIN[2]),
+            dimensions={"radius": pr, "diameter": 2 * pr}, mass=pm,
+            colour="#d22b2b", latent=True, unique=True,
+            properties={"pellet": True},
+        ))
     return specs
 
 

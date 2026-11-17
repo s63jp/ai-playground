@@ -161,6 +161,24 @@ TOOLS: list[dict] = [
            "force": {**NUM, "description": "Newtons, 5 to 120. Default 40."},
            "wait": {"type": "string", "enum": ["rest", "impact", "none"]}},
           ["object_id", "direction"]),
+    # ---------------------------------------------------------------- combat (arena worlds only)
+    # These tools are physical: they hold real objects through the ordinary carry
+    # hold and every consequence follows the measured engine events. They are only
+    # meaningful where a combat configuration exists; elsewhere they raise no_combat.
+    _tool("equip", "combat", "Take hold of an equipment object lying within reach (it uses your one carry hold).",
+          {"object_id": STR}, ["object_id"]),
+    _tool("unequip", "combat", "Release the equipment object you are holding and put it down.",
+          {"object_id": {**STR, "description": "Optional; defaults to the equipped object."}}),
+    _tool("combat_state", "combat", "Your combat state: health, incapacity, team and what you are holding."),
+    _tool("fire", "combat", "Fire the launcher you are holding toward a direction.",
+          {"direction": DIRECTION}, ["direction"]),
+    _tool("reload", "combat",
+          "Reload the launcher you are holding; it becomes ready again after the item's reload time."),
+    _tool("attack", "combat", "Swing the melee weapon you are holding through the target direction.",
+          {"direction": DIRECTION}, ["direction"]),
+    _tool("defend", "combat",
+          "Raise the shield you are holding into a guard pose; stance 'carry' returns it to the carry pose.",
+          {"stance": {"type": "string", "enum": ["guard", "carry"]}}),
     # ---------------------------------------------------------------- construction (convenience)
     # Thin, discoverable wrappers over pick_up + carry + place. They encode no strategy: they just
     # spare an agent the exact release-coordinate arithmetic, so stacking/lining up is as cheap to
@@ -314,7 +332,7 @@ TOOLS: list[dict] = [
 ]
 
 SPECS: dict[str, dict] = {t["name"]: t for t in TOOLS}
-CATEGORIES = ("observation", "movement", "object", "experiment", "world", "memory", "learning")
+CATEGORIES = ("observation", "movement", "object", "combat", "experiment", "world", "memory", "learning")
 
 
 class ToolError(Exception):

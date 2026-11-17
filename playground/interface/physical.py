@@ -266,6 +266,28 @@ class PhysicalTools:
     def catch(self, object_id: str, max_wait: float = 5.0) -> dict:
         return self.w.catch(object_id, float(max_wait))
 
+    # ------------------------------------------------------------ combat (M4)
+    def equip(self, object_id: str) -> dict:
+        return self.w.combat_equip(object_id)
+
+    def unequip(self, object_id: str | None = None) -> dict:
+        return self.w.combat_unequip()
+
+    def combat_state(self) -> dict:
+        return self.w.combat_state()
+
+    def fire(self, direction) -> dict:
+        return self.w.combat_fire(self._direction(direction))
+
+    def reload(self) -> dict:
+        return self.w.combat_reload()
+
+    def attack(self, direction) -> dict:
+        return self.w.combat_attack(self._direction(direction))
+
+    def defend(self, stance: str = "guard") -> dict:
+        return self.w.combat_defend(stance)
+
     # ------------------------------------------------------------ contact manipulation
     def _away_dir(self, object_id: str):
         """A horizontal unit vector pointing from the body towards the object (default push/kick direction)."""

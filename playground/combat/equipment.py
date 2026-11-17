@@ -12,10 +12,14 @@ EQUIPMENT: Dict[str, Dict[str, Any]] = {
     "paintball_pistol": {
         "id": "paintball_pistol",
         "name": "Paintball Pistol",
+        "combat_class": "ranged",
+        "shape": "box",
+        "dims_m": [0.05, 0.19, 0.12],
         "mass_kg": 1.2,
+        "damage_scale": 14.0,       # damage points per measured impact impulse (N·s)
         "grip": "one_hand",
         "hands_required": 1,
-        "projectile_cfg": {"speed": 30.0, "radius": 0.02, "colour": "red", "restitution": 0.3},
+        "projectile_cfg": {"speed": 18.0, "radius": 0.02, "colour": "red", "restitution": 0.3},
         "pellets_per_shot": 1,
         "accuracy_spread_deg": 5.0,
         "rate_limit_s": 0.2,
@@ -26,7 +30,11 @@ EQUIPMENT: Dict[str, Dict[str, Any]] = {
     "paintball_rifle": {
         "id": "paintball_rifle",
         "name": "Paintball Rifle",
+        "combat_class": "ranged",
+        "shape": "box",
+        "dims_m": [0.05, 0.64, 0.12],
         "mass_kg": 3.0,
+        "damage_scale": 14.0,
         "grip": "two_hand",
         "hands_required": 2,
         "projectile_cfg": {"speed": 40.0, "radius": 0.02, "colour": "red", "restitution": 0.3},
@@ -40,7 +48,11 @@ EQUIPMENT: Dict[str, Dict[str, Any]] = {
     "dual_paintball_pistols": {
         "id": "dual_paintball_pistols",
         "name": "Dual Paintball Pistols",
+        "combat_class": "ranged",
+        "shape": "box",
+        "dims_m": [0.09, 0.19, 0.12],
         "mass_kg": 2.5,
+        "damage_scale": 14.0,
         "grip": "dual",
         "hands_required": 2,
         "projectile_cfg": {"speed": 30.0, "radius": 0.02, "colour": "red", "restitution": 0.3},
@@ -54,7 +66,11 @@ EQUIPMENT: Dict[str, Dict[str, Any]] = {
     "paintball_shotgun": {
         "id": "paintball_shotgun",
         "name": "Paintball Shotgun",
+        "combat_class": "ranged",
+        "shape": "box",
+        "dims_m": [0.05, 0.72, 0.14],
         "mass_kg": 4.0,
+        "damage_scale": 14.0,
         "grip": "two_hand",
         "hands_required": 2,
         "projectile_cfg": {"speed": 25.0, "radius": 0.02, "colour": "red", "restitution": 0.3},
@@ -68,7 +84,11 @@ EQUIPMENT: Dict[str, Dict[str, Any]] = {
     "paintball_grenade": {
         "id": "paintball_grenade",
         "name": "Paintball Grenade",
+        "combat_class": "throwable",
+        "shape": "sphere",
+        "dims_m": [0.08, 0.08, 0.08],
         "mass_kg": 0.5,
+        "damage_scale": 10.0,
         "grip": "one_hand",
         "hands_required": 1,
         "projectile_cfg": {"speed": 15.0, "radius": 0.04, "colour": "red", "restitution": 0.2},
@@ -80,27 +100,58 @@ EQUIPMENT: Dict[str, Dict[str, Any]] = {
         "throwable": True,
         "throw_force": 5.0,
     },
+    "training_baton": {
+        "id": "training_baton",
+        "name": "Training Baton",
+        "combat_class": "melee",
+        "shape": "box",
+        "dims_m": [0.05, 0.61, 0.05],
+        "mass_kg": 1.1,
+        "damage_scale": 0.8,        # a training stick: ~1 swing ≈ one paint mark
+        "charge_speed": 1.2,        # the lunge speed of a strike (the rig charges through the swing)
+        "grip": "one_hand",
+        "hands_required": 1,
+        "swing_time_s": 0.35,
+        "swing_shoulder_gain": 60.0,
+        "swing_shoulder_kd": 8.0,
+        "swing_return_s": 0.9,
+        "rate_limit_s": 1.2,
+    },
+    "paint_shield": {
+        "id": "paint_shield",
+        "name": "Paint Shield",
+        "combat_class": "shield",
+        "shape": "box",
+        "dims_m": [0.55, 0.14, 0.75],
+        "mass_kg": 2.4,
+        "absorb": 0.85,             # fraction of an incoming impulse the plate takes
+        "guard_height": 1.05,       # carry-pin height while braced
+        "guard_forward": 0.42,      # carry-pin distance while braced
+        "grip": "one_hand",
+        "hands_required": 1,
+    },
 }
 
 
 def validate_equipment() -> List[str]:
     """Return a list of validation error strings; empty list means all specs are valid."""
     errors: List[str] = []
-    required = {
-        "id",
-        "name",
-        "mass_kg",
-        "grip",
-        "hands_required",
-        "projectile_cfg",
-        "pellets_per_shot",
-        "accuracy_spread_deg",
-        "rate_limit_s",
-        "ammo_capacity",
-        "reload_steps_s",
-        "throwable",
-    }
+    common = {"id", "name", "combat_class", "shape", "dims_m", "mass_kg", "grip", "hands_required"}
+    ranged = {"projectile_cfg", "pellets_per_shot", "accuracy_spread_deg", "rate_limit_s",
+              "ammo_capacity", "reload_steps_s", "throwable"}
+    melee = {"damage_scale", "charge_speed", "swing_time_s", "swing_shoulder_gain", "swing_shoulder_kd",
+             "swing_return_s", "rate_limit_s"}
+    shield = {"absorb", "guard_height", "guard_forward"}
     for key, spec in EQUIPMENT.items():
+        klass = spec.get("combat_class")
+        if klass not in {"ranged", "melee", "shield", "throwable"}:
+            errors.append(f"{key} has invalid combat_class {klass!r}")
+        required = common | {
+            "ranged": ranged,
+            "throwable": ranged,
+            "melee": melee,
+            "shield": shield,
+        }.get(klass, set())
         missing = required - set(spec.keys())
         if missing:
             errors.append(f"{key} missing fields: {sorted(missing)}")
@@ -108,6 +159,14 @@ def validate_equipment() -> List[str]:
             errors.append(f"{key} missing throw_force for throwable equipment")
         if spec.get("grip") not in {"one_hand", "two_hand", "dual"}:
             errors.append(f"{key} has invalid grip {spec.get('grip')}")
+        dims = spec.get("dims_m")
+        if dims is not None and (not isinstance(dims, list) or len(dims) != 3
+                                 or not all(isinstance(v, (int, float)) and v > 0 for v in dims)):
+            errors.append(f"{key} has invalid dims_m {dims!r}")
+        if spec.get("damage_scale") is not None and float(spec["damage_scale"]) < 0.0:
+            errors.append(f"{key} has negative damage_scale")
+        if klass == "shield" and "damage_scale" in spec:
+            errors.append(f"{key}: shield items take impacts, they do not deal damage")
 
     return errors
 
@@ -119,16 +178,21 @@ class EquipmentItem:
     returning projectile IDs. It is injected by the P5 projectile system.
     """
 
-    def __init__(self, world: Any, equip_id: str, launcher: Callable[[np.ndarray, np.ndarray, float], List[str]] | None = None):
+    def __init__(self, world: Any, equip_id: str, launcher: Callable[[np.ndarray, np.ndarray, float], List[str]] | None = None,
+                 object_id: str | None = None):
+        """`object_id` is the physical world object carrying this item (real
+        worlds); the default equates it to `equip_id` (test stub worlds)."""
         if equip_id not in EQUIPMENT:
             raise ValueError(f"Unknown equipment id {equip_id}")
         self.world = world
         self.equip_id = equip_id
         self.spec = EQUIPMENT[equip_id]
         self.launcher = launcher
+        self.object_id = object_id or equip_id
         self.left_gripped = False
         self.right_gripped = False
-        self.ammo = self.spec["ammo_capacity"]
+        # melee/shield items carry no feed; only launchers load
+        self.ammo = int(self.spec.get("ammo_capacity", 0))
         self.last_fire_time = -float("inf")
         self.reloading_until: float | None = None
         # deterministic RNG per equipment type for spread
@@ -194,13 +258,17 @@ class EquipmentItem:
         spread = self.spec["accuracy_spread_deg"]
 
         pellets = max(1, self.spec["pellets_per_shot"])
-        # Throwables without a launcher delegate to world.throw
+        # Throwables without a launcher delegate to world.throw on the
+        # carrying object (real worlds: the equipped physical body itself).
         if self.spec["throwable"] and not self.launcher:
             force = self.spec.get("throw_force", 1.0)
-            result = self.world.throw(self.equip_id, direction, force=force, wait="rest")
+            result = self.world.throw(self.object_id, direction, force=force, wait="rest")
             self.ammo -= 1
             self.last_fire_time = now
-            return {"fired": True, "ammo": self.ammo, "proj_ids": result.get("proj_ids", [])}
+            out = {"fired": True, "ammo": self.ammo, "proj_ids": result.get("proj_ids", [])}
+            if result.get("flight_id") is not None:
+                out["flight_id"] = result["flight_id"]
+            return out
         # Compute origin for launcher if not provided
         if origin is None:
             if hasattr(self.world, "agent_pos"):

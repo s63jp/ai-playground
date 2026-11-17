@@ -104,6 +104,9 @@ class AgentRuntime:
     last_air: dict | None = None
     _fallen_since: float | None = None
     view: "AgentView | None" = None
+    combat_item: str | None = None      # equipped equipment registry item id (M4)
+    incapacitated: bool = False         # posture actuation released (M4)
+    grip_anchor: str = "chest"          # "chest" (carry) or "hand" (melee weapons)
 
 
 class _ScopedModel:
@@ -313,6 +316,28 @@ class AgentView:
     def rotate_object(self, oid, rotation) -> dict:
         return self.world.rotate_object(oid, rotation, agent=self.rt.agent_id)
 
+    # ---- combat verbs (M4): the acting agent is bound, same as pick_up ----
+    def combat_equip(self, oid: str) -> dict:
+        return self.world.combat_equip(oid, agent=self.rt.agent_id)
+
+    def combat_unequip(self) -> dict:
+        return self.world.combat_unequip(self.rt.agent_id)
+
+    def combat_state(self) -> dict:
+        return self.world.combat_state(self.rt.agent_id)
+
+    def combat_fire(self, direction, agent: str | None = None) -> dict:
+        return self.world.combat_fire(direction, agent=self.rt.agent_id)
+
+    def combat_reload(self) -> dict:
+        return self.world.combat_reload(self.rt.agent_id)
+
+    def combat_attack(self, direction) -> dict:
+        return self.world.combat_attack(direction, agent=self.rt.agent_id)
+
+    def combat_defend(self, stance: str) -> dict:
+        return self.world.combat_defend(stance, agent=self.rt.agent_id)
+
     def __getattr__(self, item):
         return getattr(self.world, item)
 
@@ -486,6 +511,17 @@ class PhysicsWorld:
         for rt in self._agents.values():
             if rt.spec.get("type") == "humanoid":
                 self._humanoid_spawn_reset(0.01, agent=rt.agent_id)
+        # Combat (M4): a state + rules layer over THIS world's physics (real
+        # bodies, the real carry hold, measured collisions). A plain island
+        # never builds one. The per-step pass rides the existing callback hook.
+        self.combat = None
+        self._hand_anchor_cache: dict[str, tuple[np.ndarray, float]] = {}
+        self._hand_last_vel: dict[str, np.ndarray] = {}
+        if cfg.get("combat"):
+            from ..combat.runtime import CombatRuntime
+            self.combat = CombatRuntime(self, cfg["combat"], action_error=ActionError)
+            self.combat.start()
+            self.register_step_callback(self.combat.on_step)
 
 
     # ------------------------------------------------------------------ basics
@@ -540,9 +576,62 @@ class PhysicsWorld:
                 "speed_mps": round(float(np.linalg.norm(self.agent_vel(aid))), 3),
                 "holding": rt.held,
                 "on_ground": rt.grounded,
+                **({} if self.combat is None else self.combat.report_bits(aid)),
             })
         out.sort(key=lambda e: e["distance"])
         return out
+
+    # ------------------------------------------------------------------ combat (M4)
+    def combat_equip(self, oid: str, agent: str | None = None) -> dict:
+        """Physically hold an equipment object that lies within reach."""
+        if self.combat is None:
+            raise ActionError("no_combat",
+                              "This world has no combat configuration; there is no equipment.")
+        return self.combat.equip(self._ag(agent).agent_id, oid)
+
+    def combat_unequip(self, agent: str | None = None) -> dict:
+        if self.combat is None:
+            raise ActionError("no_combat",
+                              "This world has no combat configuration; there is nothing to remove.")
+        return self.combat.unequip(self._ag(agent).agent_id)
+
+    def combat_state(self, agent: str | None = None) -> dict:
+        if self.combat is None:
+            raise ActionError("no_combat",
+                              "This world has no combat configuration; there is no combat state.")
+        return self.combat.state(self._ag(agent).agent_id)
+
+    def combat_fire(self, direction, agent: str | None = None) -> dict:
+        if self.combat is None:
+            raise ActionError("no_combat", "This world has no combat configuration; nothing to fire.")
+        return self.combat.fire(self._ag(agent).agent_id, np.asarray(direction, dtype=float))
+
+    def combat_reload(self, agent: str | None = None) -> dict:
+        if self.combat is None:
+            raise ActionError("no_combat", "This world has no combat configuration; nothing to reload.")
+        return self.combat.reload(self._ag(agent).agent_id)
+
+    def combat_attack(self, direction, agent: str | None = None) -> dict:
+        if self.combat is None:
+            raise ActionError("no_combat", "This world has no combat configuration; nothing to attack with.")
+        return self.combat.attack(self._ag(agent).agent_id,
+                                  np.asarray(direction, dtype=float))
+
+    def combat_defend(self, stance: str, agent: str | None = None) -> dict:
+        if self.combat is None:
+            raise ActionError("no_combat", "This world has no combat configuration; nothing to guard with.")
+        return self.combat.defend(self._ag(agent).agent_id, stance)
+
+    def incapacitate_rig(self, agent: str) -> None:
+        """Physical incapacitation: release this rig's own actuation (gait +
+        posture PD) so the figure folds under gravity. Mass, contacts and the
+        solver stay untouched — the collapse is the engine's."""
+        rt = self._ag(agent)
+        rt.incapacitated = True
+        rt.gait = None
+        rt.target_vel = np.zeros(2)
+        for jname in [j for j in list(self._pd) if j.startswith(rt.prefix)]:
+            del self._pd[jname]
 
     def agent_pos(self, agent: str | None = None) -> np.ndarray:
         rt = self._ag(agent)
@@ -715,7 +804,8 @@ class PhysicsWorld:
             d.qfrc_applied[dofadr] += torque
         for rt in self._agents.values():
             if rt.held:
-                self._pin_held(rt)
+                self._pin_held(rt, measure=True)   # the PRE-step pin: sets this
+                # step's contact velocities (arm-tip speed for hand-pinned gear)
         # NOTE: the former per-step 'torso quat reset' write at qpos[aq+3:aq+7] is REMOVED;
         # it corrupted every box-agent world (the write landed on block_01's qpos slot)
         # and teleported the humanoid torso root each step. Posture comes from spine PD
@@ -760,6 +850,9 @@ class PhysicsWorld:
         must emerge from foot–ground contact; qpos/qvel are never written here.
         """
         rt = self._ag(agent)
+        if rt.incapacitated:
+            raise ActionError("incapacitated",
+                              f"'{rt.agent_id}' is incapacitated and cannot move.")
         from playground.locomotion import GaitController, DEFAULTS
         if rt.gait is None:
             rt.gait = GaitController(rt.view, DEFAULTS.copy())
@@ -882,8 +975,13 @@ class PhysicsWorld:
             self.d.qvel[vaddr+3:vaddr+6] = np.array(angular, dtype=float)
         self.emit('object_velocity_set', object=oid, vel=vel, angular=angular)
 
-    def _pin_held(self, rt: AgentRuntime | None = None) -> None:
-        """Pin an agent's held object to its hold point (no agent arg = default)."""
+    def _pin_held(self, rt: AgentRuntime | None = None, measure: bool = False) -> None:
+        """Pin an agent's held object to its hold point (no agent arg = default).
+
+        `measure` marks the PRE-STEP invocation: a hand-pinned weapon's qvel is
+        set to the arm tip's velocity measured across the just-integrated step
+        (the next mj_step's contact velocities read from this write).
+        """
         if rt is None:
             rt = self._ag()
         oid = rt.held
@@ -891,6 +989,42 @@ class PhysicsWorld:
             return
         a, v = self.qadr[oid], self.dadr[oid]
         p = self.agent_pos(rt.agent_id)
+        if rt.spec.get("type") == "humanoid" and rt.grip_anchor == "hand":
+            # A held MELEE weapon rides the left hand: the pin follows the
+            # measured forearm tip (the same measurement as the reach verb,
+            # manipulation.py FOREARM) so an arm PD-swing carries the weapon.
+            e_bid = int(self.m.body(rt.name_map.get("left_elbow", "left_elbow")).id)
+            anchor = np.asarray(self.d.xpos[e_bid], dtype=float) \
+                + np.asarray(self.d.xmat[e_bid], dtype=float).reshape(3, 3) \
+                @ np.array([0.0, 0.0, -0.26])
+            half = float(self.specs[oid].dimensions.get("y", 0.61)) / 2.0
+            R_e = np.asarray(self.d.xmat[e_bid], dtype=float).reshape(3, 3)
+            R_align = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])
+            R_w = R_e @ R_align          # the baton's own +y extends along the forearm (-Z)
+            self.d.qpos[a:a + 3] = anchor + (R_e @ np.array([0.0, 0.0, -1.0])) * (half - 0.10)
+            import mujoco as _mj
+            q = np.zeros(4)
+            _mj.mju_mat2Quat(q, R_w.reshape(-1))
+            rt.held_quat = q
+            self.d.qpos[a + 3:a + 7] = q
+            # The pin's velocity is the ARM TIP's own measured speed, never the
+            # root's: a kinematic hold teleports qpos each step, so without
+            # this the swing's speed is invisible to the collision machinery
+            # (relative_speed would read ~0 and no impact event would fire).
+            # Only the PRE-step call measures (the pose is static between
+            # steps): the velocity measured across the last step is what this
+            # step's mj_step will see.
+            if measure:
+                prev = self._hand_anchor_cache.get(rt.agent_id)
+                self._hand_anchor_cache[rt.agent_id] = (anchor, float(self.d.time))
+                if prev is not None:
+                    dtv = float(self.d.time) - prev[1]
+                    if dtv > 1e-9:
+                        self._hand_last_vel[rt.agent_id] = (anchor - prev[0]) / dtv
+            self.d.qvel[v:v + 3] = self._hand_last_vel.get(rt.agent_id,
+                                                           self.d.qvel[rt.av:rt.av + 3])
+            self.d.qvel[v + 3:v + 6] = 0.0
+            return
         if rt.spec.get("type") == "humanoid":
             # The humanoid carries the block in front of the figure — the
             # figure faces local +Y rotated by the waist yaw, so the carry
@@ -903,6 +1037,13 @@ class PhysicsWorld:
             self.d.qpos[a:a + 3] = (p[0] - fy * math.sin(yaw_q),
                                     p[1] + fy * math.cos(yaw_q),
                                     p[2] - rt.hh + float(rt.spec.get("hold_height_humanoid", 0.84)))
+            if rt.combat_item is not None:
+                # Held COMBAT equipment keeps its flat face toward the rig's
+                # own chest: the item's width axis follows the waist yaw, so
+                # plates/pistols present their broad face along the chest
+                # direction. Ordinary carried blocks keep the orientation they
+                # were picked up with (pre-M4 behaviour).
+                rt.held_quat = euler_deg_to_quat(0.0, 0.0, math.degrees(yaw_q))
             self.d.qpos[a + 3:a + 7] = rt.held_quat
             self.d.qvel[v:v + 3] = self.d.qvel[rt.av:rt.av + 3]
             self.d.qvel[v + 3:v + 6] = 0.0
@@ -1031,6 +1172,7 @@ class PhysicsWorld:
                 continue
             pos = None
             nrm = None
+            ga = gb = None
             oi = self.geom_oidx[self.d.contact.geom[:self.d.ncon]]
             for i in range(self.d.ncon):
                 x, y = int(oi[i, 0]), int(oi[i, 1])
@@ -1041,9 +1183,19 @@ class PhysicsWorld:
                     # tangent1, tangent2) — captured for multi-agent collisions
                     # (mission M3 §6: contact positions and normals).
                     nrm = np.array(self.d.contact.frame[i][:3])
+                    # The contacting geoms themselves, kept pair-aligned so a
+                    # collision against an agent names the exact body part hit
+                    # (damage mapping, M4): geoms never move between objects,
+                    # so the first live contact's pair is the right attribution.
+                    g1, g2 = int(self.d.contact.geom[i, 0]), int(self.d.contact.geom[i, 1])
+                    if x == a:
+                        ga, gb = g1, g2
+                    else:
+                        ga, gb = g2, g1
                     break
             self._pending.append({"a": a, "b": b, "t": self.time, "speed": speed, "pos": pos,
-                                  "nrm": nrm, "impulse": 0.0, "peak": 0.0, "left": 10})
+                                  "nrm": nrm, "geoms": (ga, gb), "impulse": 0.0, "peak": 0.0,
+                                  "left": 10})
 
     def _advance_collisions(self) -> None:
         d = self.d
@@ -1066,9 +1218,26 @@ class PhysicsWorld:
             self._pending.remove(pc)
             extra = ({"contact_normal": rnd(pc["nrm"], 3)}
                      if self._multi and pc.get("nrm") is not None else {})
+            parts = self._agent_parts(pc)
+            if parts:
+                extra["agent_parts"] = parts
             self.emit("collision", objects=[self.onames[pc["a"]], self.onames[pc["b"]]],
                       relative_speed=pc["speed"], impulse=pc["impulse"], peak_force=pc["peak"],
                       position=pc["pos"], t_contact=pc["t"], **extra)
+
+    def _agent_parts(self, pc: dict) -> dict:
+        """Map the collision's agent participants to the exact body part geoms
+        that touched (measured from the contacting geom names)."""
+        geoms = pc.get("geoms")
+        if not geoms:
+            return {}
+        out: dict[str, str] = {}
+        for oidx, gid in ((pc["a"], geoms[0]), (pc["b"], geoms[1])):
+            name = self.onames[oidx]
+            if name in self._agents and gid is not None:
+                gname = mujoco.mj_id2name(self.m, int(mujoco.mjtObj.mjOBJ_GEOM), gid)
+                out[name] = gname.split(":")[-1]  # strip the multi-agent prefix
+        return out
 
     # ------------------------------------------------------------------ flights
     def _begin_flight(self, oid: str, kind: str, vel: np.ndarray, extra: dict | None = None) -> dict:
@@ -2448,6 +2617,26 @@ class PhysicsWorld:
         self.d.qpos[a:a + 3] = [float(x) for x in position]
         self.d.qpos[a + 3:a + 7] = euler_deg_to_quat(*rotation_euler_degrees)
         self.d.qvel[v:v + 6] = 0.0
+        mujoco.mj_forward(self.m, self.d)
+
+    def setup_agent_pose(self, aid: str, position=None, yaw_degrees: float | None = None) -> None:
+        """Orient/position an agent rig directly. For benchmark / test setup only.
+
+        `yaw_degrees` is a world heading in math degrees (0 = +X, 90 = +Y);
+        the rig's chest rides local +Y, so the waist gets q = yaw − 90°. This
+        is an initial configuration, the same class as setup_place: matches of
+        the arena spawn agents FACING each other — nothing mid-match writes a
+        pose directly.
+        """
+        rt = self._ag(aid)
+        if position is not None:
+            self.d.qpos[rt.aq] = float(position[0]) - rt.origin[0]
+            self.d.qpos[rt.aq + 1] = float(position[1]) - rt.origin[1]
+        if yaw_degrees is not None:
+            j = rt.name_map.get("waist_yaw", "waist_yaw")
+            qadr = int(self.m.jnt_qposadr[int(self.m.joint(j).id)])
+            self.d.qpos[qadr] = math.radians(float(yaw_degrees)) - math.pi / 2.0
+        self.d.qvel[rt.av:rt.av + 6] = 0.0
         mujoco.mj_forward(self.m, self.d)
 
     def setup_remove(self, oid: str) -> None:
