@@ -23,17 +23,7 @@ from typing import Any, Callable
 import os
 
 
-import importlib.util, os
-# Ensure offscreen rendering for headless environments
-
-# Load real MuJoCo bindings from the virtual environment site-packages, bypassing the local stub.
-_mujoco_pkg = os.path.join(os.path.dirname(__file__), '..', '..', '.venv', 'Lib', 'site-packages', 'mujoco', '__init__.py')
-_spec = importlib.util.spec_from_file_location('mujoco_real', _mujoco_pkg)
-_mujoco = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mujoco)
-# Expose as "mujoco" for backward compatibility
-mujoco = _mujoco
-
+import mujoco  # declared runtime dependency; imported like any other package
 import numpy as np
 
 from .mathutil import euler_deg_to_quat, heading_deg, quat_to_euler_deg, quat_to_mat, rnd
