@@ -181,10 +181,10 @@ export class CombatFX {
     this.splatRoot.rotation.x = Math.PI / 2;
     world.add(this.splatRoot);
     this._plane = new THREE.PlaneGeometry(1, 1);
-    this.splats = new Map();                     // colourHex -> {mesh, count, next}
+    this.splats = new Map();                   // colourHex -> {mesh, count, next, t: Float32Array}
     this.splatCapacity = 256;
   }
-  addSplat(x, y, z, colHex, sizeM) {
+  addSplat(x, y, z, colHex, sizeM, simT) {
     sizeM = sizeM || (0.09 + Math.abs(((x * 12.9898 + y * 78.233) % 1)) * 0.05);
     let p = this.splats.get(colHex);
     if (!p) {
@@ -194,7 +194,7 @@ export class CombatFX {
       mesh.frustumCulled = false;
       for (let i = 0; i < this.splatCapacity; i++) mesh.setMatrixAt(i, new THREE.Matrix4().makeTranslation(0, 0, -50));
       this.splatRoot.add(mesh);
-      p = { mesh, count: 0, next: 0 };
+      p = { mesh, count: 0, next: 0, t: new Float32Array(this.splatCapacity).fill(Infinity) };
       this.splats.set(colHex, p);
     }
     const idx = p.count < this.splatCapacity ? p.count : p.next;
@@ -202,9 +202,35 @@ export class CombatFX {
       .premultiply(new THREE.Matrix4().makeScale(sizeM, sizeM, 1));
     m.setPosition(x, y, Math.min(z, 0.12) + 0.008);
     p.mesh.setMatrixAt(idx, m);
+    p.t[idx] = simT == null ? -Infinity : simT;    // the collision's recorded sim time
     if (p.count < this.splatCapacity) p.count += 1;
     else p.next = (p.next + 1) % this.splatCapacity;
     p.mesh.instanceMatrix.needsUpdate = true;
+  }
+  // Replay honesty: a decal is visible only once the replay has reached the frame its
+  // recording collision happened in. Hidden instances park under the world.
+  timeFilter(simT) {
+    for (const [, p] of this.splats) {
+      p.meshHidden = p.meshHidden || new Uint8Array(this.splatCapacity);
+      p.pose = p.pose || [];
+      let changed = false;
+      for (let i = 0; i < this.splatCapacity; i++) {
+        const active = Number.isFinite(p.t[i]) && p.t[i] <= simT;   // used slot: got a real sim time
+        const hidden = p.meshHidden[i] === 1;
+        if (active && hidden) {
+          if (p.pose[i]) p.mesh.setMatrixAt(i, p.pose[i]);
+          p.meshHidden[i] = 0;
+          changed = true;
+        } else if (!active && !hidden) {
+          p.pose[i] = new THREE.Matrix4();
+          p.mesh.getMatrixAt(i, p.pose[i]);
+          p.mesh.setMatrixAt(i, new THREE.Matrix4().makeTranslation(0, 0, -50));
+          p.meshHidden[i] = 1;
+          changed = true;
+        }
+      }
+      if (changed) p.mesh.instanceMatrix.needsUpdate = true;
+    }
   }
   burst(x, y, z, colHex, n) { this.parts.burst(x, y, z, colHex, n || 8); }
   tick(dt) { this.parts.tick(dt); }

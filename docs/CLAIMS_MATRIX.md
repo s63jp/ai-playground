@@ -339,7 +339,8 @@ modes the backend actually runs.
   attribution (shooter→team→colour); per-pellet trails drawn from recorded
   frame poses only (index-accurate on scrub, 64-sample window); ground paint
   decals from recorded pellet collision events (throttled per pellet,
-  floor-height contacts); short-lived impact particles from recorded
+  floor-height contacts, time-stamped so a scrubbed replay shows only impacts
+  it has reached); short-lived impact particles from recorded
   `agent_damaged` contact positions in the shooter's colour. Extra combatant
   rigs take their team colour from the manifest. Equipment stays a plain box
   only for recordings with neither manifest nor equip evidence (documented

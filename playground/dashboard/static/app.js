@@ -27,7 +27,7 @@ const sanitizeWords = (s) => {
   return t;
 };
 import { HumanoidView } from './js/humanoid_view.js';
-import { CombatFX, makeMarker, makePellet, teamColour, _oid } from './js/combatfx.js';
+import { CombatFX, makeMarker, makePellet, teamColour, _oid } from './js/combatfx.js?v=m61';
 
 const api = async (p, opt) => { const r = await fetch(p, opt); if (!r.ok) throw new Error(`${p}: ${r.status} ${await r.text()}`); return r.json(); };
 
@@ -212,7 +212,7 @@ function combatEvents(evs) {
       const okTime = (combatCtx._splatT[pid] == null) || (e.t - combatCtx._splatT[pid]) >= 0.4;
       if (!okTime) continue;
       combatCtx._splatT[pid] = e.t;
-      fx.addSplat(d.position[0], d.position[1], d.position[2], pelletColour(pid), null); // a paint mark; no motion is invented
+      fx.addSplat(d.position[0], d.position[1], d.position[2], pelletColour(pid), null, e.t); // a paint mark stamped at its recorded collision time
     }
   }
 }
@@ -429,6 +429,7 @@ function show(i) {
     if (combatCtx.pellets[id]) fx.trail(id, q, pelletColour(id), cur);   // the pellet's REAL recorded path
   }
   fx.dropTrailsExcept(new Set(Object.keys(p.objects).filter((id) => combatCtx.pellets[id])));
+  fx.timeFilter(p.t);   // decals only from collisions the replay has already reached
   agentMesh.position.set(...p.agent);
   // M5 arena: every other combatant recorded by the shared world gets its own rig.
   for (const [, rig] of extraRigs) rig.group.visible = false;
