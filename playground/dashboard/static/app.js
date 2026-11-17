@@ -26,6 +26,8 @@ const sanitizeWords = (s) => {
 };
 import { HumanoidView } from './js/humanoid_view.js';
 
+const api = async (p, opt) => { const r = await fetch(p, opt); if (!r.ok) throw new Error(`${p}: ${r.status} ${await r.text()}`); return r.json(); };
+
 const fmt = (v, d = 2) => (typeof v === 'number' ? v.toFixed(d) : v ?? '–');
 
 // ------------------------------------------------------------------ tabs
@@ -84,6 +86,7 @@ let humanoidView;
 if (typeof HumanoidView === 'function') {
   humanoidView = new HumanoidView(world);
 }
+scene.add(world);
 
 const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 400);
 camera.position.set(-14, 18, 20);
