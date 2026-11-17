@@ -32,6 +32,7 @@ world:
 
 agent_body:
   type: "box"
+  limb_friction_engine: false  # humanoid walks CONTACT-DRIVEN (needs foot grip). true = frictionless/normal-only limbs (root-traction pairing; kept switchable for A/B).
   width: 0.44
   height: 1.6
   mass: 50.0
@@ -53,7 +54,9 @@ agent_body:
   throw_force_max: 200.0
   throw_stroke: 0.6          # metres over which the throwing force acts
   push_stroke: 0.25          # metres over which a contact impulse (push/pull/slide/roll/kick/nudge) acts
-  hold_height: 1.2           # held objects ride this far above the feet
+  hold_height: 1.2           # held objects ride this far above the feet (box agent)
+  hold_forward: 0.30         # humanoid carry: offset in front of the figure (waist-rotated)
+  hold_height_humanoid: 0.84 # humanoid carry height (hanging-hand level, clear of the torso)
 
 rules:
   # World rule that is never described to agents. See docs/RESEARCHER_NOTES.md.
@@ -266,3 +269,11 @@ adapters:
     api_key_env: ANTHROPIC_API_KEY
     max_tokens: 2048
   external: {type: external}     # driven over the HTTP API (Hermes, custom models, humans)
+
+# Physics-extension simulation mode selector (Nov 2026).
+# playground   = the original autonomous free playground (default; behaviour unchanged)
+# training     = RL / curriculum physical-skill development
+# arena        = multi-agent team matches
+# interactive  = a human player joins the live simulation
+simulation:
+  mode: playground

@@ -191,6 +191,23 @@ def main() -> int:
             out.append("LM Studio not reachable")
         return True, "; ".join(out)
 
+    # === Physics extension modules (informational - never fails) ===
+    @check("physics extension modules (optional)")
+    def _():
+        mods = ["playground.locomotion", "playground.rl.env", "playground.rl.train",
+                "playground.skills.library", "playground.combat.projectiles",
+                "playground.combat.equipment", "playground.arena.match",
+                "playground.manipulation", "playground.player",
+                "playground.dashboard.player_api"]
+        ok, missing = [], []
+        for name in mods:
+            try:
+                __import__(name)
+                ok.append(name)
+            except Exception as exc:  # noqa: BLE001
+                missing.append(f"{name} ({type(exc).__name__})")
+        return True, f"{len(ok)}/{len(mods)} importable" + (f"; failing: {', '.join(missing)}" if missing else "")
+
     failed = [n for n, ok, _ in results if not ok]
     print(json.dumps({"healthy": not failed, "failed": failed}))
     return 1 if failed else 0

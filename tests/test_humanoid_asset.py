@@ -31,8 +31,11 @@ class TestHumanoidAsset:
         assert "C:/" not in text
 
     def test_loads_with_expected_structure(self, model):
-        assert model.nbody == 14          # world + torso + spine + 2x(shoulder,elbow) + head + 2x(hip,knee,ankle)
-        assert model.njnt == 14
+        # Nov 17 rig: +2 foot bodies (ankle yaw dofs) and their joints, and
+        # the spec.py world-assembly adds waist_yaw (+1 body is the world
+        # count unchanged; the asset itself gains 2 bodies).
+        assert model.nbody == 16          # world + torso + spine + 2x(shoulder,elbow) + head + 2x(hip,knee,ankle,foot)
+        assert model.njnt == 16
         assert model.nu == 12             # spine, 2x arm, 2x leg, 3 head
         for name in ("spine_L2", "left_shoulder", "right_elbow", "left_hip", "right_knee", "head_yaw"):
             assert model.joint(name).id >= 0, f"joint '{name}' missing"

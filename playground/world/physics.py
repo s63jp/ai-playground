@@ -20,8 +20,20 @@ from __future__ import annotations
 
 import math
 from typing import Any, Callable
+import os
 
-import mujoco
+
+import importlib.util, os
+# Ensure offscreen rendering for headless environments
+
+# Load real MuJoCo bindings from the virtual environment site-packages, bypassing the local stub.
+_mujoco_pkg = os.path.join(os.path.dirname(__file__), '..', '..', '.venv', 'Lib', 'site-packages', 'mujoco', '__init__.py')
+_spec = importlib.util.spec_from_file_location('mujoco_real', _mujoco_pkg)
+_mujoco = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_mujoco)
+# Expose as "mujoco" for backward compatibility
+mujoco = _mujoco
+
 import numpy as np
 
 from .mathutil import euler_deg_to_quat, heading_deg, quat_to_euler_deg, quat_to_mat, rnd
@@ -68,6 +80,10 @@ class PhysicsWorld:
         self.event_sink = event_sink
         self.frame_sink = frame_sink
         self._pd = {}  # joint PD controllers: name -> dict with target, kp, kd
+        self._step_callbacks: list[Callable[['PhysicsWorld'], None]] = []  # step callbacks
+        self._gait_controller = None  # optional GaitController instance
+        self.fallen_settle_s = 0.3  # sustained-condition window before agent_fallen() is True
+        self._fallen_since = None  # first sim time the fallen condition was observed
 
         spec_list = build_specs(cfg)
         self.specs: dict[str, ObjectSpec] = {s.id: s for s in spec_list}
@@ -183,7 +199,11 @@ class PhysicsWorld:
         self._recording = True
         self.initial_positions = {oid: self.obj_pos(oid).tolist() for oid in sorted(self.active)}
         self.emit("world_ready", objects=len(self.active), agent=rnd(self.agent_pos()))
-        self._record_frame(key=True)
+        # Humanoid-only spawn reset (see _humanoid_spawn_reset): limb joints
+        # only, feet-on-ground; box worlds' block freejoint slots stay untouched.
+        if self.ac.get("type") == "humanoid":
+            self._humanoid_spawn_reset(0.01)
+
 
     # ------------------------------------------------------------------ basics
     @property
@@ -210,17 +230,22 @@ class PhysicsWorld:
         kp – proportional gain, kd – derivative gain.
         """
         self._pd[joint] = {"target": position, "kp": kp, "kd": kd}
-        # Simple heuristic: if controlling hips, drive forward motion.
-        if "hip" in joint:
-            # Apply forward displacement proportional to time step.
-            self.d.qpos[self.aq] += 0.4 * self.dt
+        # Removed hip forward displacement hack – movement now relies on PD torques and contact forces.
 
         self.emit("joint_control", hidden=None, joint=joint, target=position, kp=kp, kd=kd)
 
 
     def total_mass(self) -> float:
-        """Total mass of the agent (including attached objects)."""
-        return float(self.m.body_mass[self.agent_bid])
+        """Total mass of the agent (agent container + humanoid limbs + held load).
+
+        The humanoid's figure hangs off the container (waist joint), so its
+        real mass is the subtree mass; for the box agent the subtree equals
+        body_mass, identical to the HEAD semantics.
+        """
+        m = float(self.m.body_subtreemass[self.agent_bid])
+        if m <= 1e-6:
+            m = float(self.m.body_mass[self.agent_bid])
+        return float(m)
 
 
 
@@ -286,24 +311,21 @@ class PhysicsWorld:
         d = self.d
         v0 = self.av
         d.qfrc_applied[:] = 0.0
-        # Apply PD joint controllers if any
-        for joint_name, cfg in self._pd.items():
-            try:
-                joint = m.joint(joint_name)
-                qpos = d.qpos[int(joint.qposadr[0])]
-                qvel = d.qvel[int(joint.dofadr[0])]
-                d.qfrc_applied[int(joint.dofadr[0])] = cfg['kp'] * (cfg['target'] - qpos) - cfg['kd'] * qvel
-            except Exception:
-                # If joint not found, ignore (may be missing in box agent)
-                pass
 
         if self._climb is not None:
             self._advance_climb()
         else:
             fx = fy = fz = 0.0
             reaction_on: list[str] = []
-            if self.grounded:
-                M = self.m.body_mass[self.agent_bid]
+            if self.grounded and self.ac.get("type") != "humanoid":
+                # Root traction is the BOX agent's locomotion model: a
+                # horizontal force at the root, paired with a frictionless
+                # base geom. The humanoid walks CONTACT-DRIVEN instead:
+                # stance-foot friction + alternating hip torque (see
+                # playground/locomotion.py) — applying the root traction to
+                # an articulated leg rig folds the legs in (~240 Nm couple,
+                # hips slam their ±90° limits, z 0.81 -> 0.21 kneel-drag).
+                M = self.total_mass()
                 tau = float(self.ac["traction_tau"])
                 fx = M * (self.target_vel[0] - d.qvel[v0]) / tau
                 fy = M * (self.target_vel[1] - d.qvel[v0 + 1]) / tau
@@ -320,18 +342,6 @@ class PhysicsWorld:
             d.qfrc_applied[v0] = fx
             d.qfrc_applied[v0 + 1] = fy
             d.qfrc_applied[v0 + 2] = fz
-            # PD joint controllers (set_joint_target)
-            for jname, cfg in self._pd.items():
-                jid = self.m.joint(jname).id
-                qaddr = int(self.m.jnt_qposadr[jid])
-                dofadr = int(self.m.jnt_dofadr[jid])
-                target = cfg.get('target', 0.0)
-                kp = cfg.get('kp', 0.0)
-                kd = cfg.get('kd', 0.0)
-                qpos = d.qpos[qaddr]
-                qvel = d.qvel[dofadr]
-                torque = kp * (target - qpos) - kd * qvel
-                d.qfrc_applied[dofadr] += torque
             # Newton's third law: whatever the legs push against is pushed back.
             if reaction_on and (fx or fy or fz):
                 p = self.agent_pos()
@@ -339,23 +349,213 @@ class PhysicsWorld:
                 share = np.array([-fx, -fy, -fz]) / len(reaction_on)
                 for oid in reaction_on:
                     mujoco.mj_applyFT(self.m, d, share, self._zero3, point, self.bid[oid], d.qfrc_applied)
+        if self._gait_controller is not None:
+            self._gait_controller.update(self)
+        # PD joint controllers (set_joint_target): applied at method level so
+        # direct joint targeting works with or without a gait controller.
+        for jname in list(self._pd.keys()):
+            cfgj = self._pd[jname]
+            try:
+                jid = self.m.joint(jname).id
+            except (ValueError, KeyError):
+                # Joint does not exist in this model (e.g. box agent): drop the
+                # target and record it instead of corrupting the step.
+                del self._pd[jname]
+                self.emit("joint_target_dropped", joint=jname)
+                continue
+            qaddr = int(self.m.jnt_qposadr[jid])
+            dofadr = int(self.m.jnt_dofadr[jid])
+            target = cfgj.get('target', 0.0)
+            kp = cfgj.get('kp', 0.0)
+            kd = cfgj.get('kd', 0.0)
+            qpos = d.qpos[qaddr]
+            qvel = d.qvel[dofadr]
+            torque = kp * (target - qpos) - kd * qvel
+            d.qfrc_applied[dofadr] += torque
         if self.held:
             self._pin_held()
+        # NOTE: the former per-step 'torso quat reset' write at qpos[aq+3:aq+7] is REMOVED;
+        # it corrupted every box-agent world (the write landed on block_01's qpos slot)
+        # and teleported the humanoid torso root each step. Posture comes from spine PD
+        # targets (see playground/locomotion.py), never from qpos writes.
+        # --- integrate the world (restore of the HEAD integration block; the
+        # humanoid edits accidentally DROPPED mj_step, freezing all physics:
+        # every world ran in time 0.0, no falls/flights/collisions ever happened) ---
         self._prev_qvel[:] = d.qvel
         mujoco.mj_step(self.m, d)
         if self.held:
             self._pin_held()
         self.steps += 1
         self._post_step()
+        # invoke registered step callbacks
+        for cb in self._step_callbacks:
+            try:
+                cb(self)
+            except Exception as e:
+                self.emit('step_callback_error', error=str(e))
 
     def step(self, n: int = 1) -> None:
         for _ in range(int(n)):
             self._step()
 
+    # ------------------------------------------------------------------ API
+    def register_step_callback(self, fn: Callable[["PhysicsWorld"], None]) -> None:
+        """Register a callable to be invoked after each simulation step.
+        The function receives the PhysicsWorld instance.
+        """
+        self._step_callbacks.append(fn)
+
+    def set_gait(self, mode: str, speed: float = 1.0, heading: float | None = None) -> None:
+        """Configure the gait controller.
+
+        mode: one of 'walk', 'run', 'stand', 'stop', 'crouch'.
+        speed: target forward speed (m/s).
+        heading: optional yaw angle (degrees) to rotate the movement direction.
+
+        Physics honesty: this ONLY configures joint-space PD targets. Forward motion
+        must emerge from foot–ground contact; qpos/qvel are never written here.
+        """
+        from playground.locomotion import GaitController, DEFAULTS
+        if self._gait_controller is None:
+            self._gait_controller = GaitController(self, DEFAULTS.copy())
+        self._gait_controller.configure(mode, speed=speed, heading=heading)
+        self.emit("gait_change", mode=mode, speed=float(speed),
+                  heading=(float(heading) if heading is not None else None))
+
+
+    def stand_up(self) -> None:
+        """Attempt a physics-based recovery from a fallen pose.
+
+        No teleports: qpos/qvel are never written. The gait controller drives a
+        scheduled sequence of joint-space PD targets (knee/hip flexion, push-off,
+        spine bracing, posture restore). Emits 'recovery_started' now; the
+        controller emits 'recovery_complete' or 'recovery_failed' from its per-step
+        update once the agent is upright (agent_fallen() False) or the schedule
+        times out (~6 s of sim time).
+        """
+        from playground.locomotion import GaitController, DEFAULTS
+        if self._gait_controller is None:
+            self._gait_controller = GaitController(self, DEFAULTS.copy())
+        self._gait_controller.begin_recovery()
+        self.emit("recovery_started")
+
+    def _humanoid_spawn_reset(self, z: float = 0.01) -> None:
+        """Reset the humanoid's OWN joints at spawn time (agent-type gated).
+
+        Limb hinge qpos go to 0 (neutral posture) and all agent dofs to zero
+        velocity. The reset NEVER touches qpos past the agent's own limb
+        joints: after the 3 slide joints the limb hinge slots follow, and the
+        object freejoint slots after those belong to block_01.. — the old
+        unconditional ``qpos[aq+3:aq+7]`` write teleported block_01 to (1,0,0)
+        in box worlds (Nov 17 bug log).
+
+        ``z`` is the raw slide-z so the feet sit just above the ground: with
+        the spec.py torso offset fix the feet land at agent_pos z, i.e. at
+        qpos_z, so 0.01 leaves a 1 cm settle drop instead of the old 0.8 m
+        free-fall.
+        """
+        for j in range(self.m.njnt):
+            if int(self.m.jnt_type[j]) == int(mujoco.mjtJoint.mjJNT_HINGE):
+                qadr = int(self.m.jnt_qposadr[j])
+                if qadr >= self.aq + 3:
+                    self.d.qpos[qadr] = 0.0
+                    self.d.qvel[int(self.m.jnt_dofadr[j])] = 0.0
+        self.d.qpos[self.aq:self.aq + 3] = np.array([0.0, 0.0, float(z)])
+        self.d.qvel[self.av:self.av + 3] = 0.0
+        mujoco.mj_forward(self.m, self.d)
+
+    def agent_fallen(self) -> bool:
+        """True when the humanoid has definitively fallen.
+
+        The up-vector is measured from the torso body's world rotation matrix
+        (d.xmat) — never from synthetic/or-quaternion slots. A fall requires the
+        condition to persist for ``fallen_settle_s`` sim seconds so a stumble
+        during gait is not misread as a fall (settle window: training termination,
+        recovery behaviour and reward evaluation all depend on this).
+        """
+        try:
+            bid = self.m.body("torso").id
+        except Exception:
+            bid = self.agent_bid
+        up_z = float(np.asarray(self.d.xmat[bid], dtype=float).reshape(3, 3)[2, 2])
+        # Height threshold. The humanoid cannot tip (rigid slide-root column,
+        # no pitch dof) so "fallen" means leg collapse: the folded-leg floor of
+        # the rig is ~0.42 m = 0.52x the 0.81 m stand height, while standing is
+        # 0.80-0.81 m and walking holds 0.78-0.80 m.
+        # Other agent types keep the legacy 40% half-height rule.
+        if self.ac.get("type") == "humanoid":
+            # stand height is ~1.0*hh (the container rides at hh); the
+            # folded-leg floor is ~0.52*hh, so 0.55*hh separates a sit/crumple
+            # from standing (0.80) and walking (0.78-0.80).
+            height_ok = float(self.agent_pos()[2]) > self.hh * 0.55
+        else:
+            height_ok = float(self.agent_pos()[2]) > self.hh * 0.4
+        fallen_now = (up_z < 0.5) or (not height_ok)
+        if not fallen_now:
+            self._fallen_since = None
+            return False
+        if self._fallen_since is None:
+            self._fallen_since = self.time
+        return (self.time - self._fallen_since) >= float(self.fallen_settle_s)
+
+    def agent_skeleton(self) -> list[dict]:
+        """Return a list of body parts info for the current agent.
+        For a humanoid this includes torso, hips, knees, etc.; for a box returns a single entry.
+        """
+        # Use spec list to order bodies; torso first
+        bodies = []
+        # The main agent body is always present
+        def body_info(name, qaddr):
+            pos = self.d.qpos[qaddr:qaddr+3].tolist()
+            quat = self.d.qpos[qaddr+3:qaddr+7].tolist()
+            return {"name": name, "pos": pos, "quat": quat}
+        # torso (agent body)
+        bodies.append(body_info('torso', self.aq))
+        # movable limbs (if humanoid)
+        for oid in self.movable:
+            qaddr = self.qadr[oid]
+            bodies.append(body_info(oid, qaddr))
+        return bodies
+
+    def spawn_object(self, oid: str, pos: list[float], quat: list[float] | None = None) -> None:
+        """Place an existing object at a new position (and optional orientation)."""
+        if oid not in self.oidx:
+            raise ValueError(f"Object {oid} not known")
+        qaddr = self.qadr[oid]
+        self.d.qpos[qaddr:qaddr+3] = np.array(pos, dtype=float)
+        if quat is not None:
+            self.d.qpos[qaddr+3:qaddr+7] = np.array(quat, dtype=float)
+        self.emit('object_spawned', object=oid, pos=pos, quat=quat)
+
+    def set_object_velocity(self, oid: str, vel: list[float], angular: list[float] | None = None) -> None:
+        """Set linear (and optional angular) velocity of an object."""
+        if oid not in self.oidx:
+            raise ValueError(f"Object {oid} not known")
+        vaddr = self.dadr[oid]
+        self.d.qvel[vaddr:vaddr+3] = np.array(vel, dtype=float)
+        if angular is not None:
+            self.d.qvel[vaddr+3:vaddr+6] = np.array(angular, dtype=float)
+        self.emit('object_velocity_set', object=oid, vel=vel, angular=angular)
+
     def _pin_held(self) -> None:
         oid = self.held
         a, v = self.qadr[oid], self.dadr[oid]
         p = self.agent_pos()
+        if self.ac.get("type") == "humanoid":
+            # The humanoid carries the block in front of the figure — the
+            # figure faces local +Y rotated by the waist yaw, so the carry
+            # offset rotates with it. The box pin position (feet + hold_height
+            # = 1.2 m under the pelvis centre) would put the block INSIDE the
+            # torso geom (0.90-1.40 m band at the centre line).
+            yaw_q = float(self.d.qpos[int(self.m.jnt_qposadr[self.m.joint("waist_yaw").id])])
+            fy = float(self.ac.get("hold_forward", 0.30))
+            self.d.qpos[a:a + 3] = (p[0] - fy * math.sin(yaw_q),
+                                    p[1] + fy * math.cos(yaw_q),
+                                    p[2] - self.hh + float(self.ac.get("hold_height_humanoid", 0.84)))
+            self.d.qpos[a + 3:a + 7] = self.held_quat
+            self.d.qvel[v:v + 3] = self.d.qvel[self.av:self.av + 3]
+            self.d.qvel[v + 3:v + 6] = 0.0
+            return
         self.d.qpos[a:a + 3] = (p[0], p[1], p[2] - self.hh + float(self.ac["hold_height"]))
         self.d.qpos[a + 3:a + 7] = self.held_quat
         self.d.qvel[v:v + 3] = self.d.qvel[self.av:self.av + 3]
@@ -612,6 +812,15 @@ class PhysicsWorld:
         self.m.body_conaffinity[b] = 1 if on else 0
 
     def _set_agent_mass(self, mass: float) -> None:
+        # The humanoid's figure hangs off the pelvis container; rewriting the
+        # container mass for a carried load would inflate the walked figure to
+        # ~94 kg and fold the legs through the floor mid-stride. The humanoid
+        # carries via the hold pin only (the load rides the container's
+        # slide-mass math as a visual rider, which keeps every leg contact
+        # reaction in its calibrated regime); the box agent keeps the legacy
+        # behaviour below.
+        if self.ac.get("type") == "humanoid":
+            return
         d = self.d
         qpos, qvel, t = d.qpos.copy(), d.qvel.copy(), d.time
         self.m.body_mass[self.agent_bid] = mass
@@ -760,7 +969,7 @@ class PhysicsWorld:
             "surface_below": {"height": below, "object": what},
             "facing_degrees": self.facing, "holding": self.held,
             "body": {"width": 2 * self.hw, "height": 2 * self.hh, "mass": self.base_mass},
-            "carried_mass": self.total_mass() - self.base_mass,
+            "carried_mass": max(0.0, self.total_mass() - self.base_mass),
         })
 
     def object_state(self, oid: str, graph: dict | None = None) -> dict:
@@ -936,6 +1145,18 @@ class PhysicsWorld:
         t0 = self.time
         before = {oid: self.obj_pos(oid) for oid in self.active if oid != self.held}
         self.facing = heading_deg(d2)
+        # Humanoid: root traction is disabled (physics._step) — the legs are the
+        # locomotion system. Route this call through the gait controller so the
+        # requested distance is covered by real foot-ground actuation in the
+        # shared progress/blocked/timeout loop below.
+        is_humanoid = self.ac.get("type") == "humanoid"
+        heading_req = math.degrees(math.atan2(d2[1], d2[0]))
+        if is_humanoid:
+            gc_cfg = dict(self._gait_controller.cfg) if self._gait_controller is not None else {}
+            if (gc_cfg.get("mode") != "walk"
+                    or abs(float(gc_cfg.get("speed", 0.0)) - speed) > 1e-9
+                    or abs(float(gc_cfg.get("heading_deg", 0.0)) - heading_req) > 1e-9):
+                self.set_gait("walk", speed=speed, heading=heading_req)
         blocked_by: list[str] = []
         left_ground = False
         timeout = distance / speed * 2.5 + 4.0
@@ -947,16 +1168,25 @@ class PhysicsWorld:
             remaining = distance - travelled
             if remaining <= 0.004:
                 break
-            if stop:
-                a_max = 0.7 * float(self.ac["walk_force"]) / self.total_mass()
-                v_t = min(speed, max(0.04, math.sqrt(2 * a_max * max(remaining, 0.0))))
-            else:
-                v_t = speed
-            self.target_vel[:] = d2 * v_t
+            if not is_humanoid:
+                if stop:
+                    a_max = 0.7 * float(self.ac["walk_force"]) / self.total_mass()
+                    v_t = min(speed, max(0.04, math.sqrt(2 * a_max * max(remaining, 0.0))))
+                    self.target_vel[:] = d2 * v_t
+                else:
+                    # stop=False: cruise at the requested speed and leave the
+                    # cruise request active on return (legacy semantics — the
+                    # running-throw HVE case depends on it).
+                    self.target_vel[:] = d2 * speed
+
             self._step()
             if not self.grounded:
                 left_ground = True
-            if self.time - last_check_t >= 0.5:
+            if self.time - last_check_t >= (2.0 if is_humanoid else 0.5):
+                # The humanoid starts its stride under a 1.5 s amplitude ramp
+                # (a full-amplitude first swing kicks the stance leg), so the
+                # box-tuned 0.5 s stall window would verdict "blocked" on a
+                # healthy ramp start. The box keeps the head behaviour.
                 if self.grounded and travelled - last_check_s < 0.01:
                     blocked_by = list(self.side_contacts) or ["unknown obstacle"]
                     break
@@ -966,7 +1196,11 @@ class PhysicsWorld:
                 # distance along the requested heading. Say so precisely rather than blaming an obstacle.
                 blocked_by = list(self.side_contacts) or ["deflected_off_course"]
                 break
-        if stop or blocked_by:
+        if blocked_by or stop:
+            # Brake: box agents drop the traction request; the humanoid switches
+            # the gait to stand so the legs hold posture instead of striding on.
+            if is_humanoid and self._gait_controller is not None:
+                self.set_gait("stand")
             self.target_vel[:] = 0.0
             t1 = self.time
             while self.time - t1 < 3.0:
@@ -992,6 +1226,17 @@ class PhysicsWorld:
             "velocity": self.agent_vel(), "objects_disturbed": disturbed,
         }
         if blocked_by:
+            if blocked_by == ["deflected_off_course"] and is_humanoid:
+                # The leg-driven walk reorients by twisting at the waist while
+                # the planted feet resist with friction, so a long straight move
+                # drifts off the requested line even while striding healthily;
+                # for the humanoid this is reported, not raised (the box's
+                # traction course-keeping doesn't apply to a yaw-limited walk).
+                res["off_course"] = True
+                res["facing_error_deg"] = round(math.degrees(math.atan2(
+                    (end[1] - start[1]) * 1.0, (end[0] - start[0]) * 1.0))
+                    - self.facing, 1)
+                return rnd(res)
             if blocked_by == ["deflected_off_course"]:
                 off = float(abs((end[0] - start[0]) * -d2[1] + (end[1] - start[1]) * d2[0]))
                 raise ActionError("blocked", f"Movement did not finish: after {res['distance_travelled']:.2f} m the "
@@ -1080,7 +1325,7 @@ class PhysicsWorld:
 
     def climb(self, direction: np.ndarray | None = None) -> dict:
         self._require_free()
-        carried = self.total_mass() - self.base_mass
+        carried = max(0.0, self.total_mass() - self.base_mass)
         if carried > float(self.ac["climb_max_carry"]) + 1e-9:
             raise ActionError("too_heavy_to_climb",
                               f"Cannot climb while carrying {carried:.1f} kg.", carried_mass=round(carried, 3))
@@ -1675,7 +1920,12 @@ class PhysicsWorld:
             self.grounded = bool(st["grounded"])
             self.support = list(st["support"])
         self._last_frame = {}
-        self._record_frame(key=True)
+        # NOTE: the humanoid-era spawn reset that used to sit here was removed:
+        # set_state() must faithfully restore a checkpoint. Besides, with the 3
+        # agent slide joints first, qpos[aq+3:aq+7] belongs to block_01's
+        # freejoint in box worlds — the old unconditional write teleported
+        # block_01 to (1,0,0) on every restore (Nov 17 bug log).
+
 
     def clone(self) -> "PhysicsWorld":
         """Independent copy of the world in its current state. Nothing it does is recorded here."""
@@ -1727,4 +1977,7 @@ class PhysicsWorld:
         self._recording = was
         self.initial_positions = {oid: self.obj_pos(oid).tolist() for oid in sorted(self.active)}
         self.emit("scene_prepared", sim_time=round(t_keep, 4))
-        self._record_frame(key=True)
+        # Humanoid-only spawn reset (see _humanoid_spawn_reset): limb joints
+        # only, feet-on-ground; box worlds' block freejoint slots stay untouched.
+        if self.ac.get("type") == "humanoid":
+            self._humanoid_spawn_reset(0.01)

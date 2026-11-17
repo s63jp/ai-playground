@@ -24,7 +24,8 @@ const sanitizeWords = (s) => {
   if (!t) t = '[tool-call markup — see Recent actions]';
   return t;
 };
-const api = async (p, opt) => { const r = await fetch(p, opt); if (!r.ok) throw new Error(`${p}: ${r.status} ${await r.text()}`); return r.json(); };
+import { HumanoidView } from './js/humanoid_view.js';
+
 const fmt = (v, d = 2) => (typeof v === 'number' ? v.toFixed(d) : v ?? '–');
 
 // ------------------------------------------------------------------ tabs
@@ -77,7 +78,13 @@ scene.background = new THREE.Color(0x0d1014);
 // World coordinates are z-up; three.js is y-up. One group rotates the whole world.
 const world = new THREE.Group();
 world.rotation.x = -Math.PI / 2;
-scene.add(world);
+
+// Humanoid visualisation – created once after the world group
+let humanoidView;
+if (typeof HumanoidView === 'function') {
+  humanoidView = new HumanoidView(world);
+}
+
 const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 400);
 camera.position.set(-14, 18, 20);
 const controls = new OrbitControls(camera, renderer.domElement);

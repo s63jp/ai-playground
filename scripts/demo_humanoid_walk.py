@@ -9,7 +9,7 @@ apply torques each physics step, producing smooth limb motion.
 """
 
 import math
-import time
+import numpy as np
 from pathlib import Path
 
 import yaml
@@ -36,6 +36,7 @@ walk_duration = 5.0  # seconds
 speed = 0.5          # m/s forward
 start_pos = world.agent_pos().copy()
 start_time = world.time
+print('time,pos_x,pos_y,pos_z,up_z')
 while world.time - start_time < walk_duration:
     # Apply sinusoidal hip movement
     set_hip_targets(world.time)
@@ -43,6 +44,11 @@ while world.time - start_time < walk_duration:
     world.move([1.0, 0.0, 0.0], speed * world.dt, stop=False)
     # Step the simulation
     world._step()
+    pos = world.agent_pos()
+    quat = world.d.qpos[world.aq+3:world.aq+7]
+    from playground.world.mathutil import quat_to_mat
+    up = quat_to_mat(quat) @ np.array([0.0, 0.0, 1.0])
+    print(f"{world.time:.2f},{pos[0]:.3f},{pos[1]:.3f},{pos[2]:.3f},{up[2]:.3f}")
 
 end_pos = world.agent_pos().copy()
 distance = math.hypot(end_pos[0] - start_pos[0], end_pos[1] - start_pos[1])

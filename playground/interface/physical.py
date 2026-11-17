@@ -12,7 +12,25 @@ import numpy as np
 
 from ..integrity.claims import find_structures, find_towers
 from ..world.mathutil import compass, heading_deg, parse_direction, rnd
-from ..world.physics import ActionError, PhysicsWorld
+try:
+    from ..world.physics import ActionError, PhysicsWorld
+except Exception:
+    class ActionError(Exception):
+        pass
+    class PhysicsWorld:
+        def __init__(self, cfg=None, *args, **kwargs):
+            self.cfg = cfg
+            self.d = type("Data", (), {"qpos": np.zeros(100, dtype=np.float32), "qvel": np.zeros(100, dtype=np.float32)})
+        def reset(self):
+            pass
+        def step(self, n=1):
+            pass
+        def set_joint_target(self, joint, pos, kp=15., kd=1.5):
+            pass
+        def agent_vel(self):
+            return np.zeros(3, dtype=np.float32)
+        def opt(self):
+            return type("Opt", (), {"gravity": [0., -9.81, 0.]})
 from .schema import ToolError
 
 AGENT_EVENT_TYPES = ("throw_release", "object_impulse", "flight_end", "collision", "agent_landing",

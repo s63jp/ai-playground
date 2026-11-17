@@ -54,6 +54,10 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
     from ..gateway.api import register_gateway_routes
     register_gateway_routes(app, cfg, db)
 
+    # Register player API routes
+    from .player_api import router as player_router
+    app.include_router(player_router)
+
     def mem(agent_id: str) -> MemoryStore:
         known = set(agent_ids(cfg)) | {p.name for p in memory_root(cfg).iterdir() if p.is_dir()}
         if agent_id not in known:

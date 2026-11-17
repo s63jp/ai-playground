@@ -161,6 +161,24 @@ def build_mjcf(cfg: dict, specs: list[ObjectSpec]) -> str:
         asset_match = re.search(r'<asset>.*?</asset>', hum_xml, re.DOTALL)
         if asset_match:
             out.append(asset_match.group(0))
+        # Include the humanoid's <default> block too. It carries the asset's
+        # own rig contract for joints (damping="1.5" limited="true" range
+        # "-90 90"). The previous integration copied only <asset>, so every
+        # hinge compiled UNLIMITED and UNDAMPED — the ankle could spin 9.8 rad
+        # and slam the solver (qacc -> 5e9) instead of standing (Nov 17 lab).
+        default_match = re.search(r'<default>.*?</default>', hum_xml, re.DOTALL)
+        if default_match:
+            # The asset is authored under its own degree-based compiler, but
+            # the world compiles in RADIANS: copying range="-90 90" verbatim
+            # compiled as ±90 rad (±5153°) — effectively unlimited joints
+            # (lab evidence: limfrac 0.02 on a knee reaching 1.93 rad, the
+            # ankle able to spin 9.78 rad). Rewrite the documented ±90°
+            # contract into radians before inclusion.
+            d0 = default_match.group(0)
+            assert 'range="-90 90"' in d0, (
+                "humanoid joint range anchor changed; update the radian "
+                "transform in playground/world/spec.py")
+            out.append(d0.replace('range="-90 90"', 'range="-1.5708 1.5708"'))
     out.append('  <default>')
     out.append('    <geom condim="4" friction="0.9 0.005 0.0001" solref="0.004 1" solimp="0.95 0.99 0.001" contype="1" conaffinity="1" group="0"/>')
     out.append('  </default>')
@@ -199,6 +217,51 @@ def build_mjcf(cfg: dict, specs: list[ObjectSpec]) -> str:
         # torso body (with limbs)
         torso_block = _extract_full_body(hum_xml, "torso")
         if torso_block:
+            # The asset defines the figure in its own frame (ground at z=0,
+            # torso centre at 1.15). Nested under the agent body — whose
+            # origin sits at hh+0.002 — the torso must be offset to t = 1.15
+            # - hh - 0.002 = 0.348 so the feet land at the agent root height.
+            # Without this the figure floated 0.8 m above the ground and every
+            # spawn began with a 0.8 m free-fall impact (the QACC blow-ups).
+            old = '<body name="torso" pos="0 0 1.15">'
+            assert old in torso_block, (
+                "humanoid asset torso anchor line changed; update the humanoid "
+                "torso offset in playground/world/spec.py")
+            # waist_yaw: the rig's only rotational root dof. The head/limb axes
+            # can't re-aim a walk by themselves — with the root on 3 slide joints
+            # the legs can only sweep along the torso's local +X, so heading
+            # control needs the whole upper figure to yaw (Nov 17 heading test).
+            # Full ±180 deg (radians for the world compiler) so every compass
+            # heading is reachable; damped 2.0, posture-held by the gait PD.
+            new = ('<body name="torso" pos="0 0 0.348">'
+                   '<joint name="waist_yaw" type="hinge" axis="0 0 1" '
+                   'limited="true" range="-3.1416 3.1416" damping="2.0"/>')
+            torso_block = torso_block.replace(old, new, 1)
+            # With the waist joint the torso is an articulated child, so the
+            # agent container no longer carries welded mass and MuJoCo would
+            # refuse (or, with a token mass, destabilise: a near-massless
+            # parent makes the waist dof's effective inertia collapse and the
+            # solver explodes at mjMINVAL scales). Give it pelvis-class mass
+            # and inertia: the slides then carry a ~51 kg figure, and the
+            # waist dof keeps a healthy ~1+ kg m^2 about its axis.
+            out.append('      <inertial pos="0 0 0" mass="10.0" diaginertia="1.0 1.2 1.0"/>')
+            # Locomotion pairing experiment (cfg-switchable). When
+            # agent_body.limb_friction_engine is true, limb geoms get the
+            # frictionless, normal-only contact pairing the engine pairs with
+            # the root-traction drive (same as the box agent base geom; real
+            # foot friction under the root-locked rig converts the traction's
+            # tipping moment into leg-joint fold instead of walking). When
+            # false (the current default — the humanoid walks CONTACT-DRIVEN
+            # and needs foot grip), the asset's original friction stays.
+            if bool(a.get("limb_friction_engine", False)):
+                # priority="-1": contact parameters come from the geom with
+                # the LOWER priority, and the floor specs compile at priority
+                # 0 — with priority="1" the frictionless pair params never
+                # reached the foot-floor contact and the fold/sink persisted.
+                torso_block = re.sub(
+                    r'<geom (?![^>]*friction=)',
+                    '<geom condim="1" friction="0 0 0" priority="-1" ',
+                    torso_block)
             out.append(torso_block)
     else:
         out.append(f'    <geom name="g:agent" type="box" size="{_f(hw, hw, hh)}" mass="{a["mass"]}" '
