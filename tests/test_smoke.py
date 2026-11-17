@@ -24,7 +24,11 @@ def test_dashboard_and_api(cfg, db):
     s = run_session(cfg, db, "agent_001", make_adapter(cfg, "scripted"))
     c = TestClient(create_app(cfg, db))
     assert c.get("/api/health").json()["ok"]
-    assert "<canvas" not in c.get("/").text and "app.js" in c.get("/").text
+    # the page serves the real app (app.js) AND ships the live neural
+    # training tab; the old '"<canvas" not in page' premise is obsolete —
+    # the rl_live tab's sparklines/viewport legitimately use canvases.
+    home = c.get("/")
+    assert "app.js" in home.text and "rl_live_tab.js" in home.text
     assert c.get("/static/vendor/three.module.min.js").status_code == 200
     assert len(c.get("/api/agents").json()["agents"]) == 13
     sid = s["session_id"]
