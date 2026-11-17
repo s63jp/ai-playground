@@ -135,6 +135,124 @@ def _f(*vals: float) -> str:
 
 
 
+def _humanoid_torso_block(ac: dict) -> str:
+    """Extract the asset torso body and apply the world's rig contract edits.
+
+    Shared by single-agent (legacy) and multi-agent generation; the caller
+    then prefixes names per agent. Returns the torso <body> block WITHOUT any
+    per-agent naming, so this helper's output for a name-passthrough call is
+    byte-identical to the legacy inline generation.
+    """
+    hum_path = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "humanoid_mujoco.xml")
+    with open(hum_path, "r", encoding="utf-8") as f_h:
+        hum_xml = f_h.read()
+    # torso body (with limbs)
+    torso_block = _extract_full_body(hum_xml, "torso")
+    if torso_block:
+        # The asset defines the figure in its own frame (ground at z=0,
+        # torso centre at 1.15). Nested under the agent body — whose
+        # origin sits at hh+0.002 — the torso must be offset to t = 1.15
+        # - hh - 0.002 = 0.348 so the feet land at the agent root height.
+        # Without this the figure floated 0.8 m above the ground and every
+        # spawn began with a 0.8 m free-fall impact (the QACC blow-ups).
+        old = '<body name="torso" pos="0 0 1.15">'
+        assert old in torso_block, (
+            "humanoid asset torso anchor line changed; update the humanoid "
+            "torso offset in playground/world/spec.py")
+        # waist_yaw: the rig's only rotational root dof. The head/limb axes
+        # can't re-aim a walk by themselves — with the root on 3 slide joints
+        # the legs can only sweep along the torso's local +X, so heading
+        # control needs the whole upper figure to yaw (Nov 17 heading test).
+        # Full ±180 deg (radians for the world compiler) so every compass
+        # heading is reachable; damped 2.0, posture-held by the gait PD.
+        new = ('<body name="torso" pos="0 0 0.348">'
+               '<joint name="waist_yaw" type="hinge" axis="0 0 1" '
+               'limited="true" range="-3.1416 3.1416" damping="2.0"/>')
+        torso_block = torso_block.replace(old, new, 1)
+        # With the waist joint the torso is an articulated child, so the
+        # agent container no longer carries welded mass and MuJoCo would
+        # refuse (or, with a token mass, destabilise: a near-massless
+        # parent makes the waist dof's effective inertia collapse and the
+        # solver explodes at mjMINVAL scales). Give it pelvis-class mass
+        # and inertia: the slides then carry a ~51 kg figure, and the
+        # waist dof keeps a healthy ~1+ kg m^2 about its axis.
+        torso_block = ('<inertial pos="0 0 0" mass="10.0" diaginertia="1.0 1.2 1.0"/>'
+                       + torso_block)
+        # Locomotion pairing experiment (cfg-switchable). When
+        # agent_body.limb_friction_engine is true, limb geoms get the
+        # frictionless, normal-only contact pairing the engine pairs with
+        # the root-traction drive (same as the box agent base geom; real
+        # foot friction under the root-locked rig converts the traction's
+        # tipping moment into leg-joint fold instead of walking). When
+        # false (the current default — the humanoid walks CONTACT-DRIVEN
+        # and needs foot grip), the asset's original friction stays.
+        if bool(ac.get("limb_friction_engine", False)):
+            # priority="-1": contact parameters come from the geom with
+            # the LOWER priority, and the floor specs compile at priority
+            # 0 — with priority="1" the frictionless pair params never
+            # reached the foot-floor contact and the fold/sink persisted.
+            torso_block = re.sub(
+                r'<geom (?![^>]*friction=)',
+                '<geom condim="1" friction="0 0 0" priority="-1" ',
+                torso_block)
+    return torso_block
+
+
+def _prefix_names(xml_block: str, prefix: str) -> str:
+    """Rewrite every name="..." attribute with a <prefix><name> form.
+
+    Used to stamp N copies of the humanoid rig into one model. The prefix is
+    the agent's own id (e.g. "agent_002:"), so scoped names are both unique
+    and self-describing in events/replays.
+    """
+    if not prefix:
+        return xml_block
+    return re.sub(r'name="([^"]+)"', lambda m: f'name="{prefix}{m.group(1)}"', xml_block)
+
+
+def _multi_spec_start(w: dict, spec_a: dict, idx: int) -> list[float]:
+    """Per-agent spawn (x, y): its own start, an offset from the world start, or a
+    1.2 m row along +y (deterministic, no initial body overlap)."""
+    sx, sy = float(w["start"][0]), float(w["start"][1])
+    off = spec_a.get("start_offset")
+    if "start" in spec_a:
+        return [float(spec_a["start"][0]), float(spec_a["start"][1])]
+    if off is not None:
+        return [sx + float(off[0]), sy + float(off[1])]
+    return [sx, sy + 1.2 * idx]
+
+
+def agent_rigs(cfg: dict) -> dict[str, dict]:
+    """Per-agent rig plan shared by MJCF generation (build_mjcf) and the physics
+    runtime (PhysicsWorld.__init__): for every agent its merged body spec, its
+    name map (asset/rig name -> model name) and its spawn position.
+
+    With no cfg["agent_bodies"], returns the legacy single rig: agent_001 with an
+    identity name map and the world's own start — the pre-M3 behaviour exactly.
+    """
+    w = cfg["world"]
+    a = cfg["agent_body"]
+    multi = cfg.get("agent_bodies")
+    rigs: dict[str, dict] = {}
+    if multi:
+        for idx, (aid, override) in enumerate(multi.items()):
+            spec_a = {**a, **(override or {})}
+            prefix = f"{aid}:"
+            nm = {"agent": prefix + "agent", "agent_x": prefix + "agent_x",
+                  "agent_y": prefix + "agent_y", "agent_z": prefix + "agent_z",
+                  "g:agent": f"g:agent:{aid}"}
+            if spec_a.get("type", "box") == "humanoid":
+                block = _humanoid_torso_block(spec_a)
+                for name in re.findall(r'name="([^"]+)"', block):
+                    nm.setdefault(name, prefix + name)
+            rigs[aid] = {"prefix": prefix, "name_map": nm,
+                         "start": _multi_spec_start(w, spec_a, idx), "spec": spec_a}
+    else:
+        sx, sy = float(w["start"][0]), float(w["start"][1])
+        rigs["agent_001"] = {"prefix": "", "name_map": {}, "start": [sx, sy], "spec": dict(a)}
+    return rigs
+
+
 def build_mjcf(cfg: dict, specs: list[ObjectSpec]) -> str:
     """Generate the MuJoCo model.
 
@@ -205,70 +323,103 @@ def build_mjcf(cfg: dict, specs: list[ObjectSpec]) -> str:
     # The agent body: an upright box on three slide joints. Frictionless with priority so
     # that all traction comes from the walking controller (see physics.py).
     sx, sy = float(w["start"][0]), float(w["start"][1])
-    out.append(f'    <body name="agent" pos="{_f(sx, sy, hh + 0.002)}">')
-    out.append('      <joint name="agent_x" type="slide" axis="1 0 0"/>')
-    out.append('      <joint name="agent_y" type="slide" axis="0 1 0"/>')
-    out.append('      <joint name="agent_z" type="slide" axis="0 0 1"/>')
-    # Insert humanoid torso body (with limbs)
-    if a.get("type", "box") == "humanoid":
-        hum_path = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "humanoid_mujoco.xml")
-        with open(hum_path, "r", encoding="utf-8") as f_h:
-            hum_xml = f_h.read()
-        # torso body (with limbs)
-        torso_block = _extract_full_body(hum_xml, "torso")
-        if torso_block:
-            # The asset defines the figure in its own frame (ground at z=0,
-            # torso centre at 1.15). Nested under the agent body — whose
-            # origin sits at hh+0.002 — the torso must be offset to t = 1.15
-            # - hh - 0.002 = 0.348 so the feet land at the agent root height.
-            # Without this the figure floated 0.8 m above the ground and every
-            # spawn began with a 0.8 m free-fall impact (the QACC blow-ups).
-            old = '<body name="torso" pos="0 0 1.15">'
-            assert old in torso_block, (
-                "humanoid asset torso anchor line changed; update the humanoid "
-                "torso offset in playground/world/spec.py")
-            # waist_yaw: the rig's only rotational root dof. The head/limb axes
-            # can't re-aim a walk by themselves — with the root on 3 slide joints
-            # the legs can only sweep along the torso's local +X, so heading
-            # control needs the whole upper figure to yaw (Nov 17 heading test).
-            # Full ±180 deg (radians for the world compiler) so every compass
-            # heading is reachable; damped 2.0, posture-held by the gait PD.
-            new = ('<body name="torso" pos="0 0 0.348">'
-                   '<joint name="waist_yaw" type="hinge" axis="0 0 1" '
-                   'limited="true" range="-3.1416 3.1416" damping="2.0"/>')
-            torso_block = torso_block.replace(old, new, 1)
-            # With the waist joint the torso is an articulated child, so the
-            # agent container no longer carries welded mass and MuJoCo would
-            # refuse (or, with a token mass, destabilise: a near-massless
-            # parent makes the waist dof's effective inertia collapse and the
-            # solver explodes at mjMINVAL scales). Give it pelvis-class mass
-            # and inertia: the slides then carry a ~51 kg figure, and the
-            # waist dof keeps a healthy ~1+ kg m^2 about its axis.
-            out.append('      <inertial pos="0 0 0" mass="10.0" diaginertia="1.0 1.2 1.0"/>')
-            # Locomotion pairing experiment (cfg-switchable). When
-            # agent_body.limb_friction_engine is true, limb geoms get the
-            # frictionless, normal-only contact pairing the engine pairs with
-            # the root-traction drive (same as the box agent base geom; real
-            # foot friction under the root-locked rig converts the traction's
-            # tipping moment into leg-joint fold instead of walking). When
-            # false (the current default — the humanoid walks CONTACT-DRIVEN
-            # and needs foot grip), the asset's original friction stays.
-            if bool(a.get("limb_friction_engine", False)):
-                # priority="-1": contact parameters come from the geom with
-                # the LOWER priority, and the floor specs compile at priority
-                # 0 — with priority="1" the frictionless pair params never
-                # reached the foot-floor contact and the fold/sink persisted.
-                torso_block = re.sub(
-                    r'<geom (?![^>]*friction=)',
-                    '<geom condim="1" friction="0 0 0" priority="-1" ',
-                    torso_block)
-            out.append(torso_block)
+    multi_agents = cfg.get("agent_bodies")  # {agent_id: per-agent spec overrides}
+    if multi_agents:
+        # ---- multi-agent world: one independently named rig per agent ----
+        # Every name inside an agent's rig is prefixed with the agent's own id
+        # ("agent_002:left_hip"), so joint/actuator/geom address mappings are
+        # per-agent by construction and never collide. A world with no
+        # "agent_bodies" key keeps the legacy single-rig naming below
+        # byte-identically.
+        for idx, (aid, rig) in enumerate(agent_rigs(cfg).items()):
+            spec_a = rig["spec"]
+            hw_a = float(spec_a["width"]) / 2
+            hh_a = float(spec_a["height"]) / 2
+            ax0, ay0 = rig["start"]
+            P = rig["prefix"]
+            out.append(f'    <body name="{P}agent" pos="{_f(ax0, ay0, hh_a + 0.002)}">')
+            # limited="false": the humanoid asset's joint default (limited=true,
+            # range -90..90 — parsed as radians by the radian compiler) must not
+            # clamp the root slides to a 1.57 m pen around the spawn point.
+            out.append(f'      <joint name="{P}agent_x" type="slide" axis="1 0 0" limited="false" range="-1e5 1e5"/>')
+            out.append(f'      <joint name="{P}agent_y" type="slide" axis="0 1 0" limited="false" range="-1e5 1e5"/>')
+            out.append(f'      <joint name="{P}agent_z" type="slide" axis="0 0 1" limited="false" range="-1e5 1e5"/>')
+            if spec_a.get("type", "box") == "humanoid":
+                torso = _prefix_names(_humanoid_torso_block(spec_a), P)
+                indent = re.sub(r'\n', '\n      ', torso)
+                out.append('      ' + indent)
+            else:
+                out.append(f'      <geom name="g:agent:{aid}" type="box" size="{_f(hw_a, hw_a, hh_a)}" '
+                           f'mass="{spec_a["mass"]}" '
+                           'friction="0 0 0" priority="1" condim="1" contype="1" conaffinity="3" group="1"/>')
+            out.append('    </body>')
     else:
-        out.append(f'    <geom name="g:agent" type="box" size="{_f(hw, hw, hh)}" mass="{a["mass"]}" '
-+               'friction="0 0 0" priority="1" condim="1" contype="1" conaffinity="3" group="1"/>')
-
-    # close the agent body
-    out.append('    </body>')
+        out.append(f'    <body name="agent" pos="{_f(sx, sy, hh + 0.002)}">')
+        # See the multi-agent branch: the slides must be explicitly unlimited —
+        # the merged humanoid joint default clamped them to ±1.57 m (radian
+        # compiler, degrees-parsed range), silently penning the agent.
+        out.append('      <joint name="agent_x" type="slide" axis="1 0 0" limited="false" range="-1e5 1e5"/>')
+        out.append('      <joint name="agent_y" type="slide" axis="0 1 0" limited="false" range="-1e5 1e5"/>')
+        out.append('      <joint name="agent_z" type="slide" axis="0 0 1" limited="false" range="-1e5 1e5"/>')
+        # Insert humanoid torso body (with limbs)
+        if a.get("type", "box") == "humanoid":
+            hum_path = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "humanoid_mujoco.xml")
+            with open(hum_path, "r", encoding="utf-8") as f_h:
+                hum_xml = f_h.read()
+            # torso body (with limbs)
+            torso_block = _extract_full_body(hum_xml, "torso")
+            if torso_block:
+                # The asset defines the figure in its own frame (ground at z=0,
+                # torso centre at 1.15). Nested under the agent body — whose
+                # origin sits at hh+0.002 — the torso must be offset to t = 1.15
+                # - hh - 0.002 = 0.348 so the feet land at the agent root height.
+                # Without this the figure floated 0.8 m above the ground and every
+                # spawn began with a 0.8 m free-fall impact (the QACC blow-ups).
+                old = '<body name="torso" pos="0 0 1.15">'
+                assert old in torso_block, (
+                    "humanoid asset torso anchor line changed; update the humanoid "
+                    "torso offset in playground/world/spec.py")
+                # waist_yaw: the rig's only rotational root dof. The head/limb axes
+                # can't re-aim a walk by themselves — with the root on 3 slide joints
+                # the legs can only sweep along the torso's local +X, so heading
+                # control needs the whole upper figure to yaw (Nov 17 heading test).
+                # Full ±180 deg (radians for the world compiler) so every compass
+                # heading is reachable; damped 2.0, posture-held by the gait PD.
+                new = ('<body name="torso" pos="0 0 0.348">'
+                       '<joint name="waist_yaw" type="hinge" axis="0 0 1" '
+                       'limited="true" range="-3.1416 3.1416" damping="2.0"/>')
+                torso_block = torso_block.replace(old, new, 1)
+                # With the waist joint the torso is an articulated child, so the
+                # agent container no longer carries welded mass and MuJoCo would
+                # refuse (or, with a token mass, destabilise: a near-massless
+                # parent makes the waist dof's effective inertia collapse and the
+                # solver explodes at mjMINVAL scales). Give it pelvis-class mass
+                # and inertia: the slides then carry a ~51 kg figure, and the
+                # waist dof keeps a healthy ~1+ kg m^2 about its axis.
+                out.append('      <inertial pos="0 0 0" mass="10.0" diaginertia="1.0 1.2 1.0"/>')
+                # Locomotion pairing experiment (cfg-switchable). When
+                # agent_body.limb_friction_engine is true, limb geoms get the
+                # frictionless, normal-only contact pairing the engine pairs with
+                # the root-traction drive (same as the box agent base geom; real
+                # foot friction under the root-locked rig converts the traction's
+                # tipping moment into leg-joint fold instead of walking). When
+                # false (the current default — the humanoid walks CONTACT-DRIVEN
+                # and needs foot grip), the asset's original friction stays.
+                if bool(a.get("limb_friction_engine", False)):
+                    # priority="-1": contact parameters come from the geom with
+                    # the LOWER priority, and the floor specs compile at priority
+                    # 0 — with priority="1" the frictionless pair params never
+                    # reached the foot-floor contact and the fold/sink persisted.
+                    torso_block = re.sub(
+                        r'<geom (?![^>]*friction=)',
+                        '<geom condim="1" friction="0 0 0" priority="-1" ',
+                        torso_block)
+                out.append(torso_block)
+        else:
+            out.append(f'    <geom name="g:agent" type="box" size="{_f(hw, hw, hh)}" mass="{a["mass"]}" '
+                       'friction="0 0 0" priority="1" condim="1" contype="1" conaffinity="3" group="1"/>')
+        # close the agent body
+        out.append('    </body>')
     # movable objects
     for s in specs:
         if not s.movable:

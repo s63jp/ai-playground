@@ -88,7 +88,8 @@ class Environment:
     def __init__(self, cfg: dict, db, memory: MemoryStore, agent_id: str, session_id: int,
                  session_number: int, mode: str = "exploration", allowed_tools: list[str] | None = None,
                  scene: Callable[[PhysicsWorld], None] | None = None,
-                 clock: Callable[[], float] | None = None, wall_used: float = 0.0):
+                 clock: Callable[[], float] | None = None, wall_used: float = 0.0,
+                 world: PhysicsWorld | None = None):
         self.cfg, self.db, self.memory = cfg, db, memory
         self.agent_id, self.sid, self.session_number, self.mode = agent_id, session_id, session_number, mode
         self.allowed = set(allowed_tools) if allowed_tools else None
@@ -116,11 +117,23 @@ class Environment:
         # identical observations in a row because nothing ever told it the answer had not changed.
         self._obs_seen: dict[tuple, int] = {}
         self._repeat_obs_streak = 0
-        self.world = PhysicsWorld(cfg, event_sink=self._on_event, frame_sink=self._on_frame)
+        self.world = PhysicsWorld(cfg, event_sink=self._on_event, frame_sink=self._on_frame) \
+            if world is None else world
+        if world is not None:
+            # Shared-world injection (multi-agent / arena): this session drives an
+            # externally owned world instead of building its own island. The event/frame
+            # streams are wired to this session for now (single-tenant); the arena
+            # orchestrator fans them out to every participating session (M5).
+            self.world.event_sink = self._on_event
+            self.world.frame_sink = self._on_frame
         if scene is not None:
             scene(self.world)
             self.world.setup_finish()
-        self.tools = PhysicalTools(self.world)
+        # Multi-agent worlds: bind this session's tools to its own body when the
+        # session agent id names an agent in the shared world.
+        tool_agent = self.agent_id if (world is not None
+                                       and self.agent_id in getattr(self.world, "_agents", {})) else None
+        self.tools = PhysicalTools(self.world, agent_id=tool_agent)
         self.initial_state_hash = self.world.state_hash()
         self._flush_only()
 

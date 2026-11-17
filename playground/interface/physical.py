@@ -14,8 +14,9 @@ import numpy as np
 from ..integrity.claims import find_structures, find_towers
 from ..world.mathutil import compass, heading_deg, parse_direction, rnd
 try:
-    from ..world.physics import ActionError, PhysicsWorld
+    from ..world.physics import ActionError, AgentView, PhysicsWorld
 except Exception:
+    AgentView = None
     class ActionError(Exception):
         pass
     class PhysicsWorld:
@@ -46,8 +47,20 @@ def visible_event(ev: dict) -> dict:
 
 
 class PhysicalTools:
-    def __init__(self, world: PhysicsWorld):
-        self.w = world
+    def __init__(self, world: PhysicsWorld, agent_id: str | None = None):
+        """Bind the tool surface to `world`.
+
+        With `agent_id` naming one of the world's agents (multi-agent worlds),
+        every tool acts on that agent's own body and rig through a scoped
+        AgentView — the tool schemas stay identical. `agent_id=None` (the
+        single-agent default) binds the pre-M3 world surface unchanged.
+        """
+        self.agent_id: str | None = None
+        if agent_id is not None and hasattr(world, "_agents") and agent_id in world._agents:
+            self.w = AgentView(world, world._agents[agent_id])
+            self.agent_id = agent_id
+        else:
+            self.w = world
         # Phase 12 lazily-built skill plumbing (skills library, adapter, arm controller).
         self._skill_lib = None
         self._skill_adapter = None
@@ -176,11 +189,15 @@ class PhysicalTools:
                 ledges.append(entry)
         near.sort(key=lambda e: e["distance"])
         ledges.sort(key=lambda e: e["distance"])
-        return {"position": rnd(ap, 3), "feet_height": round(feet, 3), "facing_degrees": round(w.facing, 1),
-                "standing_on": list(w.support), "radius": radius, "objects": near, "fixed_structures": ledges,
-                "distance_to_island_edge": {k: round(v, 3) for k, v in (
-                    ("east", w.half - ap[0]), ("west", w.half + ap[0]),
-                    ("north", w.half - ap[1]), ("south", w.half + ap[1]))}}
+        out = {"position": rnd(ap, 3), "feet_height": round(feet, 3), "facing_degrees": round(w.facing, 1),
+               "standing_on": list(w.support), "radius": radius, "objects": near, "fixed_structures": ledges,
+               "distance_to_island_edge": {k: round(v, 3) for k, v in (
+                   ("east", w.half - ap[0]), ("west", w.half + ap[0]),
+                   ("north", w.half - ap[1]), ("south", w.half + ap[1]))}}
+        if self.agent_id is not None:
+            # Shared world: the other agents, from measured body state only.
+            out["agents_nearby"] = w.agents_report(self.agent_id, radius, ap)
+        return out
 
     # ------------------------------------------------------------ movement
     def move(self, direction, distance: float, speed: float | None = None, keep_moving: bool = False) -> dict:

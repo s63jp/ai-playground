@@ -139,3 +139,35 @@ M1 verify physics integrity  ──► M2 verify interaction  ──► M3 multi
 3. `simulation.mode` values are documented but nothing dispatches on the value.
 4. Existing 547-suite numbers include stub-level unit tests (arena/equipment) that do not
    constitute integration evidence for 17–27.
+
+## M3 progress (2026-11-17, in flight — see session handoff summary)
+
+Commit range 828a159..(M3 WIP). Multi-agent world architecture landed:
+
+- `world/spec.py`: N-body MJCF via `agent_rigs()` + `_prefix_names()` (per-agent prefixed
+  names e.g. `agent_002:left_hip`); legacy single-rig output byte-identical (verified vs
+  `git show HEAD:` build_mjcf output). **BUG FIX shipped**: the merged humanoid joint
+  default (`limited="true" range="-90 90"`) clamped the root slide joints to ±1.5708 m —
+  the agent could never move farther than 1.57 m from spawn on ANY axis (pre-existing at
+  HEAD, hidden because every test walk < 1 m). Slides now explicitly `limited="false"`.
+- `world/physics.py`: `AgentRuntime` per-agent state; `_ScopedModel`+`AgentView` scoping
+  (the proven GaitController/ManipulationController code rides unchanged through views);
+  `agent=` kwarg across the agent-facing API (move/jump/climb/wait/catch/pick_up/throw/
+  impulse/place/put_down/rotate/setup_agent/set_gait/stand_up/agent_*/feet/total_mass);
+  per-rt `_step`/`_post_step`; multi-aware collisions (objects name agent ids; contact
+  normal added in multi), `agents_report()` (measured other-agent perception),
+  `held_by_any()`, exclusive holds (`object_taken` naming the holder), get/set_state with
+  per-agent gait checkpoint (GaitController.get_state/set_state exist), legacy-compat
+  delegation properties (incl. `_gait_controller`→`gait` alias).
+- `playground/interface/physical.py`: `PhysicalTools(world, agent_id=...)` binds via
+  AgentView; `look_around` gains `agents_nearby` (multi only). `environment.py`
+  `Environment(world=...)` world-injection seam + session-agent tool binding.
+- Real MuJoCo contact filter verified working (minimal model: agent-agent push-apart).
+
+`tests/test_multiagent_world.py` (16 tests): 15 green, 1 failing —
+`test_e_agent_agent_contact_attribution` (walker-vs-standing-defender contact not yet
+detected at 14 s); first task on resume. Targeted green: locomotion/pd_walk/world suites
+still pass on the refactored engine.
+
+Remaining M3: E contact test, full-suite run, `scripts/profile_multiagent.py` numbers
+(1/2/4 humanoids), `git diff --check`, CLAIMS_MATRIX update, milestone commit.
