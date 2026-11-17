@@ -58,6 +58,11 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
     from .player_api import router as player_router
     app.include_router(player_router)
 
+    # Live Neural Training (M6-C foundations): a real PPO session behind the
+    # dashboard, with read-only telemetry of the running B3 experiment.
+    from ..rl_live.rest import register_rl_live_routes
+    register_rl_live_routes(app, cfg)
+
     def mem(agent_id: str) -> MemoryStore:
         known = set(agent_ids(cfg)) | {p.name for p in memory_root(cfg).iterdir() if p.is_dir()}
         if agent_id not in known:

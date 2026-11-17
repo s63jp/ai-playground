@@ -42,6 +42,7 @@ const PAGE_META = {
   bench: ['Evaluate', 'Benchmarks', 'Compare task performance across experienced agents, fresh controls, and memory ablations.'],
   nn: ['Evaluate', 'Neural networks', 'Generate datasets, train models, and inspect quality, metrics, and model lineage.'],
   rl: ['Evaluate', 'RL environment', 'Inspect the consolidated locomotion environment contract, curriculum stages, and bounded measured probe episodes (no trainer yet).'],
+  live: ['Evaluate', 'Live neural training', 'Watch a genuinely fresh network learn to walk in the real locomotion environment: the actual training simulation streamed live, the trainer\'s own telemetry, pause/resume/stop/save, and a read-only view of the background B3 run.'],
   lab: ['Evaluate', 'Run & models', 'Launch exploration runs, compare model behaviour, and audit session provenance.'],
   infra: ['System', 'Infrastructure', 'Monitor provider health, hardware utilisation, and live request queues.'],
   providers: ['System', 'Providers', 'Inspect discovered model providers, connectivity, capabilities, and available models.'],
@@ -68,6 +69,7 @@ function showTab(name) {
   if (location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);   // deep link to a view
   window.scrollTo(0, 0);
   ({ memory: loadMemory, analytics: loadAnalytics, compare: loadCompare, bench: loadBench, nn: loadNn, rl: loadRl, lab: loadLab,
+     live: () => window.__rl_live_show && window.__rl_live_show(),
      infra: loadInfra, providers: loadProviders, monitor: loadMonitor, resources: loadResources }[name] || (() => {}))();
   if (name === 'watch') resize();
 }

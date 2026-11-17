@@ -57,6 +57,10 @@
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v3m0 12v3M4.9 4.9l2.2 2.2m9.8 9.8 2.2 2.2M3 12h3m12 0h3M4.9 19.1l2.2-2.2m9.8-9.8 2.2-2.2"/><circle cx="12" cy="12" r="3.2"/></svg>
         <span>RL environment</span>
       </button>
+      <button type="button" data-tab="live">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="2.4"/><path d="M12 5.4V3M12 21v-2.4M6.7 6.7 5.2 5.2m13.6 1.5-1.5 1.5M6.7 17.3l-1.5 1.5m13.6-1.5-1.5-1.5" stroke-linecap="round"/><path d="M8 12a4 4 0 0 1 8 0" stroke-linecap="round"/></svg>
+        <span>Live neural training</span>
+      </button>
       <button type="button" data-tab="lab">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 3h6M10 3v6l-5.5 9.5A1.8 1.8 0 0 0 6 21h12a1.8 1.8 0 0 0 1.5-2.5L14 9V3M7.5 15h9"/></svg>
         <span>Run &amp; models</span>
@@ -371,6 +375,65 @@
   </div>
 </section>
 
+<section id="tab-live" class="tab">
+  <div class="bar">
+    <span id="live-state" class="muted small">idle — nothing training on this page yet</span>
+    <span class="muted small" style="margin-left:auto">What renders here is the actual training simulation (real MuJoCo
+      decision frames from the training process). No scripted gait, no puppet. Pause/stop applies at rollout boundaries
+      (≤ 2048 decisions).</span>
+  </div>
+  <div class="cols2">
+    <div class="card" id="live-view-card">
+      <h3>Training simulation <span class="muted small" id="live-scene-note"></span></h3>
+      <div id="live-view" style="height:56vh;min-height:340px;border-radius:8px;overflow:hidden"></div>
+      <div class="form-row">
+        <label>Episode <input type="text" id="live-episode" value="—" readonly style="width:70px"></label>
+        <label>Decision <input type="text" id="live-decision" value="—" readonly style="width:90px"></label>
+        <label>Upright <input type="text" id="live-upz" value="—" readonly style="width:80px"></label>
+        <label>Contact L/R <input type="text" id="live-contacts" value="—" readonly></label>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Controls <span id="live-trainer-note" class="muted small"></span></h3>
+      <div class="form-row">
+        <label>Objective <select id="live-objective"></select></label>
+        <label>Seed <input type="number" id="live-seed" value="20261118" min="0" step="1"></label>
+        <label>Steps <input type="number" id="live-steps" value="2000000" min="1" step="1"></label>
+      </div>
+      <div class="form-row">
+        <button type="button" id="live-start" class="btn">Start</button>
+        <button type="button" id="live-pause" class="btn">Pause</button>
+        <button type="button" id="live-resume" class="btn">Resume</button>
+        <button type="button" id="live-stop" class="btn">Stop</button>
+        <button type="button" id="live-save" class="btn">Save brain</button>
+      </div>
+      <div id="live-error" class="muted small"></div>
+      <h3 style="margin-top:10px">Run</h3>
+      <div class="form-row">
+        <label>Run <input type="text" id="live-run-name" value="—" readonly></label>
+        <label>Stage <input type="text" id="live-stage" value="—" readonly></label>
+        <label>Step <input type="text" id="live-step" value="—" readonly></label>
+        <label>Iteration <input type="text" id="live-iter" value="—" readonly></label>
+      </div>
+    </div>
+  </div>
+  <div class="cols2">
+    <div class="card">
+      <h3>Trainer telemetry <span class="muted small" id="live-tele-iter"></span></h3>
+      <div id="live-telemetry"></div>
+      <div class="form-row"><span class="muted small">axis displacement / episode (m)</span><span class="muted small" id="live-spark-a-label"></span></div>
+      <canvas id="live-spark-axis" width="560" height="70" style="width:100%;height:52px"></canvas>
+      <div class="form-row"><span class="muted small">mean reward / iteration</span><span class="muted small" id="live-spark-b-label"></span></div>
+      <canvas id="live-spark-reward" width="560" height="70" style="width:100%;height:52px"></canvas>
+    </div>
+    <div class="card">
+      <h3>M6-B3 background run <span class="muted small" id="live-b3-ago"></span></h3>
+      <div id="live-b3"></div>
+      <div class="muted small">Read-only tail of the other session's training run — this page never writes it.</div>
+    </div>
+  </div>
+</section>
+
 <section id="tab-infra" class="tab">
   <div class="bar"><span class="muted small">Live infrastructure overview — refreshes automatically.</span><span id="inf-updated" class="muted small" style="margin-left:auto"></span></div>
   <div class="metrics-grid" id="inf-tiles"></div>
@@ -440,5 +503,6 @@
 <script type="module" src="/static/js/splat.js"></script>
 <script type="module" src="/static/js/impact_fx.js"></script>
 <script type="module" src="/static/js/player.js"></script>
+<script type="module" src="/static/js/rl_live_tab.js?v=1"></script>
 </body>
 </html>
