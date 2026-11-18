@@ -288,8 +288,10 @@ class _Handler(BaseHTTPRequestHandler):
                     sub.cond.release()
                 events, frame, _ = sub.drain()
                 for kind, payload in events:
-                    if kind == "spec":
-                        continue      # spec replayed only on connect (once)
+                    # every live event is forwarded, spec included: the session
+                    # broadcasts it exactly once per start, and a viewer that
+                    # opened its stream BEFORE the start has no other way to
+                    # receive it (the connect replay was empty then)
                     self._sse(kind, payload)
                 if frame is not None:
                     self._sse("frame", frame)

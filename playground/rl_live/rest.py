@@ -202,8 +202,9 @@ def register_rl_live_routes(app, cfg: dict | None = None, *,
                     events, frame, _drops = sub.drain()
                     wrote = False
                     for kind, payload in events:
-                        if kind == "spec":
-                            continue        # spec only in the connect replay
+                        # every live event is forwarded, spec included: the
+                        # session broadcasts it exactly once per start and a
+                        # stream connected before the start got no replay
                         yield _sse(kind, payload)
                         wrote = True
                     if frame is not None:

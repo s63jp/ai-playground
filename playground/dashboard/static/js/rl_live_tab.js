@@ -17,13 +17,16 @@ const kvRows = (pairs) => `<table class="mono" style="width:100%;font-size:12px"
   .map(([k, v]) => `<tr><td class="muted">${k}</td><td style="text-align:right">${v}</td></tr>`)
   .join('')}</table>`;
 
-THREE.Object3D.DEFAULT_UP.set(0, 0, 1);      // MuJoCo is z-up (three: y-up default)
-
+// MuJoCo is z-up (three's default is y-up). Do NOT touch the global
+// Object3D.DEFAULT_UP here: it silently re-orients every other dashboard
+// viewer constructed after this module (the island renderer in app.js came
+// out edge-on). The z-up convention stays local to THIS scene's camera.
 /* ------------------------------------------------------------------ scene */
 const holder = $('live-view');
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0d1014);
 const camera = new THREE.PerspectiveCamera(50, 1.4, 0.1, 300);
+camera.up.set(0, 0, 1);                      // MuJoCo rig is z-up
 camera.position.set(4.6, -4.6, 1.7);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -32,6 +35,15 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0, 0.8);
 controls.maxPolarAngle = Math.PI / 2 - 0.02;
 scene.add(new THREE.GridHelper(30, 30, 0x2a3341, 0x1a212b));
+// lighting: the rig uses MeshStandardMaterial, which is BLACK without lights
+// (z-up scene: key light from above +z, slightly ahead of the orbit view)
+scene.add(new THREE.HemisphereLight(0xbdd2ee, 0x22262e, 0.9));
+const keyLight = new THREE.DirectionalLight(0xfff4e0, 1.5);
+keyLight.position.set(3.5, -5.5, 7.5);
+scene.add(keyLight);
+const fillLight = new THREE.DirectionalLight(0x9db9ff, 0.5);
+fillLight.position.set(-3, 4.5, 2.5);
+scene.add(fillLight);
 
 const rigMeshes = new Map();
 let humanoidFallback = new HumanoidView(scene);
@@ -295,3 +307,14 @@ async function bootSnapshot() {
 
 window.__rl_live_show = () => { resize(); bootSnapshot(); };
 resize();
+
+/* ------------------------------------------------------------ render loop */
+/* The tab had NO render call at all: the renderer, rig and incoming frames
+ * were all constructed, but the canvas never drew a single frame (a blank
+ * page-background rectangle). Render every tick like the standalone viewer. */
+function tick() {
+  controls.update();
+  renderer.render(scene, camera);
+  requestAnimationFrame(tick);
+}
+tick();

@@ -178,6 +178,56 @@ def test_sse_stream_receives_frames_and_b3(http, app):
         s.close()
 
 
+def test_stream_delivers_spec_to_a_client_connected_before_start(http, app):
+    """Regression for the invisible-humanoid viewer bug (2026-11-17): a page
+    that opened /api/rl_live/stream BEFORE the session started received NO
+    live 'spec' event — the stream generator skipped it ("spec replayed only
+    on connect") and the connect replay was empty, so the viewer never built
+    the rig: it kept its 'start a session' placeholder while
+    /api/rl_live/spec answered with a populated scene, and incoming frames
+    animated empty groups. The spec broadcast (once per session start) must
+    be forwarded to already-connected subscribers like any other event."""
+    s = socket.create_connection(
+        ("127.0.0.1", int(http.rsplit(":", 1)[1])), timeout=10)
+    try:
+        s.sendall(b"GET /api/rl_live/stream HTTP/1.1\r\nHost: x\r\n\r\n")
+        s.settimeout(30)
+        body = json.loads(_post(http, "/api/rl_live/start",
+                                {"name": "spec_before_open", "seed": 7,
+                                 "total_steps": 2_000}))
+        assert body["ok"] is True
+        buf = b""
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            try:
+                chunk = s.recv(65536)
+            except socket.timeout:
+                continue
+            if not chunk:
+                break
+            buf += chunk
+            if b"event: spec" in buf:
+                break
+        assert b"event: spec" in buf, (
+            "a viewer connected before the start never received the scene "
+            "spec, so the rig could never be built on an already-open page")
+        spec = json.loads(
+            buf.split(b"event: spec\ndata: ", 1)[1].split(b"\n", 1)[0])
+        assert spec["spec_version"] == 1
+        assert any(b.get("rig") for b in spec["bodies"])
+    finally:
+        s.close()
+    # the live fanout itself keeps working around the forwarded spec
+    last = None
+    t0 = time.time()
+    while time.time() - t0 < 10.0:
+        last = app.session.recent_iterations(10)
+        if last:
+            break
+        time.sleep(0.05)                      # the fake trainer runs immediately
+    assert last, "session produced no iteration records after the spec"
+
+
 def test_start_refuses_without_trainer(http, tmp_path, monkeypatch):
     """The default interop path refuses to start while the trainer layers
     are UNAVAILABLE. Post-B3-merge the modules exist, so unavailability is

@@ -18,14 +18,15 @@ const $ = (id) => document.getElementById(id);
 const fmt = (v, n = 3) => (v === null || v === undefined || Number.isNaN(v))
   ? '—' : (typeof v === 'number' ? v.toFixed(n) : String(v));
 
-THREE.Object3D.DEFAULT_UP.set(0, 0, 1);           // MuJoCo is z-up
-
-/* ------------------------------------------------------------------ scene */
+// MuJoCo is z-up (three's default is y-up). Do NOT touch the global
+// Object3D.DEFAULT_UP: keep the z-up convention local to THIS page's camera
+// so a page-level default mutation can never leak into other embedders.
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0d1014);
 scene.fog = new THREE.Fog(0x0d1014, 18, 60);
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 300);
-camera.position.set(4.6, -4.6, 1.7);
+camera.up.set(0, 0, 1);                      // MuJoCo rig is z-up
+camera.position.set(3.3, -3.6, 1.8);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -44,6 +45,16 @@ const rigMeshes = new Map();          // body name -> Object3D
 let humanoidFallback = new HumanoidView(scene);
 const grid = new THREE.GridHelper(30, 30, 0x2a3341, 0x1a212b);
 scene.add(grid);
+// lighting: the rig uses MeshStandardMaterial, which is BLACK without lights
+// (z-up scene: key light comes from above +z, slightly ahead of the default
+// orbit view at (+x, -y, +z))
+scene.add(new THREE.HemisphereLight(0xbdd2ee, 0x22262e, 0.9));
+const keyLight = new THREE.DirectionalLight(0xfff4e0, 1.5);
+keyLight.position.set(3.5, -5.5, 7.5);
+scene.add(keyLight);
+const fillLight = new THREE.DirectionalLight(0x9db9ff, 0.5);
+fillLight.position.set(-3, 4.5, 2.5);
+scene.add(fillLight);
 
 function geomMesh(g) {
   const rgba = (g.rgba && g.rgba.length >= 4) ? g.rgba : [0.7, 0.72, 0.78, 1];
