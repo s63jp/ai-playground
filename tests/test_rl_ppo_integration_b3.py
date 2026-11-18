@@ -263,7 +263,10 @@ def test_zero_and_gait_eval_harness_contract():
     assert abs(z["summary"]["axis_displacement_m"]["mean"]) < 0.05
     g = rl_eval.eval_gait(env, episodes=1, seed_base=97010_000, phase=phase,
                           heading=90.0, max_steps=400)
-    assert g["summary"]["net_displacement_m"]["mean"] == pytest.approx(0.761, abs=0.05), \
+    # B4 re-measured anchor (Jamie decision 2026-11-18): the harness gait at
+    # h=90 measures 0.7057 m on the fixed-head rig (head inertial fix; old-rig
+    # anchor 0.761 ± 0.05 → harness 0.7491 m preserved in B3 evidence).
+    assert g["summary"]["net_displacement_m"]["mean"] == pytest.approx(0.706, abs=0.05), \
         "the scripted gait benchmark must reproduce through the harness"
     assert g["summary"]["falls_total"] == 0 and g["summary"]["faulted_windows_total"] == 0
 

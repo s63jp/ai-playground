@@ -530,8 +530,12 @@ def test_curriculum_snapshot_records_contract():
 # ---------------------------------------------------------------- compat
 def test_scripted_gait_benchmark_horizon_in_env():
     """The scripted gait (benchmark, never a learning claim) still works inside
-    the env and reproduces the M6-A physical baseline (~0.76 m / 8 s) through
-    the decimated decision loop."""
+    the env. Anchor re-measured for the B4 rig (2026-11-18, Jamie decision):
+    the head inertial fix removes ~10 kg from the upper body, changing the
+    scripted walk's stride energetics — in-harness measurement on the fixed
+    rig is 0.7301 m over the 8 s horizon (0 falls, upright 1.000). The old-rig
+    anchor 0.761 ± 0.05 is preserved as historical B3 evidence in
+    reports/m6b/ and was bit-stable across the whole B2/B3 eras."""
     env = LocoEnv(cfg={"rl": {"max_episode_steps": 400}})
     env.reset()
     env.world.set_gait("walk", speed=1.0, heading=0.0)
@@ -541,7 +545,7 @@ def test_scripted_gait_benchmark_horizon_in_env():
         env.step(zero)
     s = env.episode_summary()
     dist = s["net_displacement_m"]
-    assert dist == pytest.approx(0.761, abs=0.05), f"scripted baseline moved: {dist}"
+    assert dist == pytest.approx(0.730, abs=0.05), f"scripted baseline moved: {dist}"
     assert s["falls"] == 0 and s["faulted_windows"] == 0
     assert s["upright_fraction"] == pytest.approx(1.0, abs=1e-4)
 

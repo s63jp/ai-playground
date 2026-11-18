@@ -148,14 +148,31 @@ def test_torque_cap_property_random_hostile_policy():
              "left_knee", "right_knee", "left_ankle", "right_ankle",
              "waist_yaw", "left_foot_yaw", "right_foot_yaw"]
     dof = {n: int(w.m.jnt_dofadr[w.m.joint(n).id]) for n in names}
+    # B4 rig (Jamie decision 2026-11-18, head-only gain cap in the test rng):
+    # the fixed head's hinge inertia is 0.0404 kg·m², ~13x below the old rig's.
+    # A hostile HEAD command at extreme kp can throw qacc past MuJoCo's
+    # huge-value threshold before any cap matters (measured repro
+    # ai-playground-audit/b4_hostile_qacc_repro.py: kp=2240, kd=+253 fired
+    # qacc ~8.4e4 rad/s² vs ~6.5e3 on the old rig, transient, self-recovering;
+    # training head gains are kp=8, four orders of magnitude below, unreachable
+    # by any policy). The hostile stream therefore clamps HEAD kp at 400 —
+    # 50x the training gain, ~5x below the measured crossing — while every
+    # other joint stays fully hostile (kp to 4000, over-range targets, negative
+    # kd). The zero-warning assertion below is RETAINED unchanged: head kp=400
+    # with the same kd draws produces zero warnings (verified, rng stream
+    # unchanged — the clamp is applied after sampling, no extra draws).
+    head_kp_ceiling = 400.0
     rng = np.random.default_rng(20261117)
     for step in range(1000):
         if step % 7 == 0:
             n = names[int(rng.integers(len(names)))]
             lo, hi = (float(w.m.jnt_range[w.m.joint(n).id][0]),
                       float(w.m.jnt_range[w.m.joint(n).id][1]))
+            kp = float(rng.uniform(-50.0, 4000.0))
+            if n.startswith("head"):
+                kp = min(kp, head_kp_ceiling)
             w.set_joint_target(n, float(rng.uniform(lo - 3.0, hi + 3.0)),
-                               kp=float(rng.uniform(-50.0, 4000.0)),
+                               kp=kp,
                                kd=float(rng.uniform(-10.0, 500.0)), source="hostile_policy")
         w.step(1)
         for n, d in dof.items():
@@ -333,11 +350,20 @@ def test_safety_surface_observable():
 
 # ---------------------------------------------------------------- regressions
 def test_combat_swing_unchanged_under_caps():
-    """Regression: the M4 melee strike is an existing legitimate controller whose
-    clean swing envelope inside the raise/strike transients is ~124 N·m (shoulder)
-    and ~166 N·m (elbow) — the caps clear it with margin, so the capped run must
-    reproduce the caps-off run's MEASURED contacts exactly (bit-identical physics,
-    MuJoCo deterministic) and must not injure its own holder."""
+    """Regression RE-RECORDED for the B4 rig (2026-11-18, Jamie decision): the
+    M4 melee strike remains an existing legitimate controller, but on the B4
+    rig (head inertial fix) the strike's raw swing transient now crosses BOTH
+    arm caps of the striking arm — measured raw peaks ~953 N·m (left_elbow) and
+    ~744 N·m (left_shoulder) versus the pre-B4 premise of ~124/~166 N·m that
+    cleared them (probe: ai-playground-audit/b4_combat_rerecord_probe.py, JSON
+    b4_combat_rerecord_probe.json; failing premise documented in
+    b4_fullsuite_gate_pre.txt). The caps correctly bind during the transient,
+    so the capped run is no longer bit-identical to the uncapped one. The
+    honest contract is the measured re-record: the strike still lands, the
+    holder is not KO'd, the OPPONENT impulse is unchanged within the measured
+    0.02 %, the SELF impulse drops by the measured cap-bound amount
+    (182.6 -> 143.2 N·s at t=0.47), saturation attribution is recorded, and
+    ZERO physics warnings accumulate both ways."""
     import sys
     sys.path.insert(0, "tests")
     import test_combat_match as tcm
@@ -362,11 +388,31 @@ def test_combat_swing_unchanged_under_caps():
 
     c_off = run(True)
     c_on = run(False)
-    assert c_on[0] == c_off[0], f"strike contacts diverged under caps: {c_on[0]} vs {c_off[0]}"
-    assert c_on[1] == c_off[1] is True
+
+    def impulse(contacts, target):
+        vals = [c["impulse"] for c in contacts
+                if list(c["with"]) == [target] and abs(c["t"] - 0.47) < 0.01]
+        assert len(vals) == 1, f"expected exactly one {target} contact record at t=0.47: {vals}"
+        return vals[0]
+
+    assert c_on[1] == c_off[1] is True, "the strike must land under caps"
     assert c_on[2] is False, "the strike must not KO its own holder"
-    assert c_on[3] == {}, "clean swing must not clip any cap"
-    assert c_on[4] == {}
+    assert c_off[3] == {}, "caps-off run must saturate nothing"
+    sat = c_on[3]
+    assert set(sat) == {"agent_001:left_elbow", "agent_001:left_shoulder"}, \
+        f"cap engagement diverged from the B4 re-record: {sorted(sat)}"
+    for jname, s in sat.items():
+        assert s["events"] >= 1
+        assert s["max_raw"] > 160.0, f"{jname}: raw demand never crossed the 160 N·m cap"
+        assert s["sources"], f"{jname}: saturation must carry attribution"
+    assert c_on[4] == {} and c_off[4] == {}, "no physics warnings under caps or without them"
+    assert impulse(c_on[0], "agent_002") == \
+        pytest.approx(impulse(c_off[0], "agent_002"), rel=5e-4), \
+        "the opponent impulse must be unchanged within the measured 0.02 %"
+    a1_off = impulse(c_off[0], "agent_001")
+    a1_on = impulse(c_on[0], "agent_001")
+    assert a1_off == pytest.approx(182.6, abs=3.0) and a1_on == pytest.approx(143.2, abs=3.0), \
+        f"strike re-record drifted: caps-on {a1_on}, caps-off {a1_off}"
 def test_scripted_walk_unchanged_under_caps():
     """Audit regression (d): with the caps ENABLED (defaults) a scripted walk must be
     bit-identical in displacement to the SAME world with caps disabled: every scripted

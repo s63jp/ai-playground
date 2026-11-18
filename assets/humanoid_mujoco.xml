@@ -51,6 +51,14 @@
 
         <!-- Head: pitch / yaw / roll hinges composed on one body -->
         <body name="head" pos="0 0 0.08">
+          <!-- B4 head-mechanics correction (2026-11-18, HEAD_POSTURE_DIAG_20261118):
+               the geom-derived head (6.37 kg, COM +0.26 m above the hinges) made a
+               16.25 N-m gravity moment the kp=8 neck can never hold (probe: pins at
+               the -90 deg limit under neutral targets). Realistic head-neck inertial
+               decouples visual from mass: 1.8 kg, COM +0.13 m -> 2.29 N-m moment,
+               statically holdable. Only mass/COM changed; geoms, hinges, gains
+               untouched. -->
+          <inertial pos="0 0 0.13" mass="1.8" diaginertia="0.010 0.011 0.009"/>
           <joint name="head_pitch" type="hinge" axis="1 0 0"/>
           <joint name="head_yaw" type="hinge" axis="0 0 1"/>
           <joint name="head_roll" type="hinge" axis="0 1 0"/>
