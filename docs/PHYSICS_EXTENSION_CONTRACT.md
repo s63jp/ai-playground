@@ -123,6 +123,13 @@ its displacement assertion — rewrite it to assert real contact-driven displace
 > history; its reward-component list (`energy_penalty`, `joint_limit`) and its
 > `train(cfg)`/checkpoint artifact requirements describe the REMOVED broken pre-M6
 > trainer, not the current system.
+> **M7-0a supersession note (2026-11-18).** The authoritative contract is
+> now `rl_env` v4: 68-dim observation / 15-action (the fixed 43-dim v3
+> prefix preserved forever, the v4 command block riding after it), with the
+> read-only legacy-v3 mode for historical lineages; the M7-0b loading law
+> adds the op-tag checkpoint loading (fresh/resume/continue_fork/
+> transfer_fork) and the declared-prefix surgery loader. Same pointer:
+> `docs/RL_ENVIRONMENT.md`.
 `LocoEnv(cfg)` wraps a `PhysicsWorld` directly (build via `PhysicsWorld(load_config())` with
 `agent_body.type: "humanoid"`). OBS: fixed-size float32 vector (humanoid: 14 joint positions +
 14 joint velocities + torso up-vector(3) + torso linear vel(3) + upright margin(1) — document

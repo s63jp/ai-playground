@@ -72,7 +72,7 @@ simulator run shown, not a function returning.
 |---|-------|-------|----------------|
 | 28 | LLM agents make independent high-level decisions | 1 | adapters (OpenAI-compat/Anthropic/policy/external) + session loop; real models ran exploration end-to-end; provider errors surface as adapter errors |
 | 29 | Physical controllers handle high-frequency movement/balance | 1 | PD/gait/manipulation under the hood; LLM never in the control loop (D1 architecture) |
-| 30 | RL can train and improve physical behaviours | 2 | env (14 DoF), rewards + anti-exploit (regression-tested), curriculum, checkpoints, CLI all present; full train → measured-improvement run is operational work, not yet recorded |
+| 30 | RL can train and improve physical behaviours | 2 | env (15 DoF, `rl_env` v4 contract, ops-tag loading law), rewards + anti-exploit (regression-tested), curriculum, checkpoints, CLI all present; training and measured improvement ARE recorded in the M6-B mission runs (B3 `b3_run1` +0.89 m/ep held-out vs baselines; `b4_posture1` 12/12 held-out completion at +3.52 m/ep — `reports/m6b/B3_PPO_LEARNING.md`, `reports/m6b/B4_POSTURE_ASK.md`). Level stays 2 pending the operator's read of the recorded runs |
 | 31 | Reusable physical skills developed and executed | 2 | 16-skill catalogue + `run_skill`/`run_chain` with ledger (executed); *development* of skills is RL-adjacent and open |
 | 32 | Agents retain individual written memories across sessions | 1 | MemoryStore: diary/handbook with evidence-gated statuses, tombstones, ablation support; per-agent isolation proven |
 | 33 | Previous experiences influence later decisions | 2 | handbook digests ride the prompt; continuation sessions carry open questions; benchmark Group A/B measures experienced vs fresh |

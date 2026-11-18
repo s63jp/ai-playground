@@ -33,7 +33,7 @@ interface, and every action lands in the same SHA-256-chained action log.
 ## 1. The island, honestly
 
 Numbers measured on this machine, not marketing. Sources: `scripts/engine_probe.py`
-and the test suite (`run_tests.sh` — 547 passed, 3 skipped, Nov 2026).
+and the test suite (`run_tests.sh` — 789 passed, 3 skipped, Nov 2026).
 
 | check | measured |
 |---|---|
@@ -156,13 +156,21 @@ for the full catalogue):
   the same world through the same tool contract — the dashboard serves the live
   humanoid skeleton (23 bodies) and agent state over `/api/player/state`.
 * **RL** (`playground/rl/`): the authoritative locomotion environment
-  contract (14-action / 43-dimensional observation `rl_env/3` — v2 plus the
-  commanded target velocity, `docs/RL_ENVIRONMENT.md`), one consolidated
-  reward pipeline with a measured anti-exploit structure, a deterministic
-  env-side curriculum, and (B3) a genuine actor-critic PPO trainer trained
-  only from real MuJoCo rollouts (`playground/rl/ppo.py`,
-  `scripts/rl_ppo.py train`, seeded checkpoints in `experiments/rl/`). The
-  scripted gait remains a benchmark, never a learned policy.
+  contract (15-action / 68-observation `rl_env` v4 — the M7-0a contract:
+  v3's 43-dim layout preserved as a read-only prefix plus the v4 command
+  block — limb pose targets, COM shift, waypoint, stop flag and the stage
+  mask; historical lineages play back under the read-only legacy mode,
+  `docs/RL_ENVIRONMENT.md`), one consolidated reward pipeline with a
+  measured anti-exploit structure and mask-gated command-block components,
+  a deterministic env-side curriculum (the B2 standing→walking ladder plus
+  the M7 limb-control ladder), (B3) a genuine actor-critic PPO trainer
+  trained only from real MuJoCo rollouts (`playground/rl/ppo.py`,
+  `scripts/rl_ppo.py train`, seeded checkpoints in `experiments/rl/`), and
+  (M7-0b) the loading law: every run carries an operation tag — `fresh` /
+  `resume` / `continue_fork` / `transfer_fork` — forks are
+  parent-immutability-watched, and the declared-prefix surgery loader with
+  its mandatory round-trip proof is reachable only through `transfer_fork`.
+  The scripted gait remains a benchmark, never a learned policy.
 * **Live neural training** (`playground/rl_live/`, *this branch*; see
   [docs/LIVE_TRAINING.md](docs/LIVE_TRAINING.md)): a viewer/controls surface
   over the ONE authoritative stack — "Live neural training" dashboard tab
@@ -215,9 +223,9 @@ for the full catalogue):
    │ benchmark  Group A/B, ablation     │ │ frames, messages, records,      │
    └────────────────────────────────────┘ │ checkpoints, benchmarks (SHA-256│
    ┌──────── rl/ + combat/ + arena/ ────┐ │  append-only chain)             │
-   │ 14-DoF env · projectiles · matches │ └─────────────────────────────────┘
-   └────────────────────────────────────┘ ┌─── dashboard/ (FastAPI + three.js) ─┐
-                                          │ 3D humanoid viewer, replay, memory  │
+   │ 15-DoF env (v4) · op-tag loading   │ └─────────────────────────────────┘
+   │ law · projectiles · matches        │ ┌─── dashboard/ (FastAPI + three.js) ─┐
+   └────────────────────────────────────┘ │ 3D humanoid viewer, replay, memory  │
                                           │ editor, analytics, Player pane,     │
                                           │ 13-agent compare, ML tab, HTTP API  │
                                           └─────────────────────────────────────┘
@@ -267,15 +275,18 @@ ai-playground/
     integrity/               evidence + independent achievement verifiers
     combat/                  projectiles, impacts, equipment
     arena/                   matches, scoring, modes
-    rl/                      env (14 DoF), rewards + anti-exploit, curriculum
+    rl/                      env (15 DoF, rl_env v4 contract; v3 legacy
+                             read-only), reward + anti-exploit + mask-gated
+                             command components, curriculum (+ M7 ladder),
+                             checkpoints (op-tag loading law + surgery)
     player.py                human player controller
     dashboard/               FastAPI server + three.js console + Player API
     ml/                      dataset builders, trainers, controllers (agent nn_*)
     session/                 runner, manager, benchmark, model_compare
     agents/                  adapters (OpenAI compat, Anthropic, policy, external)
     cli.py / demo.py
-  tests/                     547-test suite: HVE (Happy/Validate/Error), physics,
-                             locomotion, manipulation, skills, RL, integrity, UI… 
+  tests/                     792-test suite: HVE (Happy/Validate/Error), physics,
+                             locomotion, manipulation, skills, RL, integrity, UI…
   scripts/                   health_check.py, engine_probe.py, profile_step.py,
                              trace_session.py, audit_agents.py
   docs/                      OPERATING.md · TOOLS.md · RESEARCHER_NOTES.md ·
@@ -378,8 +389,8 @@ The project holds itself to a hard verification gate:
 2. **Real runs shown** — physical claims are backed by measurements (displacement,
    event streams, joint angles), never by a function returning.
 3. **Independent sign-off** — `run_tests.sh` runs the whole suite then
-   `scripts/health_check.py`; current state: **547 passed, 3 skipped** +
-   `{"healthy": true}`.
+   `scripts/health_check.py`; current state: **789 passed, 3 skipped**
+   (792 collected; the M7-0b loading-law gate) + `{"healthy": true}`.
 4. **Dashboard boot smoke** — server boots, `/api/health` ok, tools catalogue
    served (65), humanoid skeleton (23 bodies) on the Player API; all Phase-12
    tools verified present over HTTP.
@@ -421,6 +432,7 @@ The project holds itself to a hard verification gate:
 | [docs/BUGLOG_2026-11-17.md](docs/BUGLOG_2026-11-17.md) | measured gait/recovery findings behind the walk |
 | [docs/BUGLOG_2026-11-17_PHASE12.md](docs/BUGLOG_2026-11-17_PHASE12.md) | agent-integration bugfixes with live evidence |
 | [docs/ML_LAB.md](docs/ML_LAB.md) / [docs/ML_INTERFACE.md](docs/ML_INTERFACE.md) | machine-learning lab + agent `nn_*` tools |
+| [docs/RL_ENVIRONMENT.md](docs/RL_ENVIRONMENT.md) | the rl_env v4 RL contract (68/15), the command block, the reward components and the checkpoint loading law |
 | [docs/GATEWAY.md](docs/GATEWAY.md) | the model-gateway HTTP surface |
 | [docs/RESEARCHER_NOTES.md](docs/RESEARCHER_NOTES.md) | the deliberately hidden world rule (researcher eyes) |
 
