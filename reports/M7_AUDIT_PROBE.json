@@ -1,0 +1,450 @@
+{
+  "agent_subtree": {
+    "n_bodies": 15,
+    "standing_com_xyz_m": [
+      -0.0793,
+      0.089,
+      0.9358
+    ],
+    "total_mass_kg": 37.05
+  },
+  "block_target_seam": {
+    "moved_from_xy_m": [
+      -2.5,
+      -3.0
+    ],
+    "placed_xyz_m": [
+      0.5,
+      1.5,
+      0.05
+    ],
+    "works": true
+  },
+  "contract": {
+    "action_dim": 14,
+    "contract_version": 3,
+    "gains_kp": {
+      "head_pitch": 8.0,
+      "head_roll": 8.0,
+      "head_yaw": 8.0,
+      "left_ankle": 25.0,
+      "left_elbow": 10.0,
+      "left_hip": 60.0,
+      "left_knee": 60.0,
+      "left_shoulder": 25.0,
+      "right_ankle": 25.0,
+      "right_elbow": 10.0,
+      "right_hip": 60.0,
+      "right_knee": 60.0,
+      "right_shoulder": 25.0,
+      "spine_L2": 35.0
+    },
+    "joint_order": [
+      "spine_L2",
+      "left_shoulder",
+      "left_elbow",
+      "right_shoulder",
+      "right_elbow",
+      "head_pitch",
+      "head_yaw",
+      "head_roll",
+      "left_hip",
+      "left_knee",
+      "left_ankle",
+      "right_hip",
+      "right_knee",
+      "right_ankle"
+    ],
+    "joint_ranges_rad": {
+      "head_pitch": [
+        -1.5708,
+        1.5708
+      ],
+      "head_roll": [
+        -1.5708,
+        1.5708
+      ],
+      "head_yaw": [
+        -1.5708,
+        1.5708
+      ],
+      "left_ankle": [
+        -1.5708,
+        1.5708
+      ],
+      "left_elbow": [
+        -1.5708,
+        1.5708
+      ],
+      "left_hip": [
+        -1.5708,
+        1.5708
+      ],
+      "left_knee": [
+        -1.5708,
+        1.5708
+      ],
+      "left_shoulder": [
+        -1.5708,
+        1.5708
+      ],
+      "right_ankle": [
+        -1.5708,
+        1.5708
+      ],
+      "right_elbow": [
+        -1.5708,
+        1.5708
+      ],
+      "right_hip": [
+        -1.5708,
+        1.5708
+      ],
+      "right_knee": [
+        -1.5708,
+        1.5708
+      ],
+      "right_shoulder": [
+        -1.5708,
+        1.5708
+      ],
+      "spine_L2": [
+        -1.5708,
+        1.5708
+      ]
+    },
+    "obs_dim": 43,
+    "obs_sections": [
+      [
+        "joint_pos",
+        [
+          0,
+          14
+        ]
+      ],
+      [
+        "joint_vel",
+        [
+          14,
+          28
+        ]
+      ],
+      [
+        "torso_up",
+        [
+          28,
+          31
+        ]
+      ],
+      [
+        "torso_lin_vel",
+        [
+          31,
+          34
+        ]
+      ],
+      [
+        "upright_margin",
+        [
+          34,
+          35
+        ]
+      ],
+      [
+        "torso_forward",
+        [
+          35,
+          38
+        ]
+      ],
+      [
+        "foot_ground_force",
+        [
+          38,
+          40
+        ]
+      ],
+      [
+        "command",
+        [
+          40,
+          43
+        ]
+      ]
+    ],
+    "passive_pd": [
+      "waist_yaw",
+      "left_foot_yaw",
+      "right_foot_yaw"
+    ]
+  },
+  "date": "2026-11-18",
+  "disturbance_seams": {
+    "impulse_object_world_api": true,
+    "set_joint_target": true,
+    "set_object_velocity": true,
+    "state_snapshot": true
+  },
+  "eval_constants": {
+    "default_episodes": 10,
+    "default_max_steps": 400,
+    "seed_base": 97010000
+  },
+  "feet": [
+    {
+      "center_xy": [
+        0.0107,
+        0.1079
+      ],
+      "half_size_xyz": [
+        0.045,
+        0.09,
+        0.03
+      ],
+      "side": "left"
+    },
+    {
+      "center_xy": [
+        -0.1693,
+        0.1079
+      ],
+      "half_size_xyz": [
+        0.045,
+        0.09,
+        0.03
+      ],
+      "side": "right"
+    }
+  ],
+  "obs_observed_len": 43,
+  "probe": "m7_audit_probe",
+  "scene_joints": {
+    "agent_x": {
+      "range": null,
+      "type": "slide"
+    },
+    "agent_y": {
+      "range": null,
+      "type": "slide"
+    },
+    "agent_z": {
+      "range": null,
+      "type": "slide"
+    },
+    "head_pitch": {
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "type": "hinge"
+    },
+    "head_roll": {
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "type": "hinge"
+    },
+    "head_yaw": {
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "type": "hinge"
+    },
+    "j:block_01": {
+      "range": null,
+      "type": "free"
+    },
+    "j:block_02": {
+      "range": null,
+      "type": "free"
+    },
+    "j:block_03": {
+      "range": null,
+      "type": "free"
+    },
+    "j:block_04": {
+      "range": null,
+      "type": "free"
+    },
+    "j:block_05": {
+      "range": null,
+      "type": "free"
+    },
+    "j:block_06": {
+      "range": null,
+      "type": "free"
+    },
+    "j:block_07": {
+      "range": null,
+      "type": "free"
+    },
+    "j:block_08": {
+      "range": null,
+      "type": "free"
+    },
+    "j:block_09": {
+      "range": null,
+      "type": "free"
+    },
+    "j:block_10": {
+      "range": null,
+      "type": "free"
+    },
+    "j:block_11": {
+      "range": null,
+      "type": "free"
+    },
+    "j:block_12": {
+      "range": null,
+      "type": "free"
+    },
+    "j:block_13": {
+      "range": null,
+      "type": "free"
+    },
+    "j:block_14": {
+      "range": null,
+      "type": "free"
+    },
+    "j:block_15": {
+      "range": null,
+      "type": "free"
+    },
+    "j:block_16": {
+      "range": null,
+      "type": "free"
+    },
+    "j:block_17": {
+      "range": null,
+      "type": "free"
+    },
+    "j:block_18": {
+      "range": null,
+      "type": "free"
+    },
+    "j:block_19": {
+      "range": null,
+      "type": "free"
+    },
+    "j:block_20": {
+      "range": null,
+      "type": "free"
+    },
+    "j:ring": {
+      "range": null,
+      "type": "free"
+    },
+    "j:rock": {
+      "range": null,
+      "type": "free"
+    },
+    "left_ankle": {
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "type": "hinge"
+    },
+    "left_elbow": {
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "type": "hinge"
+    },
+    "left_foot_yaw": {
+      "range": [
+        -3.1416,
+        3.1416
+      ],
+      "type": "hinge"
+    },
+    "left_hip": {
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "type": "hinge"
+    },
+    "left_knee": {
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "type": "hinge"
+    },
+    "left_shoulder": {
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "type": "hinge"
+    },
+    "right_ankle": {
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "type": "hinge"
+    },
+    "right_elbow": {
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "type": "hinge"
+    },
+    "right_foot_yaw": {
+      "range": [
+        -3.1416,
+        3.1416
+      ],
+      "type": "hinge"
+    },
+    "right_hip": {
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "type": "hinge"
+    },
+    "right_knee": {
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "type": "hinge"
+    },
+    "right_shoulder": {
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "type": "hinge"
+    },
+    "spine_L2": {
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "type": "hinge"
+    },
+    "waist_yaw": {
+      "range": [
+        -3.1416,
+        3.1416
+      ],
+      "type": "hinge"
+    }
+  },
+  "static_margin": {
+    "com_inside_feet": true,
+    "com_y_m": 0.089,
+    "support_y_range_m": [
+      0.0179,
+      0.1979
+    ]
+  }
+}
