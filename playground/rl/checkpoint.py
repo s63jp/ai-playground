@@ -34,6 +34,27 @@ def _tensor_to_list(t) -> list:
     return np.asarray(t, dtype=np.float64).tolist()
 
 
+def _actor_hidden(actor) -> list:
+    """Hidden widths derived from the trunk weight shapes (works for every
+    checkpoint regardless of meta age; additive field since M7-0b).
+
+    Derivation: trunk layer i has weight (out_i, in_i) with in_0 = obs_dim
+    and in_i = out_{i-1}; the hidden sequence is therefore in_1..in_{n-1}
+    plus out_{n-1}. e.g. hidden=(64, 64) has weights (64, obs_dim) and
+    (64, 64) -> widths (64, 64). (The first cut, widths[1:], returned only
+    the interior in-dims — (64,) for (64, 64) — which would have made the
+    surgery rebuild a one-hidden-layer child for two-hidden-layer parents;
+    caught by the M7-0b tests before any fork ran.)"""
+    items = sorted(((k, v) for k, v in actor.state_dict().items()
+                    if k.startswith("trunk.") and k.endswith(".weight")),
+                   key=lambda kv: kv[0])
+    if not items:
+        return []
+    widths = [int(np.asarray(v).shape[1]) for _, v in items][1:]
+    widths.append(int(np.asarray(items[-1][1]).shape[0]))
+    return widths
+
+
 def _opt_to_json(opt) -> dict:
     """Flatten a torch optimizer into JSON (Adam state + param groups)."""
     sd = opt.state_dict()
@@ -110,6 +131,13 @@ def save_checkpoint(path, *, actor, critic, optimizer_actor=None,
         contract = {"observation": obs_fingerprint, "action": action_fingerprint,
                     "obs_dim": int(obs_fingerprint.get("dim", -1)),
                     "action_dim": int(action_fingerprint.get("action_dim", -1))}
+        for src in (obs_fingerprint, action_fingerprint):
+            if src.get("layout_version") is not None:
+                # the layouts carry the contract version (observation_layout
+                # and action_layout both stamp it) — keep it in the saved
+                # contract so later loads can verify it
+                contract["contract_version"] = int(src["layout_version"])
+                break
     body = {
         "format": FORMAT,
         "meta": {
@@ -124,6 +152,10 @@ def save_checkpoint(path, *, actor, critic, optimizer_actor=None,
                 "log_std_max": float(actor.log_std_max),
                 "log_std": _tensor_to_list(actor.log_std.detach().numpy()),
                 "deterministic_eval": "a = tanh(mu(s))",
+                # M7-0b (additive): the hidden widths, so surgery validates
+                # architecture, not just dims. Older checkpoints lack the key
+                # (the surgery derives widths from their weight shapes).
+                "hidden": _actor_hidden(actor),
             },
             "ppo_config": dict(cfg_dict or {}),
             "trained_through": ("playground/rl/env.py LocoEnv (rl_env contract) "
@@ -150,11 +182,30 @@ def save_checkpoint(path, *, actor, critic, optimizer_actor=None,
 
 
 def _fingerprint_diff(stored: dict, live: dict) -> list:
+    """M7-0b (MANDATORY per Jamie's directive 2026-11-18): the compatibility
+    check now covers the CONTROL MECHANICS, not just the shapes — kd and the
+    joint ranges ride the diff alongside the dims/order/slices/mapping/kp
+    checks. Two brains whose observation and action dimensions match but
+    whose gains or ranges differ are NOT compatible and cannot load."""
     diffs = []
-    if int(stored.get("obs_dim", -1)) != int(live.get("obs_dim", -2)):
+    # dims and version: compared ONLY when both sides carry them (a hand-
+    # built diff-test dict without dims is not a dims disagreement). The
+    # STRICT loader always fills them (env or the fingerprints' dims stamps),
+    # so this leniency never reaches a real load.
+    if stored.get("obs_dim") is not None and live.get("obs_dim") is not None \
+            and int(stored.get("obs_dim")) != int(live.get("obs_dim")):
         diffs.append(f"obs_dim {stored.get('obs_dim')} != {live.get('obs_dim')}")
-    if int(stored.get("action_dim", -1)) != int(live.get("action_dim", -2)):
-        diffs.append(f"action_dim {stored.get('action_dim')} != {live.get('action_dim')}")
+    if stored.get("action_dim") is not None and \
+            live.get("action_dim") is not None and \
+            int(stored.get("action_dim")) != int(live.get("action_dim")):
+        diffs.append(f"action_dim {stored.get('action_dim')} != "
+                     f"{live.get('action_dim')}")
+    if stored.get("contract_version") is not None and \
+            live.get("contract_version") is not None and \
+            int(stored.get("contract_version")) != \
+            int(live.get("contract_version")):
+        diffs.append(f"contract_version {stored.get('contract_version')} != "
+                     f"{live.get('contract_version')}")
     o_st = stored.get("observation") or {}
     o_lv = live.get("observation") or {}
     if [s.get("slice") for s in o_st.get("sections", [])] != \
@@ -162,14 +213,29 @@ def _fingerprint_diff(stored: dict, live: dict) -> list:
         diffs.append("observation sections differ")
     if list(o_st.get("joint_order", [])) != list(o_lv.get("joint_order", [])):
         diffs.append("joint order differs")
+    st_ranges = o_st.get("joint_ranges_rad") or {}
+    lv_ranges = o_lv.get("joint_ranges_rad") or {}
+    if {k: [float(x) for x in v] for k, v in st_ranges.items() if k in lv_ranges} != \
+            {k: [float(x) for x in v] for k, v in lv_ranges.items() if k in st_ranges}:
+        diffs.append("observation joint ranges differ")
     a_st = stored.get("action") or {}
     a_lv = live.get("action") or {}
-    if list(a_st.get("mapping", "")) != list(a_lv.get("mapping", "")) or \
-            [j.get("name") for j in a_st.get("joints", [])] != \
-            [j.get("name") for j in a_lv.get("joints", [])] or \
-            [j.get("kp") for j in a_st.get("joints", [])] != \
-            [j.get("kp") for j in a_lv.get("joints", [])]:
-        diffs.append("action mapping/joints/gains differ")
+    if list(a_st.get("mapping", "")) != list(a_lv.get("mapping", "")):
+        diffs.append("action mapping differs")
+    st_j = list(a_st.get("joints") or [])
+    lv_j = list(a_lv.get("joints") or [])
+    if [j.get("name") for j in st_j] != [j.get("name") for j in lv_j]:
+        diffs.append("action joint order differs")
+    for i, (sj, lj) in enumerate(zip(st_j, lv_j)):
+        if sj.get("kp") != lj.get("kp"):
+            diffs.append(f"action joint {i} kp differs "
+                         f"({sj.get('kp')} != {lj.get('kp')})")
+        if sj.get("kd") != lj.get("kd"):
+            diffs.append(f"action joint {i} kd differs "
+                         f"({sj.get('kd')} != {lj.get('kd')})")
+        if [float(x) for x in (sj.get("range_rad") or [])] != \
+                [float(x) for x in (lj.get("range_rad") or [])]:
+            diffs.append(f"action joint {i} range differs")
     return diffs
 
 
@@ -206,6 +272,14 @@ def load_checkpoint(path, obs_fingerprint=None, action_fingerprint=None,
         live = {"observation": obs_fingerprint, "action": action_fingerprint,
                 "obs_dim": int(obs_fingerprint.get("dim", -1)),
                 "action_dim": int(action_fingerprint.get("action_dim", -1))}
+        for src in (obs_fingerprint, action_fingerprint):
+            # the layouts stamp layout_version == contract_version; carrying
+            # it here is what makes the M7-0b version comparison meaningful
+            # on the envless loader path (hand-built dicts without it fall
+            # back to the both-sides-present skip in _fingerprint_diff)
+            if src.get("layout_version") is not None:
+                live["contract_version"] = int(src["layout_version"])
+                break
     diffs = _fingerprint_diff(meta["contract"], live)
     if diffs:
         raise CheckpointError(

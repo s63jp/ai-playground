@@ -40,10 +40,25 @@ from playground.rl.curriculum import DEFAULT_STAGES, Curriculum  # noqa: E402
 from playground.rl.env import LocoEnv  # noqa: E402
 from playground.rl.ppo import (PPOConfig, PPOError, PPOTrainer,  # noqa: E402
                                TanhGaussianActor, Critic)
+from playground.rl.transfer import (TransferError, parent_sha256,  # noqa: E402
+                                    surgery_transfer)
+
+OPERATIONS = ("fresh", "resume", "continue_fork", "transfer_fork")
+FORK_OPS = ("continue_fork", "transfer_fork")
 
 
 def _rl_cfg(cfg):
     return dict(cfg.get("rl") or {})
+
+
+def _contract_fingerprint_of(env):
+    return {
+        "observation": env.observation_layout(),
+        "action": env.action_layout(),
+        "contract_version": env.contract_version,
+        "obs_dim": int(env.obs_dim),
+        "action_dim": int(env.action_dim),
+    }
 
 
 def _run_dir(cfg, name):
@@ -52,6 +67,32 @@ def _run_dir(cfg, name):
     d = out / name
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def _resolve_operation(a) -> tuple:
+    """M7-0b loading law: resolve the operation tag + parent, enforce the
+    refusals BEFORE any training. Returns (operation, fork_from | None)."""
+    op = (a.operation or "").strip() or ("resume" if a.resume else "fresh")
+    if op not in OPERATIONS:
+        raise PPOError(f"unknown --operation {op!r}; allowed {OPERATIONS}")
+    if op == "fresh":
+        if a.resume or a.fork_from:
+            raise PPOError("--operation fresh takes no --resume/--fork-from")
+        return op, None
+    if a.resume and a.fork_from:
+        raise PPOError("give only one of --resume (same-run continuation) or "
+                       "--fork-from (fork)")
+    if op == "resume":
+        if a.fork_from:
+            raise PPOError("--operation resume continues the SAME run with "
+                           "--resume; branching to a new dir is continue_fork")
+        if not a.resume:
+            raise PPOError("--operation resume requires --resume")
+        return op, None
+    # fork operations
+    if not a.fork_from:
+        raise PPOError(f"--operation {op} requires --fork-from <checkpoint>")
+    return op, Path(a.fork_from)
 
 
 def _parse_stage_budgets(s: str | None):
@@ -94,10 +135,75 @@ def cmd_train(a):
     torch.manual_seed(seed)
 
     env, cur = _make_env_and_curriculum(cfg)
+    op, fork_from = _resolve_operation(a)
     out = Path(a.out) if a.out else _run_dir(cfg, a.name)
     out.mkdir(parents=True, exist_ok=True)
-
-    if a.resume:
+    fork_record = None
+    if op == "resume":
+        # continues the SAME run: the out dir must be the parent's
+        parent_dir = Path(a.resume).resolve().parent
+        if out.resolve() != parent_dir:
+            raise PPOError(
+                "--operation resume continues the SAME run: the out directory "
+                f"({out}) is not the parent run dir ({parent_dir}). "
+                "Branching to a new dir is --operation continue_fork.")
+    if op in FORK_OPS:
+        parent_dir = fork_from.resolve().parent
+        if out.resolve() == parent_dir:
+            raise PPOError(
+                f"--operation {op} must not write into the parent run dir "
+                f"({parent_dir}): a fork is a NEW lineage. (same-run "
+                "continuation is --operation resume)")
+        if (out / "progress.jsonl").exists():
+            raise PPOError(
+                f"the fork target {out} already holds a run (progress.jsonl "
+                "exists): forking would mix lineages — refuse")
+        parent_sha = parent_sha256(fork_from)
+        if op == "transfer_fork":
+            tk = surgery_transfer(fork_from, _contract_fingerprint_of(env),
+                                  log_std_init=float(ppo_cfg.log_std_init))
+            if not tk["round_trip"]["passed"]:
+                raise PPOError(
+                    "transfer surgery round-trip proof FAILED "
+                    f"({tk['round_trip']}) — refusing to fork")
+            actor, critic = tk["actor"], tk["critic"]
+            fork_record = {
+                "parent_checkpoint": str(fork_from),
+                "parent_sha256": parent_sha,
+                "parent_contract_pair": list(tk["subset"]["contract_pair"]),
+                "obs_parent": tk["subset"]["obs_parent"],
+                "act_parent": tk["subset"]["act_parent"],
+                "parent_hidden": tk["parent_hidden"],
+                "zero_init": tk["zero_init"],
+                "log_std_appended": tk["log_std_appended"],
+                "round_trip": tk["round_trip"],
+            }
+            print(f"[transfer_fork] parent {fork_from} sha {parent_sha[:16]}… "
+                  f"pair {fork_record['parent_contract_pair']} "
+                  f"(obs {fork_record['obs_parent']}->{env.obs_dim}, "
+                  f"act {fork_record['act_parent']}->{env.action_dim}); "
+                  "round-trip passed", flush=True)
+            trainer_state = None
+            meta_steps = 0
+            if total_steps <= meta_steps:
+                total_steps = meta_steps + ppo_cfg.rollout_steps
+            cur = Curriculum(env)   # the child lineage starts at stage 0
+        else:
+            ck = load_checkpoint(fork_from, env=env)
+            actor, critic = ck["actor"], ck["critic"]
+            trainer_state = dict(ck["rng"])
+            from playground.rl.checkpoint import apply_rng
+            apply_rng(ck["rng"])
+            meta_steps = int(trainer_state.get("total_valid_steps", 0))
+            if total_steps <= meta_steps:
+                total_steps = meta_steps + ppo_cfg.rollout_steps
+            fork_record = {"parent_checkpoint": str(fork_from),
+                           "parent_sha256": parent_sha,
+                           "parent_training_steps":
+                               ck["meta"].get("training_steps")}
+            print(f"[continue_fork] parent {fork_from} sha {parent_sha[:16]}… "
+                  f"restored at step {meta_steps}", flush=True)
+    elif a.resume:
         ck = load_checkpoint(a.resume, env=env)
         actor, critic = ck["actor"], ck["critic"]
         trainer_state = dict(ck["rng"])
@@ -113,11 +219,14 @@ def cmd_train(a):
                                   log_std_init=ppo_cfg.log_std_init, seed=seed)
         critic = Critic(env.obs_dim, hidden=ppo_cfg.hidden, seed=seed)
         trainer_state = None
+    run_meta = {"operation": op}
+    if fork_record is not None:
+        run_meta["run_parent"] = fork_record
 
     trainer = PPOTrainer(env, actor, critic, ppo_cfg, seed=seed,
                          total_steps=total_steps, stage_budgets=stage_budgets,
                          curriculum=cur)
-    if a.resume:
+    if op in ("resume", "continue_fork") and (a.resume or op == "continue_fork"):
         # restore optimiser + rng + counters + CURRICULUM STAGE for exact
         # continuation (the loader verifies the contract fingerprint;
         # curriculum select() re-applies the saved stage phase, which is the
@@ -137,19 +246,33 @@ def cmd_train(a):
     progress_path = out / "progress.jsonl"
     pf = progress_path.open("a", encoding="utf-8")
     last_ckpt = {"step": trainer.total_valid_steps}
+    _parent_sha = fork_record.get("parent_sha256") if fork_record else None
 
     def _checkpoint(tag):
+        extra = {"stage": cur.stage.id,
+                 "operation": op,
+                 "run_total_steps": total_steps,
+                 "run": a.name,
+                 "curriculum": {"index": cur.index,
+                                "stage_id": cur.stage.id},
+                 "training_steps": trainer.total_valid_steps}
+        if fork_record is not None:
+            extra["run_parent"] = fork_record
+        if _parent_sha is not None:
+            # the parent-lineage watchdog: the recorded parent brain must be
+            # byte-unchanged whenever a fork writes a checkpoint
+            now_sha = parent_sha256(fork_from)
+            if now_sha != _parent_sha:
+                raise PPOError(
+                    "PARENT LINEAGE CHANGED DURING FORK: "
+                    f"{fork_from} sha {now_sha[:16]}… != recorded "
+                    f"{_parent_sha[:16]}… — aborting")
         cp = save_checkpoint(out / tag, actor=actor, critic=critic,
                              optimizer_actor=trainer.opt_a,
                              optimizer_critic=trainer.opt_c, env=env,
                              cfg_dict=ppo_cfg.as_dict(), seed=seed,
                              trainer_state=trainer.rng_state(),
-                             extra_meta={"stage": cur.stage.id,
-                                         "run_total_steps": total_steps,
-                                         "run": a.name,
-                                         "curriculum": {"index": cur.index,
-                                                        "stage_id": cur.stage.id},
-                                         "training_steps": trainer.total_valid_steps})
+                             extra_meta=extra)
         print(f"  checkpoint: {cp['path']} ({cp['bytes']} bytes)", flush=True)
         return cp
 
@@ -162,7 +285,7 @@ def cmd_train(a):
 
     trainer.on_iteration = on_iteration
     t0 = time.perf_counter()
-    print(f"[train] {a.name}: total_steps={total_steps} seed={seed} "
+    print(f"[train] {a.name}: operation={op} total_steps={total_steps} seed={seed} "
           f"rollout={ppo_cfg.rollout_steps} ent_coef={ppo_cfg.ent_coef} "
           f"stages={stage_budgets}", flush=True)
     summary = trainer.train()
@@ -171,12 +294,17 @@ def cmd_train(a):
     (out / "config.json").write_text(json.dumps({
         "ppo": ppo_cfg.as_dict(), "total_steps": total_steps, "seed": seed,
         "stage_budgets": stage_budgets,
+        "operation": op,
+        "fork_from": (str(fork_from) if fork_from else None),
+        "run_parent": fork_record,
         "env_contract_version": env.contract_version,
         "obs_dim": env.obs_dim, "action_dim": env.action_dim,
         "started_from_checkpoint": a.resume or None,
     }, indent=2), encoding="utf-8")
     (out / "result.json").write_text(json.dumps({
         **summary, "wall_s": round(wall, 1),
+        "operation": op,
+        "fork_from": (str(fork_from) if fork_from else None),
         "final_checkpoint": final["path"],
         "faulted_windows_total": trainer.faulted_windows_total,
         "rollout_rejections": trainer.rollout_rejections,
@@ -296,6 +424,13 @@ def main(argv=None):
     t.add_argument("--stage-budget", default=None,
                    help="e.g. standing=400000,controlled=500000")
     t.add_argument("--resume", default=None)
+    t.add_argument("--fork-from", dest="fork_from", default=None,
+                   help="the parent checkpoint for continue_fork/transfer_fork")
+    t.add_argument("--operation", default=None,
+                   choices=list(OPERATIONS),
+                   help="the loading operation; default: resume when --resume "
+                        "is given, fresh otherwise (the tag is recorded in "
+                        "every checkpoint + the run metadata)")
     t.add_argument("--out", default=None)
     e = sub.add_parser("eval")
     e.add_argument("--checkpoint", required=True)
@@ -320,6 +455,9 @@ def main(argv=None):
     except CheckpointError as exc:
         print(f"CHECKPOINT ERROR: {exc}", file=sys.stderr)
         return 2
+    except TransferError as exc:
+        print(f"TRANSFER ERROR: {exc}", file=sys.stderr)
+        return 4
     except PPOError as exc:
         print(f"PPO ERROR: {exc}", file=sys.stderr)
         return 3

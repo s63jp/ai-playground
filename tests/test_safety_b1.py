@@ -335,6 +335,35 @@ def test_env_flags_faulted_after_numerical_warning():
     assert r == 0.0  # faulted transition carries a zero training reward
 
 
+def test_policy_path_overwrites_rogue_waist_write():
+    """M7-0a regression companion (Jamie's B1 scrutiny, 2026-11-18): the waist
+    JOINED the env-commanded action path under v4, so a policy-path step
+    RE-REGISTERS the waist PD every decision and overwrites any rogue direct
+    write on it. A rogue waist write can neither fault the window nor survive
+    the step - this is the NEW structural semantic the moved rogue-joint test
+    (left_foot_yaw, a joint the env does NOT command) preserves; together the
+    two tests pin both halves of the seam."""
+
+    def _rogue_write():
+        env.world._pd["waist_yaw"] = {"target": 1e30, "kp": 1e6,
+                                      "kd": 0.0, "source": "rogue"}
+
+    cfg = humanoid_cfg(**{"world": {"safety": {"enforce_torque_limits": False,
+                                               "clamp_target": False,
+                                               "kp_ceiling": 1e9, "kd_ceiling": 1e9}}})
+    env = LocoEnv(cfg)
+    env.reset()
+    _rogue_write()
+    obs, r, term, trunc, info = env.step(np.zeros(LocoEnv.action_dim, dtype=np.float32))
+    assert not term and not info.get("faulted")
+    pd = env.world._pd["waist_yaw"]
+    assert pd["source"] == "neural_policy"          # re-registered by the action path
+    assert abs(pd["target"]) < 1e-12                # zero action = neutral target
+    assert env.faulted() is False
+    assert env.world.physics_warnings() == {}
+    assert not np.isnan(env.world.d.qpos).any()
+
+
 # ---------------------------------------------------------------- observability
 def test_safety_surface_observable():
     """Counters rise per control kind; the clamp events land in the bounded log."""
