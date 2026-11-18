@@ -71,9 +71,11 @@ function geomMesh(g) {
       break;
     case 'capsule':                         // [radius, half-len]
       geo = new THREE.CapsuleGeometry(Math.max(s[0], 1e-4), Math.max(s[1] * 2, 1e-4), 8, 12);
+      geo.rotateX(Math.PI / 2);             // three.js Y-axis -> MuJoCo Z-axis
       break;
     case 'cylinder':
       geo = new THREE.CylinderGeometry(s[0], s[0], s[1] * 2, 16);
+      geo.rotateX(Math.PI / 2);             // three.js Y-axis -> MuJoCo Z-axis
       break;
     case 'box':                             // half extents -> full
       geo = new THREE.BoxGeometry(2 * s[0] || 2e-4, 2 * s[1] || 2e-4, 2 * s[2] || 2e-4);

@@ -64,8 +64,8 @@ function geomMesh(g) {
   switch (g.type) {
     case 'plane': geo = new THREE.PlaneGeometry(2 * (s[0] || 15), 2 * (s[1] || 15)); break;
     case 'sphere': geo = new THREE.SphereGeometry(s[0], 20, 14); break;
-    case 'capsule': geo = new THREE.CapsuleGeometry(Math.max(s[0], 1e-4), Math.max(s[1] * 2, 1e-4), 8, 12); break;
-    case 'cylinder': geo = new THREE.CylinderGeometry(s[0], s[0], s[1] * 2, 16); break;
+    case 'capsule': geo = new THREE.CapsuleGeometry(Math.max(s[0], 1e-4), Math.max(s[1] * 2, 1e-4), 8, 12); geo.rotateX(Math.PI / 2); break;  // Y-axis -> MuJoCo Z-axis
+    case 'cylinder': geo = new THREE.CylinderGeometry(s[0], s[0], s[1] * 2, 16); geo.rotateX(Math.PI / 2); break;  // Y-axis -> MuJoCo Z-axis
     case 'box': geo = new THREE.BoxGeometry(2 * s[0], 2 * s[1], 2 * s[2]); break;
     case 'ellipsoid': geo = new THREE.SphereGeometry(1, 16, 12); break;
     default: return null;
