@@ -11,6 +11,14 @@ from typing import Any
 
 PARK_ORIGIN = (60.0, 60.0, -40.0)    # where latent / lost bodies are parked (no collisions, no gravity)
 
+# The humanoid asset source. This is a module-level constant (not a config
+# key) so the DEFAULT behaviour of every build is byte-identical to the
+# previous inline path expressions; checkpoint playback ( rl_live.playback )
+# points it at a SHA-verified copy of a historical asset for demos and never
+# touches the default. All three humanoid reads in this module go through it.
+HUMANOID_ASSET_PATH = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), "..", "..", "assets", "humanoid_mujoco.xml"))
+
 
 @dataclass
 class ObjectSpec:
@@ -180,7 +188,7 @@ def _humanoid_torso_block(ac: dict) -> str:
     per-agent naming, so this helper's output for a name-passthrough call is
     byte-identical to the legacy inline generation.
     """
-    hum_path = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "humanoid_mujoco.xml")
+    hum_path = HUMANOID_ASSET_PATH
     with open(hum_path, "r", encoding="utf-8") as f_h:
         hum_xml = f_h.read()
     # torso body (with limbs)
@@ -310,7 +318,7 @@ def build_mjcf(cfg: dict, specs: list[ObjectSpec]) -> str:
                'impratio="10" integrator="implicitfast"/>')
     # If humanoid, include its asset block at top level before default.
     if a.get('type', 'box') == 'humanoid':
-        hum_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'assets', 'humanoid_mujoco.xml'))
+        hum_path = HUMANOID_ASSET_PATH
         with open(hum_path, 'r', encoding='utf-8') as f_h:
             hum_xml = f_h.read()
         asset_match = re.search(r'<asset>.*?</asset>', hum_xml, re.DOTALL)
@@ -400,7 +408,7 @@ def build_mjcf(cfg: dict, specs: list[ObjectSpec]) -> str:
         out.append('      <joint name="agent_z" type="slide" axis="0 0 1" limited="false" range="-1e5 1e5"/>')
         # Insert humanoid torso body (with limbs)
         if a.get("type", "box") == "humanoid":
-            hum_path = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "humanoid_mujoco.xml")
+            hum_path = HUMANOID_ASSET_PATH
             with open(hum_path, "r", encoding="utf-8") as f_h:
                 hum_xml = f_h.read()
             # torso body (with limbs)

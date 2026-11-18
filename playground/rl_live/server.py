@@ -139,6 +139,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._redirect("/rl_live.html")
             if path == "/rl_live.html":
                 return self._file(MODULE_STATIC / "rl_live.html", "text/html")
+            if path == "/playback.html":
+                return self._file(MODULE_STATIC / "playback.html", "text/html")
             if path.startswith("/static/"):
                 return self._static(path[len("/static/"):])
             if path == "/api/rl_live/status":
@@ -190,6 +192,18 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json(s.stop())
             if path == "/api/rl_live/save":
                 return self._json(s.save(tag=body.get("tag")))
+            if path.startswith("/api/rl_playback/"):
+                # playback session controls (pause/resume/reset/speed/mode/
+                # stop) — only meaningful when the app's session is a
+                # PlaybackSession; a live-training session has no such method
+                op = path[len("/api/rl_playback/"):]
+                fn = getattr(s, "playback_control", None)
+                if fn is None:
+                    return self._json({"error": {"code": "not_playback",
+                                       "message": "this server runs a live-"
+                                                  "training session, not a "
+                                                  "playback session"}}, 404)
+                return self._json(fn(op, body))
             return self._json({"error": {"code": "not_found",
                                "message": path}}, 404)
         except (BrokenPipeError, ConnectionResetError):
@@ -241,7 +255,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _static(self, rel: str):
         rel = rel.lstrip("/")
         candidates = []
-        if rel in ("rl_live.js", "rl_live.css"):
+        if rel in ("rl_live.js", "rl_live.css", "playback.js", "playback.css"):
             candidates.append(MODULE_STATIC / rel)
         candidates.append(DASHBOARD_STATIC / rel)
         for p in candidates:

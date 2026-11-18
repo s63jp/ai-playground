@@ -189,3 +189,48 @@ telemetry + live-frame plumbing. After B3 merges to main:
 - `AgentHandle.agent_skeleton()` is not used for rig rendering (it is the
   box-agent/limb layout); the geom-accurate spec replaces it, with
   `HumanoidView` retained as the no-spec fallback.
+
+## 10. Checkpoint playback (read-only demo surface)
+
+`playground.rl_live.playback` is a THIRD surface — a dedicated sidecar that
+replays a saved, verified checkpoint through the real MuJoCo simulation and
+streams it through the same SSE pipeline. Nothing here trains.
+
+    .venv/Scripts/python.exe -m playground.rl_live.playback --port 8770 \
+        --checkpoint experiments/rl/b3_run1/ckpt_final.json \
+        --stage sustained --inference deterministic
+    -> http://127.0.0.1:8770/playback.html
+
+- **The rig is the checkpoint's own era.** Before any world is built, the
+  sidecar extracts the historical asset from git (`e7e81ac:assets/
+  humanoid_mujoco.xml` — the B3 era), refuses the bytes unless SHA-256
+  matches the recorded value, copies it into the run dir and points
+  `playground.world.spec.HUMANOID_ASSET_PATH` at the copy (a process-local
+  seam; the default path and every other process keep the current asset).
+  Every episode's compiled model is re-checked against the era's head
+  inertial before a decision runs.
+- **The checkpoint is loaded through THE `rl/checkpoint.py` loader** (tamper
+  hash + obs/action contract fingerprint); the optimiser state is discarded
+  on load: there is no import of `PPOTrainer` and no update path of any
+  kind. The actor's parameter digest (every float32, log_std included) is
+  recomputed after every episode and shown in the viewer; any change would
+  abort playback.
+- **Inference modes are explicit and labelled**: `deterministic`
+  (a = tanh(mu(s)) — the recorded evaluation convention, the primary demo)
+  and `stochastic` (z = mu + sigma*eps with sigma exactly as trained). A
+  switch applies at the next episode start (`mode_next` until then); the
+  sampling RNG is re-seeded per episode so stochastic replay is reproducible
+  per seed.
+- **Controls**: pause / resume / reset-episode (replays the current seed
+  from its start; also works while paused, applied on resume) / speed
+  0.25-4.0 x (wall-clock pacing of the real 20 ms decisions) / mode switch.
+- **Records**: `experiments/rl_playback/<name>/episodes.jsonl` per episode
+  (duration, net + axis displacement, falls, MuJoCo warning names,
+  action-hash) and `playback_info.json` (identity: checkpoint sha, seed,
+  dims, rig fingerprint, actor digests). The checkpoint's own run dir is
+  only ever READ (writes verified absent by test).
+- **Proof hooks**: the deterministic band against the recorded
+  10-episode held-out evaluation is asserted bit-exact by
+  `tests/test_rl_playback.py::test_playback_rig_reproduces_the_recorded_heldout_eval`.
+  The live-training surfaces (dashboard tab :8765, sidecar :8766) are
+  untouched: playback is its own process, port and run dir.
