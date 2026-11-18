@@ -94,8 +94,8 @@ def test_rollout_buffer_contents_from_real_env():
     critic = Critic(env.obs_dim, seed=78)
     buf = collect_rollout(env, actor, critic, 220, seed=20261117, episode_counter=[0])
     assert len(buf) == 220
-    assert buf.obs.shape == (220, env.obs_dim) == (220, 43)
-    assert buf.z.shape == (220, 14) and buf.actions.shape == (220, 14)
+    assert buf.obs.shape == (220, env.obs_dim) == (220, 68)   # M7-0a v4
+    assert buf.z.shape == (220, 15) and buf.actions.shape == (220, 15)
     assert np.all(np.isfinite(buf.obs)) and np.all(np.isfinite(buf.z))
     # obs shape equals the v3 contract; actions inside bounds
     assert np.all(np.abs(buf.actions) <= 1.0)
@@ -224,7 +224,9 @@ def test_checkpoint_rejects_foreign_contract(tmp_path):
     (tmp_path / "v2.json").write_text(json.dumps(body), encoding="utf-8")
     with pytest.raises(CheckpointError) as e:
         load_checkpoint(tmp_path / "v2.json", env=env)
-    assert "obs_dim 40 != 43" in str(e.value)
+    # the live dim is computed: this assertion is about version-2 fingerprint
+    # rejection, not the contract's numeric literal (43 under v3, 68 under v4)
+    assert f"obs_dim 40 != {env.obs_dim}" in str(e.value)
 
 
 def test_eval_separation_no_param_mutation_and_reproducible():

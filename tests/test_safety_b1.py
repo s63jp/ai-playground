@@ -255,11 +255,12 @@ def test_nan_neural_network_output_rejected():
 def test_env_rejects_wrong_action_dimensions():
     env = LocoEnv(humanoid_cfg())
     env.reset()
-    for shape in ((10,), (15,), (14, 1)):
+    # M7-0a: (15,) is the VALID v4 action shape; (14,) and (16,) are wrong
+    for shape in ((10,), (14,), (16,), (15, 1)):
         with pytest.raises(ActionError) as e:
             env.step(np.zeros(shape, dtype=np.float32))
         assert e.value.code == "invalid_action_shape"
-    assert env.clip_stats["rejected_calls"] == 3
+    assert env.clip_stats["rejected_calls"] == 4
 
 
 def test_env_clips_and_counts_out_of_range_actions():
@@ -316,13 +317,17 @@ def test_badqacc_watchdog_detects_and_attributes():
 def test_env_flags_faulted_after_numerical_warning():
     """The env marks the transition FAULTED after MuJoCo numerically suppressed a
     step (rogue direct-PD write on a joint the env does not command, mid-episode),
-    so it cannot enter training data."""
+    so it cannot enter training data. M7-0a: the rogue joint is a PASSIVE
+    posture hinge (left_foot_yaw) — the waist JOINED the env-commanded action
+    path under v4, so a policy-path step re-registers it and a rogue waist
+    write would be overwritten (that is the new contract working, not a
+    failure); the foot_yaw hinge is the same bypass surface the test intends."""
     cfg = humanoid_cfg(**{"world": {"safety": {"enforce_torque_limits": False,
                                                "clamp_target": False,
                                                "kp_ceiling": 1e9, "kd_ceiling": 1e9}}})
     env = LocoEnv(cfg)
     env.reset()
-    env.world._pd["waist_yaw"] = {"target": 1e30, "kp": 1e6, "kd": 0.0, "source": "rogue"}
+    env.world._pd["left_foot_yaw"] = {"target": 1e30, "kp": 1e6, "kd": 0.0, "source": "rogue"}
     obs, r, term, trunc, info = env.step(np.zeros(LocoEnv.action_dim, dtype=np.float32))
     assert term and info.get("faulted") is True
     assert "mjWARN_BADQACC" in info["physics_warnings"]

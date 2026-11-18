@@ -22,7 +22,8 @@ _TARGET = np.array([0.5, 0.0, 0.0])
 def test_shapes():
     env = LocoEnv()
     obs = env.reset()
-    assert obs.shape == (LocoEnv.obs_dim,) == (43,)   # v3 = v2 40 + command
+    # M7-0a: v4 default = 43-dim v3 prefix + 25-dim command block
+    assert obs.shape == (LocoEnv.obs_dim,) == (68,)
     act = np.zeros(LocoEnv.action_dim, dtype=np.float32)
     obs2, rew, term, trunc, info = env.step(act)
     assert obs2.shape == (LocoEnv.obs_dim,)

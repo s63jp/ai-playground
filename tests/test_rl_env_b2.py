@@ -38,22 +38,23 @@ def _zero(env):
 
 # ---------------------------------------------------------------- observation
 def test_obs_contract_dimensions_and_finiteness():
-    """v3 = the v2 40-slice APPEND-only + the commanded velocity (B3 task
-    conditioning); all v2 sections keep their meaning."""
+    """v4 (M7-0a) = the 43-dim v3 slice APPEND-only + the 25-dim command
+    block; every v2/v3 section keeps its meaning (N1 bit-identity test in
+    test_rl_contract_v4.py)."""
     env = LocoEnv()
     obs = env.reset()
-    assert obs.shape == (43,)
+    assert obs.shape == (68,)
     zero = _zero(env)
     for _ in range(25):
         obs, r, term, trunc, info = env.step(zero)
-        assert obs.shape == (43,)
+        assert obs.shape == (68,)
         assert np.all(np.isfinite(obs)), "observation went non-finite without fault"
         assert not term
     layout = env.observation_layout()
-    assert layout["layout_version"] == 3 and layout["dim"] == 43
+    assert layout["layout_version"] == 4 and layout["dim"] == 68
     covered = sum(hi - lo for _, lo, hi in
                   [(s["name"], s["slice"][0], s["slice"][1]) for s in layout["sections"]])
-    assert covered == 43
+    assert covered == 68
     # APPEND-only guarantee: the first 7 v2 sections keep their exact slices
     assert [(s["name"], s["slice"]) for s in layout["sections"][:7]] == [
         ("joint_pos", [0, 14]), ("joint_vel", [14, 28]), ("torso_up", [28, 31]),
@@ -75,8 +76,14 @@ def test_obs_joint_order_matches_action_order():
     layout_a = env.action_layout()
     layout_o = env.observation_layout()
     names_a = [j["name"] for j in layout_a["joints"]]
-    assert layout_o["joint_order"] == names_a
-    assert len(names_a) == 14
+    # M7-0a: the ACTION list grew to 15 (waist appended by name order); the
+    # OBS joint order stays the fixed 14 (= the action list's prefix, which
+    # is exactly the v3 order). The v3 legacy mode keeps full equality.
+    assert layout_o["joint_order"] == names_a[:14]
+    assert len(names_a) == 15 and names_a[-1] == "waist_yaw"
+    assert "waist_yaw" not in layout_o["joint_order"]
+    legacy = LocoEnv(cfg={"rl": {"contract_version": 3}})
+    assert legacy.observation_layout()["joint_order"] ==         list(legacy.action_layout()["joints"][i]["name"] for i in range(14))
 
 
 def test_obs_normalisation_values():
@@ -121,7 +128,7 @@ def test_action_validation_rejects():
         with pytest.raises(ActionError) as e:
             env.step(a)
         assert e.value.code == "non_finite_action"
-    for shape in ((10,), (15,), (14, 1)):
+    for shape in ((10,), (16,), (15, 1)):   # (15,) is the VALID v4 shape now
         with pytest.raises(ActionError) as e:
             env.step(np.zeros(shape, dtype=np.float32))
         assert e.value.code == "invalid_action_shape"
@@ -136,20 +143,23 @@ def test_action_mapping_and_joint_ranges():
     """+1 maps the joint to its range HIGH, -1 to its LOW (documented mapping)."""
     env = LocoEnv()
     env.reset()
-    a = np.ones(14, dtype=np.float32)
+    a = np.ones(env.action_dim, dtype=np.float32)
     env.step(a)
     for name in env.joint_names:
         low, high = env.joint_range[name]
         assert env.world._pd[name]["target"] == pytest.approx(high, abs=1e-6)
-    env.step(-np.ones(14, dtype=np.float32))
+    env.step(-np.ones(env.action_dim, dtype=np.float32))
     for name in env.joint_names:
         low, high = env.joint_range[name]
         assert env.world._pd[name]["target"] == pytest.approx(low, abs=1e-6)
 
 
 def test_action_passive_posture_hinges_conventional_pd():
-    """The 3 passive hinges are commanded by the env (conventional PD), NOT the
-    policy's mapping, and their source tag separates them from neural_policy."""
+    """The passive hinges are commanded by the env (conventional PD), NOT the
+    policy's mapping, and their source tag separates them from neural_policy.
+    M7-0a: v4 has TWO passive hinges (left/right foot_yaw); the waist JOINED
+    the policy at the same posture gains (50, 5) — the v3 legacy mode keeps
+    all three passive hinges (see test_rl_contract_v4)."""
     env = LocoEnv()
     env.reset()
     env.step(_zero(env))
@@ -166,7 +176,7 @@ def test_policy_never_touched_passive_joints():
     env (they are conventional assistance, outside the action contract)."""
     env = LocoEnv()
     env.reset()
-    env.step(np.full(14, 0.9, dtype=np.float32))
+    env.step(np.full(env.action_dim, 0.9, dtype=np.float32))
     for name in env._posture_joints:
         assert env.world._pd[name]["source"] == "env_posture"
         assert env.world._pd[name]["kp"] == env._posture_gains[name][0]
@@ -340,7 +350,7 @@ def test_fall_termination_reports_components():
     and the fall penalty lands in the components, separated from truncation."""
     env = LocoEnv(cfg={"rl": {"max_episode_steps": 4000}})
     env.reset()
-    fold = np.zeros(14, dtype=np.float32)
+    fold = np.zeros(env.action_dim, dtype=np.float32)
     fold[8] = 0.8    # left_hip  -> forward
     fold[11] = 0.8   # right_hip -> forward
     fold[9] = -1.0   # left_knee -> full heel-back flexion
@@ -394,7 +404,7 @@ def test_seeded_reproducible_episodes():
         env.reset(seed=seed)
         rng = np.random.default_rng(7)
         for _ in range(60):
-            a = (rng.uniform(-1, 1, 14) * 0.3).astype(np.float32)
+            a = (rng.uniform(-1, 1, env.action_dim) * 0.3).astype(np.float32)
             env.step(a)
         return env.episode_summary()
 
@@ -411,7 +421,8 @@ def test_episode_isolation_no_state_leakage():
     env = LocoEnv(cfg={"rl": {"max_episode_steps": 40}})
     env.reset(seed=5)
     rng = np.random.default_rng(3)
-    acts = [(rng.uniform(-1, 1, 14) * 0.4).astype(np.float32) for _ in range(40)]
+    acts = [(rng.uniform(-1, 1, env.action_dim) * 0.4).astype(np.float32)
+            for _ in range(40)]
     for a in acts:
         env.step(a)
     s1 = env.episode_summary()
@@ -430,13 +441,17 @@ def test_episode_isolation_no_state_leakage():
 
 
 def test_obs_action_dims_stable_across_episodes():
+    # M7-0a: the DEFAULT contract is v4 (43-dim v3 prefix + command block);
+    # the read-only legacy mode still constructs the exact v3 contract.
     env = LocoEnv()
     o = env.reset()
-    assert o.shape == (43,)
+    assert o.shape == (68,)
     env.reset(seed=1)
     o2 = env.reset()
-    assert o2.shape == (43,)
-    assert LocoEnv.action_dim == 14 and LocoEnv.contract_version == 3
+    assert o2.shape == (68,)
+    assert LocoEnv.action_dim == 15 and LocoEnv.contract_version == 4
+    legacy = LocoEnv(cfg={"rl": {"contract_version": 3}})
+    assert (legacy.obs_dim, legacy.action_dim, legacy.contract_version) ==         (43, 14, 3)
 
 
 # ---------------------------------------------------------------- curriculum
@@ -555,7 +570,7 @@ def test_decimation_hold_semantics():
     (a slower policy at the documented 20 ms; PD still every 2 ms)."""
     env = LocoEnv()
     env.reset()
-    a = np.full(14, 0.5, dtype=np.float32)
+    a = np.full(env.action_dim, 0.5, dtype=np.float32)
     t_before = float(env.world.time)
     env.step(a)
     t_after = float(env.world.time)

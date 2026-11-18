@@ -406,7 +406,12 @@ def test_deterministic_same_seed_replays_identically(need_ckpt):
     try:
         cfg = load_config(None, overrides={})
         rl = dict(cfg.get("rl") or {})
-        env = LocoEnv(cfg={"agent_body": {"type": "humanoid"}, **rl})
+        # M7-0a: pin the recorded brain's contract (same helper the playback
+        # session uses) — the v3 lineage replays on the v3 legacy mode.
+        _cv = pb.read_checkpoint_contract(CKPT)
+        if _cv in (3, 4):
+            rl["contract_version"] = _cv
+        env = LocoEnv(cfg={"agent_body": {"type": "humanoid"}, "rl": rl})
         env.set_phase(dict(DEFAULT_STAGES[2].phase))
         env.set_phase({"gravity_scale": 1.0, "upright_assist": 0.0,
                        "max_steps": 6, "target_velocity": [0.0, 0.5, 0.0]})

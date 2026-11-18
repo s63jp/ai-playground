@@ -23,19 +23,27 @@ class TestRlContract:
         r = client.get("/api/rl/contract")
         assert r.status_code == 200
         data = r.json()
-        assert data["contract_version"] == 3
-        assert data["obs_dim"] == 43 and data["action_dim"] == 14
+        # M7-0a: the dashboard serves the LIVE contract (v4; freeze section 2)
+        assert data["contract_version"] == 4
+        assert data["obs_dim"] == 68 and data["action_dim"] == 15
         obs = data["observation"]
-        assert obs["layout_version"] == 3 and obs["dim"] == 43
-        assert sum(s["slice"][1] - s["slice"][0] for s in obs["sections"]) == 43
-        assert obs["sections"][-1]["name"] == "command" \
-            and obs["sections"][-1]["slice"] == [40, 43]
+        assert obs["layout_version"] == 4 and obs["dim"] == 68
+        slices = {sec["name"]: sec["slice"] for sec in obs["sections"]}
+        assert sum(sec["slice"][1] - sec["slice"][0] for sec in obs["sections"]) == 68
+        # the v3 prefix sections keep their slices unchanged
+        assert slices["joint_pos"] == [0, 14] and slices["command"] == [40, 43]
+        # the command block appends 43..68 in the fixed order
+        for name, sl in (("limb_pose_target", [43, 58]), ("com_shift", [58, 60]),
+                         ("waypoint", [60, 63]), ("stop_request", [63, 64]),
+                         ("cmd_mask", [64, 68])):
+            assert slices[name] == sl
         act = data["action"]
-        assert act["action_dim"] == 14
-        assert len(act["joints"]) == 14
+        assert act["action_dim"] == 15
+        assert len(act["joints"]) == 15
+        assert act["joints"][-1]["name"] == "waist_yaw"
         assert act["decimation_steps"] == act["control_period_ms"] / 2.0
         assert {p["name"] for p in act["passive_conventional_pd"]} == {
-            "waist_yaw", "left_foot_yaw", "right_foot_yaw"}
+            "left_foot_yaw", "right_foot_yaw"}
 
 
 class TestRlCurriculum:

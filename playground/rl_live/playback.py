@@ -138,6 +138,20 @@ def verify_head_inertial(m) -> dict:
 
 
 # ------------------------------------------------------------ actor identity
+def read_checkpoint_contract(path) -> int | None:
+    """M7-0a: cheap contract pre-read (json of meta only — the strict loader
+    still performs the full hash/tamper + fingerprint verification). Returns
+    the stored contract_version, or None when unreadable. THE BRAIN's
+    contract decides which sim surface replays it (v3 bit-identical legacy
+    mode, v4 default)."""
+    try:
+        body = json.loads(Path(path).read_text(encoding="utf-8"))
+        return int(body.get("meta", {}).get("contract", {})
+                   .get("contract_version", 3))
+    except Exception:
+        return None
+
+
 def actor_sha256(actor) -> str:
     """Stable digest of every actor parameter (float32 bytes, sorted keys).
 
@@ -413,6 +427,15 @@ class PlaybackSession:
             base_cfg = load_config(None, overrides={})
             rl = dict(base_cfg.get("rl") or {})
             rl.update(self._env_overrides)
+            # M7-0a: contract-driven replay — read_checkpoint_contract pins
+            # the env so a recorded v3 brain replays on the v3 contract
+            # (bit-identical to the pre-v4 tree) and a v4 brain on v4. The
+            # BRAIN's contract decides the sim surface; the rig seam above
+            # stays playback's fixed B3-era fixture (its fingerprint check
+            # guards it).
+            _cv = read_checkpoint_contract(self._checkpoint_path)
+            if _cv in (3, 4):
+                rl["contract_version"] = _cv
             env = LocoEnv(cfg={"agent_body": {"type": "humanoid"}, "rl": rl})
             # Explicit phase: the named stage's phase, or the caller's dict
             # (tests). set_phase is the one non-cumulative appliance.

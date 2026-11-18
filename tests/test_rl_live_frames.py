@@ -28,7 +28,7 @@ def test_scene_spec_shape(tmp_path):
     rig = [b for b in spec["bodies"] if b["rig"]]
     assert len(rig) >= 10                       # the humanoid rig
     assert spec["policy_joints"] == list(env.joint_names)
-    assert len(spec["policy_joints"]) == 14
+    assert len(spec["policy_joints"]) == 15   # M7-0a v4
     for body in spec["bodies"]:
         for g in body["geoms"]:
             assert g["type"] in ("plane", "sphere", "capsule", "cylinder",
@@ -77,7 +77,7 @@ def test_pack_frame_through_tap(tmp_path):
 def test_tap_is_invisible_to_determinism(tmp_path):
     """Tap-wrapped stepping produces the exact same trajectories as direct
     stepping (the tap does not touch the env), even with a hostile sink."""
-    a = np.zeros(14, dtype=np.float32)
+    a = np.zeros(15, dtype=np.float32)   # M7-0a v4 action
     obs1 = make_env(tmp_path).reset(seed=7)     # separate worlds, same seed
     env1 = make_env(tmp_path)
     env1.reset(seed=7)
@@ -109,8 +109,8 @@ def test_frame_json_budget(tmp_path):
     env = make_env(tmp_path)
     idx = FrameIndex(env)
     env.reset(seed=11)
-    _, r, term, trunc, info = env.step(np.zeros(14, dtype=np.float32))
-    frame = pack_frame(env, action=np.zeros(14), reward=r, terminated=term,
+    _, r, term, trunc, info = env.step(np.zeros(15, dtype=np.float32))
+    frame = pack_frame(env, action=np.zeros(15), reward=r, terminated=term,
                        truncated=trunc, info=info, episode=1, decision=1,
                        index=idx)
     blob = json.dumps(frame)

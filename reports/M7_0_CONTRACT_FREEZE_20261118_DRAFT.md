@@ -1,159 +1,175 @@
-# M7-0 — Contract Freeze Specification (DRAFT — pending Jamie review/approval)
+# M7-0 — Contract Freeze Specification (DRAFT v2 — post-probe revision, pending Jamie review/approval)
 
-**Date:** 2026-11-18 · **Status:** DRAFT. **No implementation has begun; no env/trainer code has been touched.** This document is the reviewable object for the M7-0 approval gate, per Jamie's decision ("review the actual design document and probe evidence, then approve M7-0 before touching the training environment").
+**Date:** 2026-11-18 · **Status:** DRAFT v2 (supersedes the v1 text pushed at commit `1ffc396`; same review/approval gate, nothing implemented). **No implementation has begun; no env/trainer code has been touched.**
 
-It freezes, concretely, the six things Jamie requires before limb training begins:
+v1 (the published draft) was reviewed against the actual source line-by-line and completed with four measured probes, all read-only, all run 2026-11-18 from scratch `LocoEnv`s through the honest world API:
 
-1. the final observation and action contracts for the foundational curriculum (§1–2);
-2. which joints each limb-control task can command (§3);
-3. how individual limb capability is measured (§4);
-4. how balance and coordinated standing are objectively assessed (§5);
-5. what constitutes passing each capability gate (§6);
-6. how visual inspection supports the numerical evidence (§7).
+- **P1** `ai-playground-audit/m7_p1_waist_capacity.py` → `m7_p1_waist_capacity.json` — waist gains/cap/turn envelope;
+- **P2** `ai-playground-audit/m7_p2_pd_reference.py` → `m7_p2_pd_reference.json` — per-joint PD tracking reference (the S1 calibration rows);
+- **P3** `ai-playground-audit/m7_p3_arena_blocks.py` → `m7_p3_arena_blocks.json` — arena bounds, block inventory, waypoint normalisation;
+- **P4** `ai-playground-audit/m7_p4_support_hull.py` → `m7_p4_support_hull.json` — hull, settled COM, margins, stance baseline.
 
-Plus the three-operation loading law (§8) and the M7-0 execution plan (§9). All geometry/normalisation constants are **anchored to measured values** (probe `reports/M7_AUDIT_PROBE.json`) — none invented. Where a pass band must be calibrated against behaviour that does not exist yet, the freeze defines the **metric, protocol and calibration row**; the number itself is set at the gate from measured rows + stated margin (the project's measured-numbers rule).
+Probe outputs are the **confirmed measurements** (§0); the contract slices and gate bands in §1–§8 are **proposed design** anchored to them. Decisions D1–D6 are resolved in §10 with a blocking column. Corrections to v1 are marked **[CORRECTED]** or **[AMENDED]** inline.
 
-## 1. Observation contract v4 (`rl_env/4`) — one freeze for the whole foundational curriculum
+## 0. What was verified against the actual build (confirmed measurements)
 
-Design law: **append-only over v3; v3 (43 dims) remains a strict prefix forever.** One fixed-width command block serves every foundational stage — no per-stage contract bumps, no second freeze.
+### 0.1 The v3 contract (source: `rl/env.py`, `rl/rewards.py`, `rl/curriculum.py`, `rl/checkpoint.py`, `rl/eval.py`)
+
+- Obs `float32[43]` exact layout verified (machine-readable sections in `M7_AUDIT_PROBE.json` / `observation_layout()`): `[0:14]` joint pos `(q−lo)/(hi−lo)·2−1`; `[14:28]` joint vel /6.0; `[28:31]` torso up (torso body xmat col 2); `[31:34]` **root slide** velocity /5.0; `[34:35]` up_z; `[35:38]` torso fwd (xmat col 1 — the rig's local +Y chest axis); `[38:40]` per-foot support force /1000 (contact-force path: `mj_contactForce`, |nz|>0.7, self-pairs excluded — `env.py:491-517`); `[40:43]` commanded v\* world /5.0.
+- Action 14 → PD via `set_joint_target`; mapping `target = lo + (a+1)/2·(hi−lo)` (`env.py:368`); **nu = 0 in the live model** — the PD torque via `qfrc_applied` is the only force path (`world/physics.py:983-1009`); the asset XML's `<motor>` entries are not the live actuation story.
+- All 14 action ranges are symmetric ±π/2 ⇒ **action 0 ⇒ target 0 rad exactly**; the same is true for waist_yaw (±π). This makes mask-neutral and N2-equivalence claims exact rather than approximate.
+- Reward: 8 keyed components (`COMPONENT_KEYS`), per-phase coefficient rewrite in `set_phase` (`rewards.py` unknown-key `ValueError`). New keyed components ride by extending `DEFAULTS` with config-default 0.0 — the b4_posture1 bit-identical pattern. `heading_progress_raw` returns 0 at zero v\* (structurally), so S1/S2/S3 progress is 0 by code, not by tuning.
+- Curriculum: `Stage` records + `set_phase` non-cumulative rewrite; reserved stages (`disturbance/terrain/navigation`) declared `env_ready=False`, and the sequence **holds** at a stage whose successor is reserved (`curriculum.py:166-170`). `[40:43]`-per-phase `velocity_tracking = 0` is supported (S6 subordination).
+- Loader: `rl_checkpoint/1` + SHA-256 tamper check; strict fingerprint diff (obs/action dims, section slices, joint order, mapping + joints + kp) — raising `CheckpointError`. **Loader gap found [CORRECTED]:** the diff does **not** compare `kd` values **or joint ranges** — a range/kd change is silently loadable today. M7-0b extends the diff to ranges + kd (small additive change; part of the loading law, §8).
+- Checkpoint meta carries obs/action dims, joint order, PD gains, `log_std` per-dim vector, optimizer, torch RNG, counters; `extra_meta` passes through (`checkpoint.py:133`). Hidden widths are **not** in meta — meta extension (additive, default (64,64)) stands per §8.
+- Policy: `TanhGaussianActor`, trunk tanh MLP (64,64), per-dim `log_std` vector, `log_std_init = 0.0` ⇒ **σ_init = 1.0** (NOT the 0.1 figure sometimes quoted — 0.1 is the reward tracking kernel σ). Parent lineages end at mean log_std ≈ −0.23…−0.28 (σ ≈ 0.75–0.80), per-dim learned values vary.
+- Eval: held-out base 97 010 000, deterministic mean-action, zero-action control, scripted gait benchmark via `set_gait("walk", speed, heading)`, upright-vs-fell displacement split (`eval.py`) — the §6 gate harness as drafted.
+
+### 0.2 The rig (P1/P2 + model inspection)
+
+- Joint inventory: 14 policy hinges (asset order, §2) + 3 posture-PD hinges today — `waist_yaw (50,5)`, `left/right_foot_yaw (8,1)` (`env.py:170-173`). **v1 wording "passive hinges remain left/right_foot_yaw" is the v4 change, now stated as such:** waist moves from `env_posture` to the policy channel; foot_yaw stays conventional.
+- **`waist_yaw` is joint index 3** — the agent root body's 4th dof (slides agent_x/y/z = 0-2), axis `(0,0,1)`, range ±π — the rig's only rotational root dof; the torso is an articulated child so the dof carries ~1 kg·m² effective inertia (`world/spec.py:207-223`). Live model: `nu=0`, `njnt=42`, `nq=174`, `nv=152` (20 freejoint blocks + ring + rock).
+- **[CORRECTED] model-order enumeration cannot produce the v4 order:** with waist no longer excluded, model joint order puts waist **first** (index 3). M7-0a must enumerate by an explicit ordered NAME list (the frozen 14-name v3 order + `"waist_yaw"`), never by model order. Written into the implementation contract (§2 law).
+- B1 torque caps verified live from config (`world/safety.torque_limits`): default 600; spine_L2 60, **waist_yaw 120**, shoulder 160, elbow 220, hip 400, knee 570, ankle 400, head 20, foot_yaw 20; gain ceilings kp 1000 / kd 100 (candidate (50,5) far below ceilings). Saturation is attributed per joint and per source (`neural_policy` vs `env_posture` vs probe tags) — the attribution seam P1/P2 rely on is live.
+
+### 0.3 P1 — waist capacity (measured)
+
+- **Neutral hold (24 s, window row A):** waist |qpos| max **1.6e−11 rad**, |torque| max 3.6e−9 N·m — the standing equilibrium at neutral is torque-free; the v3 standing behaviour is waist-neutral today. N2's expected delta ≈ 0 is now a measured structural expectation, re-measured over ≥4,800 windows at M7-0a.
+- **Standing commanded targets (P2 rows, fresh resets):** a friction dead-band — target ±0.35 rad → steady err 0.29; ±0.70 → 0.57; ±1.00 → 0.66 (torque ≤ 29.5 N·m); ±2.00 → 0.14 (the body slips and tracks). P1B's sequential −1.5 rad case saturated the 120 N·m cap (raw demand exceeded cap; attribution logged) and fell. **Consequence (design):** S1's waist task is the neutral-hold gate only; commanded standing yaw tasks are NOT reliable capability demonstrations at (50,5) — real turns are a gait-coupled skill (next).
+- **Scripted turn envelope (P1C, `set_gait` path):** straight h=90 max 3.85 N·m; 90°→180° turn transient max 29.3, sustained 22.4; 90°→0° max 37.6; straight-with-180°-twist (h=270) max 47.5 / sustained 34.8. All ≥ **2.5× under the 120 N·m cap**, 0 falls, headings reached. The measured turn envelope bounds S5's waist demand; the S5 turn sub-gate validates against it at M7-4 launch.
+- **[AMENDED reading]** v1's "gains = the current posture PD's (50,5)" is verbatim true (`env.py:171` is exactly the waist entry) — the *claim that needs the gate* is not the gains but the CHANNEL MOVE (env_posture → policy), measured by N2.
+
+### 0.4 P2 — per-joint PD reference (the S1 calibration rows; fresh resets, seed 20261117 + 3-seed repeats)
+
+Achievable steady |err| (rad) / sustained |torque| (N·m) at the representative targets (worst over ±0.35 and ±0.70 cases):
+
+| joint | err | torque | note |
+|---|---|---|---|
+| spine_L2 | 0.061 | 2.3 | |
+| shoulders | 0.065 | 1.6 | |
+| elbows | 0.118 | 0.65 | |
+| head_pitch/yaw/roll | 0.090–0.096 | ≤0.9 | head torque capacity 20 N·m, huge headroom |
+| hips | 0.195 | 10.1 | |
+| knees | 0.149 | 8.5 | |
+| **ankles** | **0.344** | 8.6 | **ground-pinned under load:** qpos stays ≈ 0 — commanded loaded-ankle poses do not track; ankle tasks are swing/COM-shift dependent (see §3) |
+| waist_yaw | 0.29 (±0.35) → 0.66 (±1.0) | ≤29.5 | friction dead-band (P1B/P2) |
+
+All 15×6 hold cases completed upright: **0 falls, chest_up_z ≥ 0.949 (≈1.0 except spine cases)**, torso up ≥ 0.95, per-window error variance 0.002–0.08 rad², cross-seed error spread identical to 4 decimals (jitter-robust attractors, ±0.15 m spawn box). **S1 consequence:** leg tasks are holdable at ±0.35/±0.70 (hip/knee) inside the two-feet discipline; ankle holds under double-support are pinned — the ankle target channel is exercised meaningfully only with COM moved toward that foot (S2 pairing) or in later stage variants; the gate bands are P2 rows + stated margin.
+
+### 0.5 P3 — arena and targets (measured)
+
+- `world.boundaries()`: start (0,0,0) at island centre; walkable ±12.0 m both axes; corner distance 16.97 m; ground z 0; boundary walls are agent-collidable (`world/spec.py:306-307`).
+- Block inventory: 20 cylinders (`block_01…20`, geom size r=0.25, half-h=0.25 → 0.5 m diameter × 0.5 m), ring (16 capsule segments), rock (sphere r=0.3) — all parked 90–115 m off-island by default; `setup_place` repositions any of them (verified in `M7_AUDIT_PROBE.json`). **Nav targets are placed, never defaulted.**
+- **`d_ref` frozen [AMENDED — no longer "at M7-0 probe time"]:** `d_ref = 4.0 m` = the measured reachable approach distance of the standard 400-window horizon at the sustained 0.5 m/s command (400 × 0.02 s × 0.5 = 4.0). Target sampling (S6): `setup_place`d within **[0.5, 3.5] m** of the episode spawn, inside the measured ±12 m island; `d̂ = dist/4.0 ≤ 0.875`.
+
+### 0.6 P4 — support hull, COM anchor, stance baseline (measured, settled equilibrium)
+
+- Foot hull (seed 20261117): x [−0.2143, +0.0557], y [0.0179, 0.1979] — the two feet share their y-span exactly, so **the double-support convex hull IS the bounding rectangle** (x-gap −0.1243…−0.0343 lies inside the hull; stated explicitly). Single-support hulls are the individual foot rectangles; per-seed hull translations exactly track spawn jitter.
+- **Full-body COM at the settled equilibrium: (−0.07926, 0.08871, 0.89944) m** (47.05 kg incl. the 10 kg root column) — the root column's inertial point coincides in x,y with the 37.05 kg subtree COM, so **v1's anchor (−0.0793, 0.089) survives on the full body**; COM z (0.899) is fixed across seeds and uncommanded.
+- `com_shift` bounds ±0.070/±0.040 from the full-body anchor — commanded-bound corners stay inside the double-support hull with margins **x ±6.50 cm, y 3.08 / 6.92 cm** (min 3.08 cm; v1 said ≥3.1 — restate ≥3.0 measured).
+- Single-support reach: minimum |com_shift| to move the COM over either foot = **0.045 m** (within the ±0.070 bound); at the same-side command extreme the COM stays inside the stance foot with **2.5 cm margin**; the opposite-side pairing (e.g. stance left + full-right shift) is geometrically outside the stance hull — the **S2 command-pairing rule** is therefore required, not optional (§5).
+- Stance-fraction calibration row: left/right share **0.500/0.500** at equilibrium (`[38:40]` forces) — the S2 baseline. Waist qpos after 4 s settle: 0.0 exactly, all seeds.
+
+## 1. Observation contract v4 (`rl_env/4`) — confirmed layout, one freeze for the whole foundational curriculum
+
+Append-only over v3; v3 (43 dims) remains a strict prefix forever. `obs_dim = 68`, dtype float32. Slice table unchanged from v1 and verified:
 
 | Slice | Name | Dims | Encoding / frozen scaling |
 |---|---|---|---|
-| `[0:14]` … `[40:43]` | **v3 unchanged** | 43 | bit-for-bit as documented (`docs/RL_ENVIRONMENT.md`); `[40:43]` stays the world-frame velocity command v\* |
-| `[43:58]` | `limb_pose_target` | 15 | per-joint normalized pose target, **same encoding as the action mapping**: `n ∈ [−1,1]` ↔ world target `lo + (n+1)/2·(hi−lo)`; `0` = neutral range midpoint (0 rad every hinge). Order = action joint order (§2). |
-| `[58:60]` | `com_shift` | 2 | commanded COM shift from the **measured standing-anchor** (−0.0793, 0.089) m: x `n·1` ↔ ±0.070 m; y ↔ ±0.040 m. Anchored to the measured foot hull (x edges −0.2143/+0.0557, y 0.0179–0.1979): every commanded bound keeps ≥ 3.1 cm static margin (`M7_AUDIT_PROBE.json`). |
-| `[60:63]` | `waypoint` | 3 | (ux, uy, d̂): unit direction to the target **block in the agent torso frame** (heading-invariant) + `d̂ = distance / d_ref`; `d_ref` measured from the arena bounds at M7-0 probe time (P3). |
-| `[63:64]` | `stop_request` | 1 | {0, 1}: "park near the waypoint now" — arms the stop-tolerance behaviour. |
-| `[64:68]` | `cmd_mask` | 4 | {0,1} × (limb, balance, waypoint, stop) in that fixed order. **The mask is the stage/task selector in-obs** (no task one-hot — the standing key decision). |
+| `[0:43]` | **v3 unchanged** | 43 | bit-for-bit as verified in §0.1 |
+| `[43:58]` | `limb_pose_target` | 15 | per-joint normalized target, the action mapping constants: `n ∈ [−1,1] ↔ lo + (n+1)/2·(hi−lo)`; 0 = neutral (0 rad every joint — exact for all 15, symmetric ranges). Order = §2 joint order. |
+| `[58:60]` | `com_shift` | 2 | commanded COM shift (x, y) from the **settled full-body COM anchor (−0.0793, 0.0887) m**, ±0.070 m x / ±0.040 m y (margins §0.6). COM z not commanded. |
+| `[60:63]` | `waypoint` | 3 | (ux, uy, d̂): unit direction in the **yaw-only heading frame** = torso xmat col-1 horizontal projection normalized (fwd_h) and its left-hand perpendicular (left_h) — robust to chest pitch/roll, heading-invariant; `d̂ = dist / 4.0` (P3). ux,uy ∈ [−1,1] unitless. |
+| `[63:64]` | `stop_request` | 1 | {0,1}: park near the waypoint (stop-tolerance band ≥ block radius 0.25 m, band set at M7-5 from measured stop rows). |
+| `[64:68]` | `cmd_mask` | 4 | {0,1} × (limb, balance, waypoint, stop), fixed order. No task one-hot (standing decision kept). |
 
-`obs_dim = 68`, dtype float32, contract version 4.
-
-**Mask semantics (the disambiguation rule):** mask bit 0 ⇒ that channel group is INACTIVE: the env ignores it (no reward consumes it) and the policy reads zeros. Mask bit 1 ⇒ active: values are the actual command; a 0 inside an ACTIVE limb group is a real command ("go to neutral"), not "no instruction". Each stage's phase data fixes which mask bits are on (per-stage table below) — the curriculum stays the single scheduler, so identical calls give identical episodes (B2 determinism preserved).
+**Mask semantics [AMENDED — the disambiguation rule, now precise]:**
+- mask 0 ⇒ the group's command values are zeroed in obs and **no reward consumes the group** (limb_tracking / com_tracking / approach / stop off).
+- mask 1 ⇒ live: an active 0-valued limb target is a real "hold neutral" command (indistinguishable from inactive only by the mask bit).
+- **The action space is NEVER masked** — all 15 dofs always map through (`env.py:366-371`-style path). v1's "the env ignores it" is hereby pinned to obs/reward semantics only: pinning inactive limb ACTIONS to neutral is impossible without breaking S5/S6 (the legs are limb channels; walking needs them live under limb-mask 0). "Inactive commands do not influence the environment" holds because every non-limb command group's only influence path IS the reward, and inactive limb command VALUES are zeroed in obs; the policy's body authority is never gated. Verified against source; no other interpretation survives S5.
+- Per-stage mask bits ride phase data (`set_phase` extension, M7-0a) — the curriculum stays the single scheduler; identical calls give identical episodes.
 
 **Stage → interpretation table (the foundational ladder):**
 
-| Stage | limb | balance | waypoint | stop | velocity `[40:43]` | reward additions (via phase `reward_coeffs` + new keyed components) |
+| Stage | limb | balance | waypoint | stop | velocity `[40:43]` | reward additions |
 |---|---|---|---|---|---|---|
-| S1 limb-control | 1 | 0 | 0 | 0 | zero | `limb_tracking` on; progress structurally 0 (v\*=0) |
-| S2 balance | 0→1 (coupling sub-gate turns limb back on) | 1 | 0 | 0 | zero | `com_tracking` on |
+| S1 limb-control | 1 | 0 | 0 | 0 | zero | `limb_tracking`; progress structurally 0 |
+| S2 balance | 0→1 (coupling sub-gate) | 1 | 0 | 0 | zero | `com_tracking` |
 | S3 standing | 0 | 0 | 0 | 0 | zero | v3 standing behaviour; gates only |
-| S4 disturbance | 0 | 0 | 0 | 0 | zero | env-side impulse hook (§9), no reward change |
-| S5 gait | 0 | 0 | 0 | 0 | **ladder speeds / backwards / ramps** | v3 terms; waist genuinely commanded (§2) |
-| S6 waypoint | 0 | 0 | 1 | 1 | zero (subordinated) | `approach_progress` + `stop_tolerance`; `velocity_tracking` coefficient set 0 per-phase (the mechanism already supports per-phase coefficients) |
+| S4 disturbance | 0 | 0 | 0 | 0 | zero (M7-3 redefines; note: the RESERVED `disturbance` phase currently carries v\* [0.5,0,0] (+X) — flagged for redefinition, it has never been trained) | none (env-side hook) |
+| S5 gait | 0 | 0 | 0 | 0 | **ladder speeds / backwards / ramps / DIRECTIONS** | v3 terms; waist genuinely commanded |
+| S6 waypoint | 0 | 0 | 1 | 1 | zero (subordinated) | `approach_progress` + `stop_tolerance`; `velocity_tracking` coefficient 0 per phase (supported) |
 
-## 2. Action contract v4 — 15 joints, frozen once
+**S5 turning rides v\* [RESOLVED — closes v1's turn-command gap]:** v\* is world-frame; the heading is observable via `torso_fwd [35:38]`. Commanding v\* in a direction other than +Y is a legitimate turn command: the honest way to earn progress + tracking is to yaw the chest axis onto the commanded direction with the now-live waist, exactly the mechanism the scripted controller demonstrates in P1C. No new command group is needed; no waypoint-group activation at S5 (skill-before-combine preserved: turning is proved at S5, navigation combining turn+approach only at S6). Evidence of the turn = measured angle between torso_fwd and the v\* heading → 0, upright, under the P1C envelope.
 
-**Recommendation (decision D1): freeze `action_dim = 15` now**, = the 14 legacy joints **in unchanged order** + `waist_yaw` appended at index 14 (append-only action rule). Waist becomes a genuinely commanded joint from M7-0 onward.
+**Missing-information resolutions [the freeze's answers]:**
+- **Stance is NOT a command.** No commanded-stance channel exists in v4 and none is added: single-support is commanded through `com_shift` toward the stance foot (reach 0.045 m ≤ 0.070 ✓ P4) — `com_shift` is the single balance command; stance fraction is a GATE metric (measured `[38:40]`, baseline 0.5/0.5).
+- **Orientation-at-stop is a gate metric**, not a command channel: chest axis vs target direction measured at stop (S6), possible because the waypoint frame + live waist make orientation reachable.
+- **Command schedules** (S1 pose sequences, S2 shift sequences, S6 placements) are stage-defined, seeded, deterministic episode data — the env exposes command setters consumed at reset/stage boundaries; identical calls give identical episodes (B2 determinism, generalized). The S6 target placement rides `setup_place` (verified seam) inside `reset(seed)`.
+- COM z intentionally not commanded; head "look-at" intentionally not a v4 command (head targets ride limb commands).
 
-Why now rather than a bump at M7-4 (the alternative):
+## 2. Action contract v4 — 15 joints, frozen once (decision D1: ACCEPT)
 
-- Jamie's requirement is the FINAL contract for the foundational curriculum — S5/S6 need the waist for turning/orienting, so 15 *is* the final contract; freezing it avoids a mid-learning contract change (which would force a surgery exercise on a live lineage exactly when training evidence is most at risk).
-- S1–S3 behaviour is unchanged in kind: waist commands sit at neutral (0), the physics path is the same PD-through-`set_joint_target` the posture PD uses today — the standing equilibrium carries over (gate N2 below measures the delta instead of assuming it away).
-- Every v4 lineage shares one contract ⇒ every later fork is a continue-fork (cheap); v3→v4 remains the SINGLE cross-contract transfer pair, exercised once, well tested.
+**Freeze `action_dim = 15` = the 14 legacy joints in unchanged order + `waist_yaw` at index 14.**
 
-Honest costs recorded: the effort measurement set grows from 14 to 15 dofs (standing delta ≈ 0 — waist velocity ≈ 0 at equilibrium — but the neutral gate N2 MEASURES the bound, no hand-wave); smoothness now spans 15 dims (near-constant in S1–S3); waist gains/caps are frozen contract values and must be **measured first** (probe P1).
+- **Implementation law [CORRECTED]:** the joint order is the explicit frozen NAME list `[spine_L2, left_shoulder, left_elbow, right_shoulder, right_elbow, head_pitch, head_yaw, head_roll, left_hip, left_knee, left_ankle, right_hip, right_knee, right_ankle, waist_yaw]` — the model-order enumeration must NOT be used for v4 (waist is model joint index 3; naive enumeration puts it first and breaks the append-only obs prefix). The name list goes into the contract fingerprint (the loader diff already checks joint order exactly).
+- Waist becomes a genuinely commanded joint from M7-0 onward: measured basis P1/P2 (§0.3). Passive hinges remain exactly `left_foot_yaw`/`right_foot_yaw` (env_posture), as v1 said.
+- Gains frozen **(kp 50.0, kd 5.0)** from `env.py:171` (the current posture values), measured at P1/P2: neutral hold torque-free; turn envelope ≥2.5× under the B1 cap 120 N·m. Cap unchanged (no B1 config change needed).
+- N2 (M7-0a) measures the effort-set growth 14→15 (`_dofadr` grows from `joint_names`, `env.py:175`) and the standing-equivalence delta over ≥4,800 windows — the measured bound replaces the v1 "≈ 0" claim; P1A's zero-torque neutral row is the structural prior.
 
-**Frozen waist parameters (pending P1):** initial gains = the current env posture PD's (kp 50.0, kd 5.0 — `env.py:171`); P1 measures hold quality/saturation at these gains and sweep-informed caps; final numbers recorded in the freeze annex before any training. Passive hinges remain exactly `left_foot_yaw`/`right_foot_yaw` (env_posture).
+## 3. Which joints each limb task can command (S1 task grammar)
 
-## 3. Which joints each limb-control task can command (S1 task grammar)
+Groups unchanged from v1 (torso; left/right arm; head; left/right leg; waist = neutral-hold). Inactive groups show neutral targets; every inactive joint must respect its rest band (gate term).
 
-Limb groups over the 15 action joints:
+Measured refinements over v1 (from P2): ankle tasks, **ground-pinned under load** — S1's ankle targets are restricted to the small-amplitude holdable set inside double-support (or exercised under S2's COM-shifted pairing); hip/knee ±0.35/±0.70 holds are holdable (P2 6/6). Waist: neutral-hold gate only (P1B/P2 dead-band). Rig honesty unchanged: sagittal single-axis ±π/2; no abduction/wrist; extension is a separate measured decision (M7 audit §6, B7 interaction).
 
-| Group | Joints (action indices) |
-|---|---|
-| torso | spine_L2 [0] |
-| left_arm | left_shoulder [1], left_elbow [2] |
-| right_arm | right_shoulder [3], right_elbow [4] |
-| head | head_pitch [5], head_yaw [6], head_roll [7] |
-| left_leg | left_hip [8], left_knee [9], left_ankle [10] |
-| right_leg | right_hip [11], right_knee [12], right_ankle [13] |
-| waist | waist_yaw [14] — S1 commands it to HOLD neutral (steadiness is a posture gate); real turning arrives at S5 |
+## 4. How limb capability is measured (S1 protocol)
 
-Per-task active subset = the group under test; every other joint's limb channel shows its **neutral rest target** (0), so the whole 15-vector is always a complete, self-consistent desired pose. The env's limb task defines which subset the `limb_tracking` reward consumes; the gate requires the INACTIVE joints to stay within their rest band too (no thrashing elsewhere while one limb obeys).
+The v1 metric set stands (reach/hold-variance/repeatability/discipline/effort). **The calibration rows now exist (P2)**: per joint, the PD-achievable steady error/variance/torque through the exact action path (14) and the posture path (waist). Gate bands = P2 row + stated margin + the untrained-policy baseline row, set at M7-1 launch — never a priori. Band derivation example (stated form, not yet a number): arm hold band = P2 err_max (0.065–0.118) × margin (≥1.5) rounded; ankle band uses the ground-pinned reality (bands derive from the achievable set, not the commanded ideal).
 
-S1 task forms (each commanded pose held T_hold, repeated R times, seeded spawns):
-- arm tasks: shoulder flexion targets × elbow targets (incl. hold combinations);
-- leg tasks: hip/knee/ankle excursions **within the both-feet-contact upright discipline** — full single-leg weight transfer is S2 territory by stage separation (Jamie's rule: prove limb control first; stance transfer needs balance machinery that does not exist until S2 passes);
-- head/torso tasks: pitch/yaw/roll targets incl. holds;
-- waist: neutral-hold under S1 (gate, not a commanded-motion task until S5).
+## 5. How balance and standing are objectively assessed (S2/S3) [AMENDED with the pairing rule]
 
-**Rig honesty (recorded):** all these asks live within the current single-axis sagittal hinges ±π/2. "Raise arm sideways" (abduction), wrist DOFs etc. are **not** commandable — a rig extension is a separate measured decision, flagged in the M7 audit §6, interacting with B7 anthropometry.
+- `com_tracking` vs commanded `com_shift` (mean/p95 over hold; COM from `body_mass ⊗ xipos` full-body, engine-measured).
+- **Command-pairing rule (new, required):** during single-support sub-tasks the S2 sampler commands `com_shift` only within the stance-consistent subset (min 0.045 m toward the stance foot; the same-side ±0.070 extreme stays inside with 2.5 cm measured margin); the gate checks the COM against the **current measured support hull** (single foot under single support, not the double-support hull). A commanded shift and a stance that together put the COM outside the support hull is a sampler defect, not a policy failure — the gate separates these.
+- Stance fraction from `[38:40]` (baseline 0.5/0.5 measured); hold duration; falls = 0.
+- Coupling sub-gate (S1→S2 bridge): limb mask + balance mask live simultaneously; posture/upright bands maintained.
+- Posture bands verbatim from the B4 contract (head |rel pitch| ≤ 0.35/0.60; head world-up ≥ 0.9/0.8; chest |tilt| ≤ 0.35/0.60).
+- S3: the v1 set stands — 8-s horizon hold, drift ≤ own zero-action row + margin (precedent rows: b4_posture1 +0.176 / b4_head1 +0.4455), 4,800-window standing equilibrium reference (2.4972/window, 0 falls, chest_upz ≡ 1.0 — re-measured under v4 by N2), COM excursions inside the static-margin envelope, 0 falls / 0 faulted.
+- **"COM position ≠ active balance" is enforced structurally:** S2/S3 pass on COM TRACKING under commanded shifts and stance transitions (dynamic demands), never on static COM position; the true balance proof is S4 (disturbance recovery, D6) — S4 is not bypassable for "balance capability" claims.
 
-## 4. How individual limb capability is measured (S1 protocol)
+## 6. Gate form
 
-Per limb group, per commanded pose, over R repeats × seeded spawn set, measured **from engine state** (never from policy internals):
+Unchanged from v1 (metric set over the fixed held-out protocol 97,010,000; calibration rows; full-suite regression ×2 exit 0; operation tag + lineage; visual annex). Calibration rows now concrete: P2 (limb), P4 (balance/stance), P1 (waist/S5 envelope), plus zero-action and gait fixtures.
 
-1. `reach_error_norm` — normalized joint space error at hold-end and hold-mean, per joint and per group (mean / p95 / max).
-2. `hold_variance` — per-joint error variance across the hold window (steady tracking, not oscillation).
-3. `repeatability` — per-joint error std ACROSS the R repeats of the same command.
-4. **Discipline terms (the "not by flopping the body" exclusion):** chest-aware up_z ≥ band; torso up_z ≥ band; COM inside the support hull (measured per window); falls = 0; faulted windows = 0; inactive-group deviation ≤ band.
-5. `effort_mean_w` ≤ band (no violent compliance), action clipping rate logged and bounded.
+## 7. Visual inspection
 
-**Calibration rows (measured, not invented):** probe P2 measures, per joint, the PD-achievable steady error and variance for the same hold targets through the honest `set_joint_target` path with the frozen gains (pure actuator mechanics, no policy). Gate bands = P2 reference + stated margin + the untrained-policy baseline row. No band is asserted before its calibration row exists.
+Unchanged from v1 (playback/CDP two-camera annex bound to rows; surfaces last).
 
-## 5. How balance and standing are objectively assessed (S2/S3)
+## 8. The three-operation law
 
-S2 (balance/weight control), all from engine measurements:
-- `com_tracking_error` — COM offset vs commanded `com_shift`, mean/p95 over the hold (COM from `body_mass ⊗ xipos` — the probe-measured channel);
-- single-leg stance: **stance fraction** from the observed per-foot support forces `[38:40]` vs the commanded stance; hold duration; falls = 0;
-- **coupling sub-gate (the S1→S2 bridge):** S1 limb sequences issued WHILE balance terms hold — limb targets active, balance commands active simultaneously; posture/upright bands maintained (this is the measured proof that limb skills exist before they are combined — Jamie's separation made testable);
-- posture bands verbatim from the B4 contract (head |rel pitch| ≤ 0.35/0.60 rad; head world-up ≥ 0.9/0.8; chest |tilt| ≤ 0.35/0.60 rad).
+Table as v1, with two amendments:
 
-S3 (coordinated standing):
-- stand from the existing jittered spawn box; hold the full 8-s horizon (400 decisions); drift ≤ (that lineage's own zero-action row + margin) — the standing-drift precedent rows exist (b4_posture1 +0.176 m / b4_head1 +0.4455 m);
-- the 4,800-window standing equilibrium row as the reference (2.4972/window, 0 falls, chest_upz ≡ 1.0);
-- COM excursions stay within the static-margin envelope; posture bands held; effort ≤ zero-action band + margin; 0 falls, 0 faulted windows.
+- **[AMENDED] D5 — σ policy:** transfer-fork **preserves the parent's per-dim `log_std` on the shared action slice [0:14]** and appends `log_std[14] = log_std_init` (0.0 ⇒ σ 1.0). Verified basis: `log_std` is a per-dim learned vector (`ppo.py:140`); re-initialising all 15 to σ 1.0 would silently RAISE σ on every proven skill (parents end σ ≈ 0.75–0.80 mean, learned per-dim) — a larger behavioural jump than the zero-init μ surgery the design is careful to avoid. With preserved σ, the fork-moment **action DISTRIBUTION on the shared slice is identical to the parent's** — the round-trip test asserts this distribution-level identity (deterministic outputs AND log_std equality), which is strictly stronger than the v1 mean-only statement.
+- **[New] Loader diff extension:** `_fingerprint_diff` gains joint ranges + kd (verified gap §0.1) — part of M7-0b, additive, no format bump.
+- Everything else stands: continue-fork refuses on fingerprint differences; surgery requires the transfer_fork op tag (launcher-recorded into run metadata + `extra_meta`; verified passthrough `checkpoint.py:133`); surgery specifics (trunk row port + zero-init [43:68], μ-head column port + zero-init col 14, critic same rows, hidden-width meta additive) verified against the actor/critic architecture.
 
-## 6. Gate form (what "pass" means)
+## 9. M7-0 execution plan — after approval
 
-Every M7 gate report states, per stage:
-1. the metric set above, computed over the fixed protocol (held-out seed base 97,010,000, disjoint, deterministic eval plane + the 40-ep stochastic replay rows for trajectory tables);
-2. its **calibration rows** (P2 reference, untrained baseline, zero-action control, scripted gait fixtures where applicable) — numbers set as measured-reference + stated margin, never a priori;
-3. the full-suite regression (`run_tests.sh`, ×2, exit 0) — necessary, never sufficient;
-4. the **three-operation tag** of the producing policy (§8) and the lineage it came from;
-5. the visual-inspection annex (§7) bound to the numeric rows.
+Pre-implementation probes P1–P4 **complete** (§0, this session). Remaining plan:
 
-A gate passes only with: all numeric bands met × the regression green × the visual annex reviewed × no unexplained discrepancy between screenshots and numbers.
+- **M7-0a env contract v4** — name-ordered 15-joint enumeration (§2 law); command block + mask + set_phase keys; new keyed reward components (`limb_tracking`, `com_tracking`, `approach_progress`, `stop_tolerance`) with config-default 0.0 (bit-identical fixtures); loader-fingerprint constants append to fixtures as measured v4 constants (com anchor, d_ref, sampling bounds); tests: append-only layout, per-stage mask semantics, **N1** (v3 fixtures on the 43-slice bit-preserved), **N2** (standing equivalence ≥4,800 windows with waist live — expected ≈0 from P1A), full suite ×2.
+- **M7-0b loading law** — op tags; continue-fork; transfer surgery + distribution-level round-trip tests; fingerprint diff extension; full suite ×2.
+- B3 / b4_head1 / b4_posture1 untouched; register later (M7-6) read-only.
 
-## 7. How visual inspection supports the numerical evidence
+## 10. Decision table
 
-Reusing the proven playback machinery (cda7aba) — read-only, deterministic:
-- every gated eval plane gets a playback session (`playground.rl_live.playback`); screenshots via headless Chrome/CDP at fixed episode fractions (0/25/50/75/100 %) from two fixed cameras (side sagittal, front) — the exact method that verified the walking figure and the geometry fixes;
-- screenshot artifacts filed under `reports/m7/<gate>/viewer/` and **annotated to the numeric rows** (frame ↔ decision index ↔ metric row);
-- live-training observation stays on the read-only dashboard tab (surfaces last — no new UI in M7-0);
-- rule: screenshots support numbers; numbers stand alone; any visible disagreement between them stops the gate.
+| | Decision | Status | Evidence | Required tests | Blocks implementation? |
+|---|---|---|---|---|---|
+| **D1** | action 15, waist live from M7-0, gains (50,5), cap 120 unchanged | **ACCEPTED** | P1A (neutral ≈ zero torque), P1C (turn envelope ≥2.5× headroom, 0 falls), P2 (dead-band ⇒ S1 waist = neutral hold), `nu=0` path verified, B1 cap present | N1 + N2; S5 turn-amplitude validation vs P1C envelope at M7-4 | **Yes (freeze)** |
+| **D2** | `com_shift` ±0.070 x / ±0.040 y + waypoint frame + `d_ref` 4.0 + sampling [0.5, 3.5] m + stop band basis (block r 0.25) | **AMENDED → ACCEPTED** (adds the S2 stance-pairing rule; v1's "≥3.1 cm" restated ≥3.0 measured 3.08 cm; d_ref and sampling frozen from P3 instead of deferred) | P4 margins (x 6.50, y 3.08/6.92, single-support 2.5 cm, reach 0.045); P3 island half 12.0, corner 16.97, horizon-reach 4.0 | N2; S2 protocol tests; nav-sampler determinism test (M7-5) | **Yes (freeze)** |
+| **D3** | surgery new channels zero-init | **ACCEPTED** | verified actor/critic shapes (TanhGaussianActor (64,64), trunk/μ-head/log_std param lists) | round-trip test (now distribution-level incl. log_std) | **Yes (freeze)** |
+| **D4** | env-designated target for the first nav gate | **ACCEPTED** | P3 (`setup_place` proven; blocks parked off-island ⇒ placement mandatory) | nav-stage tests at M7-5 | No (M7-5 scope) |
+| **D5** | σ transfer policy | **AMENDED → preserved-σ slice + appended init** | per-dim `log_std` vector; `log_std_init` 0.0 (σ 1.0) vs parent learned σ ≈ 0.75–0.80 mean; re-init would silently move every skill's noise level | distribution round-trip (deterministic outputs + log_std equality on the shared slice) | **Yes (freeze)** |
+| **D6** | S4 impulse magnitudes derived at M7-3 from the scripted envelope + B1 caps | **ACCEPTED (defer as drafted)** | disturbance seams verified (`impulse_object`, `set_object_velocity`, `get_state/set_state`); caps table verified (§0.2); the reserved phase's current v\* [0.5,0,0] flagged for M7-3 redefinition | disturbance-hook tests at M7-3 | No (M7-3) |
 
-## 8. The three-operation law (architectural, never interchangeable)
-
-| Operation | What it is | Contract | Optimiser/σ/counters | Required evidence |
-|---|---|---|---|---|
-| **Resume** | continue the SAME run in the SAME run dir | unchanged | restored in full | restoration test (weights, Adam, RNG, curriculum stage); continuation telemetry |
-| **Continue-fork** | new run dir branching from a saved brain | SAME (v4↔v4) | preserved (Adam moments, σ, step/episode counters continue; run-local bookkeeping restarts) | fork-start restoration + **parent SHA unchanged after fork start** + eval-before rows + gate evals under the same protocol |
-| **Transfer-fork** | adapt to changed task/contract | may differ (e.g. v3→v4) | ported where shapes match, fresh where new; σ re-initialised to `log_std_init` (decision D5; alternatives measured later, never silently) | fingerprint subset checks + **surgery round-trip proof** (fork-moment outputs on the shared slice identical to the parent, float tolerance) + parent-under-child-task baseline + parent-protocol forgetting eval after training + child-protocol gate evals |
-
-Enforcement: the run launcher records the operation tag in run metadata (and `save_checkpoint` carries it via `extra_meta` — no format bump); every eval/trajectory row names its tag. The machinery REFUSES to attempt surgery without a `transfer_fork` tag and refuses continue-fork when fingerprints differ.
-
-**Transfer surgery spec (v3→v4 pair, the only cross-contract pair):** obs — port the trunk first-layer rows for `[0:43]` onto the new (64×68) weight; **zero-init rows [43:68]** (decision D3) so the fork-moment behaviour is exactly the parent's — the round-trip test asserts this equality. Actor output — port columns `[0:14]`, zero-init column 14 (waist). Critic — same row rule. Hidden widths unchanged ((64,64)) with the meta extension recording widths (additive field, default (64,64) for existing checkpoints).
-
-## 9. M7-0 execution plan (after approval — nothing below has started)
-
-**Pre-implementation probes (read-only, available today through the honest world API):**
-- **P1 waist capacity probe** — hold at neutral + commanded-target sweep via `set_joint_target` at candidate gains; record torque, drift, saturation attribution → freezes waist gains/caps;
-- **P2 per-joint PD tracking reference** — steady error/variance for representative hold targets on all 15 joints → the S1 calibration rows;
-- **P3 arena bounds + target-block inventory** — `world.boundaries()`, positions/sizes of the 20 in-scene blocks → freezes `d_ref` and waypoint normalisation;
-- **P4 support-hull re-verification** — extends `M7_AUDIT_PROBE.json` with hull-based margins (the x-gap between feet exists; the COM margin basis is the convex hull, stated explicitly).
-
-**Implementation (one reviewable change set, gated in two commits):**
-- **M7-0a — env contract v4:** command block + mask + `set_phase` keys (per-stage table), measured constant annex, contract fingerprint updates, meta extension; tests: append-only layout test, per-stage mask semantics, standing-equivalence neutral gate N1 (v3 fixtures on the 43-slice preserved) and N2 (standing equilibrium delta bounded by the measured waist-epsilon with stated margin over ≥ 4,800 windows), full suite ×2;
-- **M7-0b — loading law:** op tags in the run launcher + `extra_meta`, continue-fork, transfer-fork surgery + round-trip tests (both directions of the failure mode: surgery refused on non-transfer tag; round-trip equality proven), full suite ×2.
-
-B3 / b4_head1 / b4_posture1: untouched; they register later (M7-6) as read-only comparison lineages.
-
-## 10. Decisions awaiting Jamie at the M7-0 approval gate
-
-- **D1** action 15 with waist live from M7-0 (recommended; alternative = 14 now + bump at M7-4) — §2;
-- **D2** command-bound constants: `com_shift` ±0.070 m x / ±0.040 m y, agent-frame waypoint, frozen `d_ref` from P3 — §1;
-- **D3** transfer surgery new-channel init = zeros (exact fork-moment behavioural identity) — §8;
-- **D4** S6 first gate uses an ENV-DESIGNATED target block in-observation; agent-side "identify which block" (multiple candidates) is a later, separately gated upgrade — recorded boundary, not smuggled scope;
-- **D5** transfer-fork σ re-initialisation (proposed default) — §8;
-- **D6** S4 impulse magnitudes: derived at M7-3 from the scripted-controller envelope + B1 caps (not frozen now) — noted.
+**Unresolved measurements (explicit, none a freeze blocker):** (1) N2's standing-equivalence bound value (≥4,800 windows, M7-0a); (2) gate band numbers derived from P2/P4 rows with stated margins at each stage launch; (3) S5 turn-command amplitude set vs the P1C envelope (M7-4 launch); (4) stop-tolerance band from measured rows (M7-5 launch); (5) disturbance magnitude classes (M7-3).

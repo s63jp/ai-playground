@@ -1,13 +1,15 @@
-"""LocoEnv — the single authoritative locomotion RL environment (M6-B B2).
+"""LocoEnv — the single authoritative locomotion RL environment (M6-B B2 → M7-0a).
 
-Contract version 3 ("rl_env/3"): documented in full in docs/RL_ENVIRONMENT.md
-and machine-readable via observation_layout() / action_layout(); the B5 .aipg
-manifest reproduces exactly this schema. One env, one reward pipeline (rl/
-rewards.py), one curriculum mechanism (rl/curriculum.py applying phases
-through set_phase).
+Contract version 4 by default ("rl_env/4"; M7-0a per the approved freeze
+reports/M7_0_CONTRACT_FREEZE_20261118_DRAFT.md v2 + reports/M7_0A_ENV_V4_CHANGE.md),
+documented in full in docs/RL_ENVIRONMENT.md and machine-readable via
+observation_layout() / action_layout(); the B5 .aipg manifest reproduces
+exactly this schema. One env, one reward pipeline (rl/rewards.py), one
+curriculum mechanism (rl/curriculum.py applying phases through set_phase).
 
-Observation v3 (float32[43]; v3 is an APPEND-ONLY extension of v2, which was
-an APPEND-ONLY extension of v1: all v2 slices keep their meaning):
+Observation v4 (float32[68]; APPEND-ONLY over v3, which is APPEND-ONLY over
+v2 — the 43-dim v3 prefix is unchanged and bit-identical, verified by the
+N1 test):
     [0:14]   joint positions, normalized (2q - lo - hi)/(hi - lo) in [-1, 1]
     [14:28]  joint velocities, normalized  qvel / 6.0 rad/s
     [28:31]  torso up-vector, world frame (unit)
@@ -15,39 +17,29 @@ an APPEND-ONLY extension of v1: all v2 slices keep their meaning):
     [34:35]  upright margin (= torso up_z, raw)
     [35:38]  torso forward (chest) axis, world frame (unit; xmat column 1)
     [38:40]  per-foot ground-support normal force / 1000.0 N (left, right)
-    [40:43]  COMMANDED target velocity v*, WORLD frame, / 5.0 m/s (B3: the
-             movement objective the reward tracks is observed; see
-             "task conditioning" in docs/RL_ENVIRONMENT.md §1.5)
+    [40:43]  COMMANDED target velocity v*, WORLD frame, / 5.0 m/s
+    [43:58]  limb_pose_target (15, action-mapping encoding; 0 = neutral)
+    [58:60]  com_shift (2, normalized; measured anchor ± scales)
+    [60:63]  waypoint (ux, uy, d̂; yaw-only heading frame, d̂ = dist/4.0)
+    [63:64]  stop_request flag
+    [64:68]  cmd_mask: {0,1} x (limb, balance, waypoint, stop) — the stage
+             selector in-obs. Mask 0 ⇒ zeros in obs AND no reward consumes
+             the group. The ACTION space is never masked.
 
-Action (14 normalized joints, [-1, 1]) maps to PD targets
+Action (15 normalized joints, [-1, 1], NAME-ordered: the 14 legacy joints in
+unchanged order + waist_yaw at index 14) maps to PD targets
     target = lo + (a + 1) * 0.5 * (hi - lo)
 through PhysicsWorld.set_joint_target — the world's single validated
 joint-force path (B1: non-finite rejection, gain ceilings, per-joint torque
 caps, saturation attribution). The PD tracks at 500 Hz (dt 0.002 s); a
 decision is held for `action_repeat` substeps (default 10 -> 20 ms policy
-period) — decimation lives here, the world is untouched.
+period) — decimation lives here, the world is untouched. The waist carries
+the measured posture gains (50, 5) and the B1 cap 120 N·m (P1/P2).
 
-Return protocol changed at B2 (documented migration, gym-style):
-    step(action) -> (obs, reward, terminated, truncated, info)
-- terminated: the episode ended for a PHYSICAL reason — the figure fell
-  (agent_fallen truth) or the window is FAULTED (a MuJoCo mjWARN fired or the
-  observation went non-finite; B1 semantics, reward zeroed, excluded from
-  training data by contract).
-- truncated: the time budget (max_steps decisions) ran out.
-
-B1 boundary guards preserved unchanged:
-- non-finite / wrong-shape actions are REJECTED (ActionError) before any
-  mapping; finite out-of-range actions are CLIPPED into [-1, 1] with per-
-  episode clip statistics (action_clipping()); invalid actions are never
-  silently converted into valid ones;
-- safety events are observable via the world safety log/stats, and MuJoCo
-  numerical warnings mark transitions FAULTED.
-
-Reset: PhysicsWorld is rebuilt per episode (project convention — no state
-leakage). reset(seed=None) is fully deterministic; with a seed it draws the
-start position from a small jittered box through the world's own setup
-mechanism (initial-configuration class, documented; no mid-episode qpos/qvel
-writes anywhere in this env — the MuJoCo solver produces all motion).
+contract_version 3 (legacy, read-only evaluation surfaces) reproduces the
+pre-v4 tree bit-identically: obs 43, action 14 (the waist again a
+conventional posture hinge), no command block, no command setters — the
+historical lineages replay through the exact old contract.
 """
 
 from __future__ import annotations
@@ -59,9 +51,27 @@ from ..world import PhysicsWorld
 from ..world.physics import ActionError
 
 from .rewards import (COMPONENT_KEYS, DEFAULTS, MeasuredStep, compute_reward,
-                      heading_progress_raw)
+                      heading_progress_raw, COM_ANCHOR_XY, COM_SHIFT_SCALE_XY,
+                      WAYPOINT_D_REF, LIMB_GROUPS)
 
-CONTRACT_VERSION = 3
+CONTRACT_VERSION = 4
+# M7-0a (reports/M7_0A_ENV_V4_CHANGE.md): the env speaks rl_env/4 by default.
+# contract_version 3 remains available as the read-only legacy evaluation mode
+# (bit-identical to the pre-v4 tree — playback of the historical lineages).
+_LEGACY_CONTRACT_VERSION = 3
+
+# The frozen NAME-ORDERED joint list, the v2-freeze §2 law. v3's 14 are the
+# exact model-enumeration order on this rig (verified twice, probe +
+# construction test); the waist is APPENDED at 14 and is never taken from
+# model order (waist_yaw is MODEL joint index 3 — the root's rotational dof —
+# so naive enumeration would put it first and break the append-only prefix).
+_V3_JOINT_ORDER = (
+    "spine_L2", "left_shoulder", "left_elbow", "right_shoulder", "right_elbow",
+    "head_pitch", "head_yaw", "head_roll", "left_hip", "left_knee", "left_ankle",
+    "right_hip", "right_knee", "right_ankle",
+)
+_V4_JOINT_ORDER = _V3_JOINT_ORDER + ("waist_yaw",)
+_COMMAND_GROUPS = ("limb", "balance", "waypoint", "stop")
 
 # Fixed normalisation constants (rl.observation in config; documented). Vel
 # scales come from measured scripting envelopes: knee peak 4.83 rad/s during
@@ -73,13 +83,19 @@ _CONTACT_FORCE_SCALE = 1000.0  # N per obs unit
 
 
 class LocoEnv:
-    obs_dim = 14 + 14 + 3 + 3 + 1 + 3 + 2 + 3   # 43, layout v3 (v2 40 + command)
-    action_dim = 14
+    # v4 default (rl_env/4): 43 (v3, unchanged prefix) + 15 limb targets + 2
+    # com_shift + 3 waypoint + 1 stop + 4 cmd_mask. v3-mode instances carry
+    # 43 / 14 / version 3 (see __init__).
+    obs_dim = 43 + 15 + 2 + 3 + 1 + 4   # 68, layout v4
+    action_dim = 15
     contract_version = CONTRACT_VERSION
 
-    # Passive posture hinges excluded from the action space (held by the
-    # conventional PD registered at reset): waist_yaw, left/right_foot_yaw.
-    _EXCLUDED = ("left_foot_yaw", "right_foot_yaw", "waist_yaw")
+    # v4 passive posture hinges excluded from the action space (held by the
+    # conventional PD registered at reset): left/right_foot_yaw only — the
+    # waist JOINS the policy under v4 (frozen name order above). The v3
+    # legacy mode keeps its third passive hinge (waist_yaw) via _EXCLUDED_V3.
+    _EXCLUDED = ("left_foot_yaw", "right_foot_yaw")
+    _EXCLUDED_V3 = ("left_foot_yaw", "right_foot_yaw", "waist_yaw")
 
     def __init__(self, cfg: dict | None = None):
         cfg = cfg or {}
@@ -92,6 +108,14 @@ class LocoEnv:
         full_cfg = load_config(None, overrides=overrides)
         self.cfg = full_cfg
         self._rl_cfg = dict(full_cfg.get('rl') or {})
+        # ---- contract switch (M7-0a): 4 = rl_env/4 default; 3 = legacy ----
+        self.contract_version = int(self._rl_cfg.get('contract_version',
+                                                     CONTRACT_VERSION))
+        if self.contract_version not in (CONTRACT_VERSION,
+                                         _LEGACY_CONTRACT_VERSION):
+            raise ValueError(
+                f"unsupported contract_version {self.contract_version}; "
+                f"allowed: {(_LEGACY_CONTRACT_VERSION, CONTRACT_VERSION)}")
         self.world = PhysicsWorld(cfg=full_cfg)
         # Curriculum state: assistance lives in THIS env (joint-space PD target
         # blending; never teleports, never direct qpos writes). Base gravity
@@ -111,32 +135,58 @@ class LocoEnv:
         self._contact_force_scale = float(obs_cfg.get('contact_force_scale',
                                                       _CONTACT_FORCE_SCALE))
         self._start_jitter = float(self._rl_cfg.get('start_pose_jitter', 0.15))
-        # Enumerate hinge joints for the humanoid; exclude movable-object
-        # freejoint naming ('j:<oid>') and the agent root slide joints
-        # (agent_x/y/z). Deterministic model order, probe-verified:
-        # [spine_L2, l_shoulder, l_elbow, r_shoulder, r_elbow, head_pitch,
-        #  head_yaw, head_roll, l_hip, l_knee, l_ankle, r_hip, r_knee, r_ankle]
-        try:
-            import mujoco as _mj
-            hinge_code = int(_mj.mjtJoint.mjJNT_HINGE)
-        except Exception:
-            hinge_code = 0
-        m = self.world.m
-        joint_names = []
-        for i in range(m.njnt):
-            if int(m.jnt_type[i]) == hinge_code:
-                try:
-                    name = _mj.mj_id2name(m, int(_mj.mjtObj.mjOBJ_JOINT), i)
-                except Exception:
-                    name = None
-                if isinstance(name, (bytes, bytearray)):
-                    name = name.decode()
-                if name and not str(name).startswith("j:"):
-                    if name in self._EXCLUDED:
-                        continue
-                    joint_names.append(str(name))
-        self.joint_names = joint_names[:14]
-        m = self.world.m
+        self._is_v3 = self.contract_version == _LEGACY_CONTRACT_VERSION
+        if self._is_v3:
+            # ---- legacy mode: the exact pre-v4 construction, untouched. ----
+            self.joint_names = list(_V3_JOINT_ORDER)
+            self.action_dim = 14
+            self.obs_dim = 43
+            self._obs_joint_names = self.joint_names   # the same list (obs = action joints)
+            self._EXCL = self._EXCLUDED_V3
+            self._gains = {
+                "left_hip": (60.0, 5.0), "right_hip": (60.0, 5.0),
+                "left_knee": (60.0, 5.0), "right_knee": (60.0, 5.0),
+                "left_ankle": (25.0, 1.0), "right_ankle": (25.0, 1.0),
+                "spine_L2": (35.0, 4.0),
+                "left_shoulder": (25.0, 3.0), "right_shoulder": (25.0, 3.0),
+                "left_elbow": (10.0, 2.0), "right_elbow": (10.0, 2.0),
+                "head_pitch": (8.0, 1.0), "head_yaw": (8.0, 1.0),
+                "head_roll": (8.0, 1.0),
+            }
+            self._posture_joints = ("waist_yaw", "left_foot_yaw", "right_foot_yaw")
+            self._posture_gains = {"waist_yaw": (50.0, 5.0),
+                                   "left_foot_yaw": (8.0, 1.0),
+                                   "right_foot_yaw": (8.0, 1.0)}
+        else:
+            # ---- v4: name-ordered 15-joint action; waist is POLICY. ----
+            self.joint_names = list(_V4_JOINT_ORDER)
+            # The OBS slices stay the fixed 14-name layout in BOTH modes: the
+            # v3 prefix [0:43] is bit-identical forever and the WAIST was
+            # never observed in v3 (its measured position reaches the reward
+            # pipeline, never the observation — measured state ≠ commanded
+            # obs). The action list is the one that grows.
+            self._obs_joint_names = list(_V3_JOINT_ORDER)
+            self.action_dim = 15
+            self.obs_dim = 68
+            self._EXCL = self._EXCLUDED
+            self._gains = {
+                "left_hip": (60.0, 5.0), "right_hip": (60.0, 5.0),
+                "left_knee": (60.0, 5.0), "right_knee": (60.0, 5.0),
+                "left_ankle": (25.0, 1.0), "right_ankle": (25.0, 1.0),
+                "spine_L2": (35.0, 4.0),
+                "left_shoulder": (25.0, 3.0), "right_shoulder": (25.0, 3.0),
+                "left_elbow": (10.0, 2.0), "right_elbow": (10.0, 2.0),
+                "head_pitch": (8.0, 1.0), "head_yaw": (8.0, 1.0),
+                "head_roll": (8.0, 1.0),
+                "waist_yaw": (50.0, 5.0),   # measured prior P1A/P2; N2 re-measures
+            }
+            self._posture_joints = ("left_foot_yaw", "right_foot_yaw")
+            self._posture_gains = {"left_foot_yaw": (8.0, 1.0),
+                                   "right_foot_yaw": (8.0, 1.0)}
+        # Enumerate-or-verify: in legacy mode the frozen 14-name list MUST
+        # equal the model enumeration (drift detector for the rig itself).
+        if self._is_v3:
+            self._verify_joint_enumeration()
         # Joint ranges: read the REAL limited-joint ranges from the model;
         # fallback only for unlimited joints.
         self.joint_range = {}
@@ -147,33 +197,18 @@ class LocoEnv:
                                           float(self.world.m.jnt_range[j.id][1]))
             else:
                 self.joint_range[name] = (-np.pi / 2, np.pi / 2)
-        # Register PD controllers with locomotion-grade gains. The world's
-        # set_joint_target default (kp 15) is far too soft for load-bearing
-        # joints. These are controller parameters through the same honest
-        # joint-target pathway (no qpos/qvel writes); gains are part of the
-        # action contract (action_layout()).
-        self._gains = {
-            "left_hip": (60.0, 5.0), "right_hip": (60.0, 5.0),
-            "left_knee": (60.0, 5.0), "right_knee": (60.0, 5.0),
-            "left_ankle": (25.0, 1.0), "right_ankle": (25.0, 1.0),
-            "spine_L2": (35.0, 4.0),
-            "left_shoulder": (25.0, 3.0), "right_shoulder": (25.0, 3.0),
-            "left_elbow": (10.0, 2.0), "right_elbow": (10.0, 2.0),
-            "head_pitch": (8.0, 1.0), "head_yaw": (8.0, 1.0),
-            "head_roll": (8.0, 1.0),
-        }
-        # Passive posture hinges: fixed conventional PD targets (rig posture
-        # the policy does not command; same magnitudes the gait controller
-        # uses for these families). Registered at every reset, tagged
-        # source="env_posture" so saturation attribution can separate them
-        # from the policy's demands.
-        self._posture_joints = ("waist_yaw", "left_foot_yaw", "right_foot_yaw")
-        self._posture_gains = {"waist_yaw": (50.0, 5.0),
-                               "left_foot_yaw": (8.0, 1.0),
-                               "right_foot_yaw": (8.0, 1.0)}
-        # dof addresses for the 14 policy joints (effort measurement)
+        # dof addresses for the policy joints (effort measurement; 14 legacy
+        # / 15 with the waist under v4 — the N2 gate measures the growth).
         self._dofadr = [self._dof_of(n) for n in self.joint_names]
         self._collect_bodies()
+        # ---- M7-0a v4 command state (commands are STAGE state; reset() does
+        # not clear them — set_phase rewrites them non-cumulatively, absent ⇒
+        # zeros. v3-mode envs reject the setters: that contract has no
+        # command block.) ----
+        self._commands = {"mask": (0, 0, 0, 0), "limb_targets": None,
+                          "com_shift": (0.0, 0.0), "waypoint": (0.0, 0.0, 0.0),
+                          "stop": 0, "limb_group": "all"}
+        self._target_point = None   # env-side target point, metres world xyz
         self._upright_window = deque(maxlen=25)  # stability window (decisions)
         for name in self.joint_names:
             kp, kd = self._gains.get(name, (15.0, 1.5))
@@ -188,6 +223,149 @@ class LocoEnv:
     def _dof_of(self, name: str) -> int:
         j = self.world.m.joint(name)
         return int(j.dofadr[0])
+
+    def _verify_joint_enumeration(self) -> None:
+        """M7-0a drift detector: the frozen 14-name v3 order MUST equal the
+        model-enumeration order on this rig (hinges minus the movable objects
+        and the excluded passive hinges). A rig change that reorders the
+        policy hinges fails here instead of silently changing the contract."""
+        import mujoco as _mj
+        hinge_code = int(_mj.mjtJoint.mjJNT_HINGE)
+        m = self.world.m
+        names = []
+        for i in range(m.njnt):
+            if int(m.jnt_type[i]) == hinge_code:
+                name = _mj.mj_id2name(m, int(_mj.mjtObj.mjOBJ_JOINT), i)
+                if isinstance(name, (bytes, bytearray)):
+                    name = name.decode()
+                if name and not str(name).startswith("j:") and \
+                        name not in self._EXCL:
+                    names.append(str(name))
+        if tuple(names[:14]) != tuple(_V3_JOINT_ORDER):
+            raise RuntimeError(
+                "rig joint order drifted from the frozen v3 contract: "
+                f"model {names[:14]} != frozen {_V3_JOINT_ORDER}")
+
+    def _com_xy(self) -> tuple:
+        """Full-body COM xy (metres, world): every rig body's mass ⊗ xipos,
+        INCLUDING the agent root column (the mass the feet carry — the P4
+        method). v4 measurement only."""
+        m, d = self.world.m, self.world.d
+        mass, acc = 0.0, np.zeros(3)
+        for bid in self._rig_body_ids:   # includes the agent root column
+            bmass = float(m.body_mass[bid])
+            mass += bmass
+            acc += bmass * np.asarray(d.xipos[bid], dtype=float)
+        if mass <= 0.0:
+            return (0.0, 0.0)
+        com = acc / mass
+        return (float(com[0]), float(com[1]))
+
+    def _target_dist(self) -> float | None:
+        """Horizontal (xy) distance from the agent root to the env target
+        point, or None when no target point exists (M7-0a default; M7-5
+        places targets)."""
+        if self._target_point is None:
+            return None
+        p = np.asarray(self.world.agent_pos(), dtype=float)[:2]
+        t = np.asarray(self._target_point, dtype=float)[:2]
+        return float(np.linalg.norm(t - p))
+
+    def set_target_point(self, xyz) -> None:
+        """Set (or clear, None) the env-side target point, metres world xyz.
+
+        The placement itself rides setup mechanics (M7-5: setup_place inside
+        reset); this state EXISTS at M7-0a so the approach/stop reward terms
+        have their engine-measured quantities and tests can exercise them.
+        v3-mode envs refuse (that contract has no waypoint command).
+        """
+        if self._is_v3:
+            raise ValueError("set_target_point requires contract version 4")
+        if xyz is None:
+            self._target_point = None
+            return
+        t = np.asarray(xyz, dtype=float).reshape(3)
+        if not np.all(np.isfinite(t)):
+            raise ValueError("target_point must be finite")
+        self._target_point = (float(t[0]), float(t[1]), float(t[2]))
+
+    def set_commands(self, mask=None, limb_targets=None, com_shift=None,
+                     waypoint=None, stop=None, limb_group=None) -> None:
+        """Set the v4 command state (the obs command block + reward gates).
+
+        All values are VALIDATED loudly: mask = 4 bits (limb, balance,
+        waypoint, stop) in {0,1}; limb_targets = 15 normalized values in
+        [−1, 1] (action-mapping encoding; the waist at index 14); com_shift =
+        2 normalized values in [−1, 1] (metres via COM_SHIFT_SCALE_XY from
+        the measured anchor); waypoint = (ux, uy, d̂); stop ∈ {0, 1};
+        limb_group ∈ LIMB_GROUPS. Partial updates update only what is given.
+        The action space is NEVER masked: commands gate observation zeros and
+        reward consumption only (the v2 freeze §1 semantics). v3-mode envs
+        refuse: that contract has no command block.
+        """
+        if self._is_v3:
+            raise ValueError("set_commands requires contract version 4")
+        if mask is not None:
+            m = tuple(int(x) for x in mask)
+            if len(m) != 4 or any(x not in (0, 1) for x in m):
+                raise ValueError("mask must be 4 bits in {0,1} "
+                                 "(limb, balance, waypoint, stop)")
+            self._commands["mask"] = m
+        if limb_targets is not None:
+            t = np.asarray(limb_targets, dtype=float).reshape(-1)
+            if t.shape != (15,) or not np.all(np.isfinite(t)) or \
+                    np.any(np.abs(t) > 1.0):
+                raise ValueError(
+                    "limb_targets must be 15 finite normalized values in [−1,1]")
+            self._commands["limb_targets"] = tuple(float(x) for x in t)
+        if com_shift is not None:
+            c = np.asarray(com_shift, dtype=float).reshape(-1)
+            if c.shape != (2,) or not np.all(np.isfinite(c)) or \
+                    np.any(np.abs(c) > 1.0):
+                raise ValueError(
+                    "com_shift must be 2 finite normalized values in [−1,1] "
+                    "(±0.070 m x / ±0.040 m y via COM_SHIFT_SCALE_XY)")
+            self._commands["com_shift"] = (float(c[0]), float(c[1]))
+        if waypoint is not None:
+            w = np.asarray(waypoint, dtype=float).reshape(-1)
+            if w.shape != (3,) or not np.all(np.isfinite(w)) or \
+                    float(w[2]) < 0.0:
+                raise ValueError(
+                    "waypoint must be (ux, uy, d̂), finite, d̂ ≥ 0")
+            self._commands["waypoint"] = (float(w[0]), float(w[1]), float(w[2]))
+        if stop is not None:
+            s = int(stop)
+            if s not in (0, 1):
+                raise ValueError("stop must be 0 or 1")
+            self._commands["stop"] = s
+        if limb_group is not None:
+            if limb_group not in LIMB_GROUPS:
+                raise ValueError(
+                    f"limb_group must be one of {sorted(LIMB_GROUPS)}")
+            self._commands["limb_group"] = limb_group
+
+    def _command_block_obs(self) -> np.ndarray:
+        """The 25-dim v4 command block: masked groups emit their command
+        values, inactive groups emit zeros (the policy reads zeros; the value
+        semantics live in rewards/commands, never in the obs encoding)."""
+        mask = self._commands["mask"]
+        limb = np.zeros(15, dtype=np.float32)
+        if mask[0] and self._commands["limb_targets"] is not None:
+            limb = np.asarray(self._commands["limb_targets"],
+                              dtype=np.float32)
+        balance = np.zeros(2, dtype=np.float32)
+        if mask[1]:
+            balance = np.asarray(self._commands["com_shift"],
+                                 dtype=np.float32)
+        wp = np.zeros(3, dtype=np.float32)
+        if mask[2]:
+            wp = np.asarray(self._commands["waypoint"], dtype=np.float32)
+        stop = np.zeros(1, dtype=np.float32)
+        if mask[3]:
+            stop = np.asarray([float(self._commands["stop"])],
+                              dtype=np.float32)
+        return np.concatenate([limb, balance, wp, stop,
+                               np.asarray(mask, dtype=np.float32)])
 
     def _collect_bodies(self) -> None:
         """Cache the default agent's rig subtree (self-pair contact filter)
@@ -276,6 +454,30 @@ class LocoEnv:
         if unknown:
             raise ValueError(f"unknown reward coefficients: {sorted(unknown)}")
         self._reward_cfg = {**rl_cfg_reward_defaults(self._rl_cfg), **rc}
+        if 'commands' in phase:
+            # M7-0a: optional per-stage command group (mask bits + values).
+            # Non-cumulative like every phase knob; partial dicts fill the
+            # rest with the inactive defaults.
+            if self._is_v3:
+                raise ValueError(
+                    "phase 'commands' requires contract version 4")
+            c = phase['commands']
+            if not isinstance(c, dict):
+                raise TypeError("phase 'commands' must be a dict")
+            self.set_commands(mask=c.get('mask', (0, 0, 0, 0)),
+                              limb_targets=c.get('limb_targets'),
+                              com_shift=c.get('com_shift'),
+                              waypoint=c.get('waypoint'),
+                              stop=c.get('stop'),
+                              limb_group=c.get('limb_group', 'all'))
+        elif not self._is_v3:
+            # non-cumulative: a phase without commands ⇒ zero command state
+            # (mask all off) — the standing/controlled/sustained phases are
+            # exactly the v3 behaviour still.
+            self._commands = {"mask": (0, 0, 0, 0), "limb_targets": None,
+                              "com_shift": (0.0, 0.0),
+                              "waypoint": (0.0, 0.0, 0.0), "stop": 0,
+                              "limb_group": "all"}
         if 'max_steps' in phase:
             self.max_steps = int(phase['max_steps'])
 
@@ -385,6 +587,7 @@ class LocoEnv:
                     self._last_targets[name] = blended
         # ---- advance simulation: `action_repeat` substeps, PD tracks each ----
         pos_before = np.asarray(self.world.agent_pos(), dtype=float).copy()
+        dist_before = self._target_dist()          # v4 target-point seam
         effort_j = 0.0
         dt = float(self.world.m.opt.timestep)
         fault = None
@@ -448,13 +651,34 @@ class LocoEnv:
             chest_mat = np.asarray(self.world.d.xmat[
                 int(self.world.m.body('spine_L2').id)], dtype=np.float64)
             chest_up_z = float(chest_mat.reshape(3, 3)[2, 2])
+            # M7-0a v4 engine measurements (None in v3 mode → components 0.0):
+            # full-body COM xy (P4 method), normalized joint positions over
+            # the contract's joint list, and target-point distances.
+            if self._is_v3:
+                com_xy_v4, jpos_norm = None, None
+            else:
+                com_xy_v4 = self._com_xy()
+                jpos_norm = np.zeros(len(self.joint_names), dtype=np.float64)
+                for i, name in enumerate(self.joint_names):
+                    jj = self.world.m.joint(name)
+                    lo, hi = self.joint_range[name]
+                    span = (hi - lo) if (hi - lo) != 0.0 else 1.0
+                    qposadr = int(jj.qposadr[0])
+                    jpos_norm[i] = (float(self.world.d.qpos[qposadr])
+                                    - lo) / span * 2.0 - 1.0
+            dist_after = self._target_dist()
             ms = MeasuredStep(
                 position_before=pos_before, position_after=pos_after,
                 velocity=vel, up_z=up_z, effort_j=effort_j,
                 window_s=self.action_repeat * dt, fell=fell,
                 up_z_window=list(self._upright_window),
                 chest_up_z=chest_up_z,
-                target_velocity=tuple(float(x) for x in self._target_vel))
+                target_velocity=tuple(float(x) for x in self._target_vel),
+                commands={**self._commands},
+                joint_pos_norm=(None if jpos_norm is None else jpos_norm),
+                com_xy=com_xy_v4,
+                dist_to_target=(None if dist_before is None or dist_after is None
+                                else (float(dist_before), float(dist_after))))
             reward, components = compute_reward(ms, action, self.prev_action,
                                                 self._reward_cfg)
         self.prev_action = action.copy()
@@ -517,12 +741,14 @@ class LocoEnv:
         return (out["left"], out["right"])
 
     def _get_obs(self) -> np.ndarray:
-        # joint positions and velocities from world data using joint names
+        # joint positions and velocities from world data — the fixed 14-name
+        # layout in BOTH contract modes (the v3 prefix [0:43] is forever;
+        # the waist's measured position is reward-side only, never observed).
         qpos = self.world.d.qpos.astype(np.float32)
         qvel = self.world.d.qvel.astype(np.float32)
         joint_pos = []
         joint_vel = []
-        for name in self.joint_names:
+        for name in self._obs_joint_names:
             j = self.world.m.joint(name)
             pos_idx = int(j.qposadr[0])
             vel_idx = int(j.dofadr[0])
@@ -555,6 +781,9 @@ class LocoEnv:
                    / np.float32(self._root_vel_scale))
         obs = np.concatenate([joint_pos, joint_vel, torso_up, torso_vel,
                               upright_margin, torso_fwd, contacts, command])
+        if not self._is_v3:
+            # rl_env/4 APPEND-ONLY: the command block after the fixed v3 43.
+            obs = np.concatenate([obs, self._command_block_obs()])
         return obs.astype(np.float32)
 
     # ------------------------------------------------------------ diagnostics
@@ -593,11 +822,7 @@ class LocoEnv:
     # ------------------------------------------------------------ schema
     def observation_layout(self) -> dict:
         """Machine-readable observation contract (the .aipg manifest carries it)."""
-        return {
-            "layout_version": CONTRACT_VERSION,
-            "dim": self.obs_dim,
-            "dtype": "float32",
-            "sections": [
+        sections = [
                 {"name": "joint_pos", "slice": [0, 14], "unit": "normalized",
                  "note": "(q - lo)/(hi - lo)*2 - 1; order = joint_order"},
                 {"name": "joint_vel", "slice": [14, 28], "unit": "rad/s",
@@ -620,10 +845,54 @@ class LocoEnv:
                          f"frame, / {self._root_vel_scale} (same scale as "
                          f"torso_lin_vel); task conditioning (B3); APPEND-only "
                          f"slice over v2"},
-            ],
-            "joint_order": list(self.joint_names),
-            "joint_ranges_rad": {n: [float(lo), float(hi)]
-                                 for n, (lo, hi) in self.joint_range.items()},
+        ]
+        command_block = None
+        if not self._is_v3:
+            sections = sections + [
+                {"name": "limb_pose_target", "slice": [43, 58], "unit": "normalized",
+                 "note": "commanded pose targets, the ACTION mapping constants: "
+                         "target = lo + (n+1)/2*(hi-lo), n in [-1,1]; 0 = neutral "
+                         "(0 rad, symmetric ranges); order = joint_order; "
+                         "inactive (mask bit 0) = zeros"},
+                {"name": "com_shift", "slice": [58, 60], "unit": "normalized",
+                 "note": f"commanded COM shift (x, y) normalized n in [-1,1] = "
+                         f"n * {COM_SHIFT_SCALE_XY[0]} / {COM_SHIFT_SCALE_XY[1]} m "
+                         f"from the measured standing anchor {COM_ANCHOR_XY} m "
+                         "(P4); inactive = zeros"},
+                {"name": "waypoint", "slice": [60, 63], "unit": "normalized",
+                 "note": f"(ux, uy, dh): direction in the yaw-only heading frame "
+                         f"(torso col-1 horizontal projection + left-hand "
+                         f"perpendicular), dh = dist/{WAYPOINT_D_REF} m; "
+                         "inactive = zeros"},
+                {"name": "stop_request", "slice": [63, 64], "unit": "flag",
+                 "note": "{0,1}: park near the waypoint; inactive = 0"},
+                {"name": "cmd_mask", "slice": [64, 68], "unit": "flags",
+                 "note": "the stage selector in-obs: {0,1} x (limb, balance, "
+                         "waypoint, stop), fixed order; no task one-hot; "
+                         "gate = obs zeros + reward consumption ONLY — the "
+                         "action space is never masked (M7-0 freeze §1)"},
+            ]
+            command_block = {
+                "mask_order": list(_COMMAND_GROUPS),
+                "limb_encoding": "same as action mapping (normalized targets)",
+                "limb_targets_order": list(self.joint_names) if not self._is_v3
+                                      else None,
+                "limb_group_index": {k: list(v) for k, v in LIMB_GROUPS.items()},
+                "com_shift_anchor_xy_m": list(COM_ANCHOR_XY),
+                "com_shift_scale_xy_m": list(COM_SHIFT_SCALE_XY),
+                "waypoint_d_ref_m": WAYPOINT_D_REF,
+                "waypoint_frame": "yaw-only heading frame (heading-invariant)",
+                "schedules": "stage-defined, seeded, deterministic episode data",
+            }
+        out = {
+            "layout_version": self.contract_version,
+            "dim": self.obs_dim,
+            "dtype": "float32",
+            "sections": sections,
+            "joint_order": list(self._obs_joint_names),
+            "joint_ranges_rad": {n: [float(self.joint_range[n][0]),
+                                     float(self.joint_range[n][1])]
+                                 for n in self._obs_joint_names},
             "normalisation": {
                 "joint_pos": "min-max to [-1,1] per joint range",
                 "joint_vel": f"/ {_JOINT_VEL_SCALE}",
@@ -631,6 +900,8 @@ class LocoEnv:
                 "contact_force": f"/ {_CONTACT_FORCE_SCALE}",
                 "command": f"/ {_ROOT_VEL_SCALE} (root_vel_scale; matches torso_lin_vel)",
                 "unit_vectors_up_fwd_and_margin": "none",
+                "command_block": " limb targets normalized [-1,1]; com_shift [-1,1]; "
+                                 "waypoint unitless; stop flag; mask bits",
             },
             "command_frame": "world",
             "fault_semantics": {
@@ -638,11 +909,14 @@ class LocoEnv:
                 "mjwarn_during_window": "transition FAULTED, zeroed, terminated",
             },
         }
+        if command_block is not None:
+            out["command_block"] = command_block
+        return out
 
     def action_layout(self) -> dict:
         """Machine-readable action contract (the .aipg manifest carries it)."""
         return {
-            "layout_version": CONTRACT_VERSION,
+            "layout_version": self.contract_version,
             "action_dim": self.action_dim,
             "encoding": "joint_targets_normalized",
             "mapping": "target = lo + (a + 1)*0.5*(hi - lo)",

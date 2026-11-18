@@ -29,14 +29,22 @@ def _zero(env):
 
 # ------------------------------------------------------------ v3 append-only
 def test_obs_v3_contract_shape_and_version():
-    assert LocoEnv.obs_dim == 43
-    assert LocoEnv.contract_version == 3
+    # M7-0a: the v3 CONTRACT persists as the read-only legacy mode; the
+    # default is v4 with the v3 43 bit-preserved as a strict prefix.
+    assert LocoEnv.obs_dim == 68
+    assert LocoEnv.contract_version == 4
     env = LocoEnv()
     layout = env.observation_layout()
-    assert layout["layout_version"] == 3 and layout["dim"] == 43
+    assert layout["layout_version"] == 4 and layout["dim"] == 68
+    legacy = LocoEnv(cfg={"rl": {"contract_version": 3}})
+    ll = legacy.observation_layout()
+    assert ll["layout_version"] == 3 and ll["dim"] == 43
     assert layout["command_frame"] == "world"
-    cmd = layout["sections"][-1]
-    assert cmd["name"] == "command" and cmd["slice"] == [40, 43]
+    # v4: the last section is the command block mask; the v3-era command
+    # section keeps its slice at [40, 43]; the legacy layout still ends at it
+    assert layout["sections"][-1]["name"] == "cmd_mask"         and layout["sections"][-1]["slice"] == [64, 68]
+    assert layout["sections"][7]["name"] == "command"         and layout["sections"][7]["slice"] == [40, 43]
+    assert ll["sections"][-1]["name"] == "command"         and ll["sections"][-1]["slice"] == [40, 43]
 
 
 def test_obs_v3_is_append_only_full_semantic_recheck():
@@ -50,7 +58,7 @@ def test_obs_v3_is_append_only_full_semantic_recheck():
     d = env.world.d
     # joint sections by the documented formulas
     jp, jv = [], []
-    for name in env.joint_names:
+    for name in env._obs_joint_names:   # the OBS layout is the fixed 14
         j = m.joint(name)
         lo, hi = env.joint_range[name]
         span = (hi - lo) if (hi - lo) != 0 else 1.0
@@ -69,13 +77,15 @@ def test_obs_v3_is_append_only_full_semantic_recheck():
         + [float(mat3[2, 2])]
         + [float(x) for x in mat3[:, 1]]
         + [cl / 1000.0, cr / 1000.0], dtype=np.float32)
-    assert obs.shape == (43,)
+    assert obs.shape == (68,)
     assert np.allclose(obs[0:40], expect, atol=1e-5), \
-        "a v2 slice changed its meaning under v3"
-    # and the v3 append is exactly the command / scale
+        "a v2 slice changed its meaning under v4 (append-only)"
+    # the v3 append is exactly the commanded velocity / scale (unchanged)
     assert np.allclose(obs[40:43],
                        np.asarray(env.target_velocity, dtype=np.float32) / np.float32(5.0),
                        atol=1e-6)
+    # and the v4 block reads zeros with no commands (M7-0a)
+    assert np.all(obs[43:68] == 0.0)
 
 
 # ------------------------------------------------------------ command observability

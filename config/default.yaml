@@ -194,7 +194,11 @@ ml:
 # constant in playground/rl/rewards.py + env.py; this block makes runs
 # reproducible. Units: m, s, rad/s, N.
 rl:
-  contract_version: 2
+  contract_version: 4    # rl_env/4 (M7-0a): obs 68 / action 15; value 3 selects
+                         # the read-only legacy v3 mode (43/14) for replaying the
+                         # historical lineages. The old '2' was a dead B1-era
+                         # remnant this key never expressed (the code ruled; now it
+                         # is live and truthful).
   action_repeat: 10          # decisions = 10 x dt (0.002) = 20 ms policy period; PD still 500 Hz
   max_episode_steps: 400     # decision budget per episode (400 x 20 ms = 8 s benchmark horizon)
   start_pose_jitter: 0.15    # seeded reset start-position jitter box (+-m; spawn area is clear)

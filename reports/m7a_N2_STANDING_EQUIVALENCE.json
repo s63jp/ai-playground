@@ -1,0 +1,44 @@
+{
+  "probe": "m7_0a_n2_standing_equivalence",
+  "version": 2,
+  "date": "2026-11-18",
+  "windows": 4800,
+  "seed": 20261117,
+  "phase": {
+    "gravity_scale": 1.0,
+    "upright_assist": 0.6,
+    "max_steps": 400,
+    "target_velocity": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "results": {
+    "obs_prefix_bit_identity": true,
+    "obs_diff_examples": [],
+    "effort_relation_violations": 0,
+    "effort_relation_examples": [],
+    "reward_per_window": 2.497231,
+    "effort_total_j_v3": 0.000641863,
+    "effort_total_j_v4": 0.000641863,
+    "effort_delta_j": 0.0,
+    "falls_v3": 0,
+    "falls_v4": 0,
+    "faulted_windows_v4": 0,
+    "completed_episodes_v4": 12,
+    "symmetric_contact_windows": 31,
+    "waist_row_v4": {
+      "qpos_absmax": 2.4262278294333495e-11,
+      "qvel_absmax": 1.2008499308344573e-09,
+      "torque_max": 7.227228617332161e-09
+    },
+    "waist_pd_source": "neural_policy",
+    "drift_v4_last_episode_m": 0.01
+  },
+  "verdict": {
+    "gate1_prefix_unchanged": true,
+    "gate2_no_unintended_waist_motion": true,
+    "gate3_standing_equivalence_4800w": true
+  }
+}

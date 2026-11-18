@@ -33,7 +33,7 @@ import numpy as np
 SPEC_VERSION = 1
 FRAME_VERSION = 1
 
-MAX_POLICY_JOINTS = 14
+MAX_POLICY_JOINTS = 15   # M7-0a v4: the policy action list grew 14 -> 15
 
 
 # ------------------------------------------------------------ small helpers

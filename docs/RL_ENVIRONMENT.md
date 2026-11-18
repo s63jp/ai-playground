@@ -1,4 +1,4 @@
-# M6-B — The RL Environment Contract (`rl_env/3`)
+# M6-B — The RL Environment Contract (`rl_env/3` → `rl_env/4`, M7-0a)
 
 **Stage B2 document, extended at B3 for observation contract v3 (task
 conditioning) and the curriculum stage-direction correction. Scope:
@@ -11,7 +11,8 @@ One environment, one reward pipeline, one curriculum mechanism:
 
 | Concern | Authority |
 |---|---|
-| Environment | `playground/rl/env.py` — `LocoEnv` (contract version 2) |
+| Environment | `playground/rl/env.py` — `LocoEnv` (contract version 4 since M7-0a; version 3 remains as the read-only legacy mode) |
+| M7-0a contract freeze | `reports/M7_0_CONTRACT_FREEZE_20261118_DRAFT.md` v2 (approved design) + `reports/M7_0A_ENV_V4_CHANGE.md` (implementation spec + exact reward equations) |
 | Reward | `playground/rl/rewards.py` — `compute_reward(MeasuredStep) -> (total, components)` |
 | Curriculum | `playground/rl/curriculum.py` — `Curriculum` + `DEFAULT_STAGES`, applied through `LocoEnv.set_phase` |
 
@@ -45,7 +46,8 @@ velocity ("task conditioning"; see §1.5). Section table from
 | 7 | 38–40 | `foot_ground_force` | N ÷ 1000 (left, right) | ground-support normal force under each foot: contacts whose counterpart body is **outside this rig** (self-pairs are excluded — see §1.3) and with \|contact normal z\| > 0.7 (the same support rule `PhysicsWorld._post_step` uses for `grounded`); forces summed via `mj_contactForce`, snapshot at the decision boundary |
 | 8 | 40–43 | `command` | m/s ÷ 5.0, WORLD frame (v3, B3) | the commanded target velocity `v*` that the reward tracks — the movement objective itself; same scale as `torso_lin_vel` so commanded and measured velocities are directly comparable. Changed at every `set_phase`/`set_target_velocity`, deterministic |
 
-**Joint order** (model order, probe-verified; constant for a rig revision):
+**Joint order** (the 14 OBS-slice names: the frozen v3 order, verified equal
+to the model enumeration by a construction test; constant for a rig revision):
 
 ```
 spine_L2, left_shoulder, left_elbow, right_shoulder, right_elbow,
@@ -54,9 +56,12 @@ right_hip, right_knee, right_ankle
 ```
 
 Model joint ranges (all limited; read live from the compiled model):
-±1.5708 rad for the 14 policy joints (waist_yaw and the two foot_yaw
-hinges — the 3 passive posture joints — are ±3.1416 but are NOT observation
-fields; their state is indirectly observable through torso/limb response).
+±1.5708 rad for the 14 policy joints. `waist_yaw` (±3.1416, the root's
+rotational dof) is **not an observation field** in either contract — under
+v4 it joins the ACTION (index 14, name-ordered; measured position streams to
+the reward pipeline only) while the two `foot_yaw` hinges (±3.1416) remain
+the conventional posture hinges under both contracts. Their states remain
+indirectly observable through torso/limb response.
 
 **Coordinate frames.** World frame: +x east, +y north, +z up (config
 header). Torso up/forward are expressed in this world frame via `d.xmat`
@@ -80,9 +85,36 @@ the transition is FAULTED and the observation is zeroed before return
 **Deliberately NOT observed:** absolute root position (the task is
 velocity- and posture-conditioned; a seeded reset moves the world start
 pose without changing the first observation — this is a documented design
-property, verified by test), other agents, held objects, terrain shape.
-`layout_version` 4 would add such fields APPEND-only (v3 followed exactly
-this rule by appending the command).
+property, verified by test), other agents, held objects, terrain shape,
+and the waist's measured joint position (unchanged in v4 — the appendix did
+not open this). v4 followed the append-only rule exactly: the 25-dim
+command block (`§1.6`) rides AFTER the fixed 43-dim v3 prefix, and the
+prefix is bit-identical (N1 test, `tests/test_rl_contract_v4.py`).
+
+### 1.6 The v4 command block (M7-0a, slices 43–68)
+
+One fixed-width block serves every foundational stage; the stage selector
+is the **cmd_mask**, not a new one-hot. Mask bit 0 ⇒ that group's slices
+read zeros in obs AND no reward consumes the group; mask bit 1 ⇒ live (an
+active 0 limb target is a real hold-neutral command, disambiguated by the
+mask). **The action space is never masked** — command masking gates
+observation zeros and reward consumption only.
+
+| # | Slice | Field | Encoding | Measured anchor |
+|---|---|---|---|---|
+| 9 | 43–58 | `limb_pose_target` | 15 normalized targets, the ACTION mapping constants; 0 = neutral (0 rad — exact, symmetric ranges); order = the 15 ACTION-name order (§2) | — |
+| 10 | 58–60 | `com_shift` | normalized (nx, ny) ∈ [−1,1] = n·0.070 m x / n·0.040 m y | anchor (−0.07926, 0.08871) m = the settled full-body standing COM (P4); bound-corner margins ≥ 3.08 cm |
+| 11 | 60–63 | `waypoint` | (ux, uy, d̂): direction in the yaw-only heading frame (torso col-1 horizontal projection + left hand); d̂ = dist/4.0 | island ±12 m (P3); d_ref 4.0 m = the 400-window horizon at 0.5 m/s |
+| 12 | 63–64 | `stop_request` | {0,1} "park near the waypoint" | stop band re-measured at M7-5 |
+| 13 | 64–68 | `cmd_mask` | {0,1} × (limb, balance, waypoint, stop), fixed order | the stage table lives in the freeze v2 §1 |
+
+Command schedules are stage-defined, seeded, deterministic episode data
+(`set_commands` / `set_phase({'commands': …})`; absent ⇒ zeros, non-cumulative).
+Stance is NOT commanded: single-support is commanded through `com_shift`
+toward the stance foot (measured reach 0.045 m ≤ 0.070 m bound); stance
+fraction is a gate metric (baseline 0.500/0.500). S5 turning rides `v*`
+(the WORLD-frame command + the observed world-frame chest axis); the
+waypoint group stays S6.
 
 ### 1.5 Task conditioning (added at B3, layout v3)
 
@@ -148,25 +180,28 @@ with evidence; see `reports/m6b/B2_ENVIRONMENT.md`.
 - Two `LocoEnv` instances constructed identically produce bit-identical
   observation sequences for identical action scripts (test + probe).
 
-## 2. Action contract (14 normalized joints)
+## 2. Action contract (15 normalized joints under v4; legacy v3 = 14)
 
 | Property | Value |
 |---|---|
-| Dimension | 14 (`action_layout()['action_dim']`) |
+| Dimension | 15 v4 default / 14 legacy mode (`action_layout()['action_dim']`) |
 | Encoding | normalized joint-position targets, [-1, 1] |
 | Mapping | `target = lo + (a + 1) * 0.5 * (hi − lo)` with lo/hi = the joint's REAL compiled range |
-| Joints | the 14 in §1 joint order (includes the 3 head dofs — kept per the M6-B design decision) |
-| PD gains | per-joint (kp/kd): hips 60/5, knees 60/5, ankles 25/1, spine 35/4, shoulders 25/3, elbows 10/2, **head 8/1** (explicit since B2; was the world default 15/1.5) |
+| Joints | v4: the frozen NAME order — the 14 legacy order above + **`waist_yaw` appended at index 14** (never model order: waist_yaw is MODEL joint index 3 and a naive enumeration would put it first). Legacy v3: the 14 unchanged |
+| PD gains | per-joint (kp/kd): hips 60/5, knees 60/5, ankles 25/1, spine 35/4, shoulders 25/3, elbows 10/2, head 8/1, **waist 50/5** (frozen from the env posture values; P1/P2 measured: neutral hold torque-free, turn envelope ≥2.5× under the B1 120 N·m cap) |
 | Decimation | one policy decision per `action_repeat = 10` physics substeps ⇒ **20 ms policy period**; the PD tracks every 2 ms (500 Hz) — during the window the mapped targets persist (natural hold; the world is untouched) |
 | Actuation | position-setpoint PD through `PhysicsWorld.set_joint_target(..., source="neural_policy")` → `d.qfrc_applied`; the policy never touches qpos/qvel |
 | Bypasses | B1 safety unchanged: non-finite/wrong-shape actions REJECTED (`ActionError`), finite out-of-range actions CLIPPED to [-1,1] with per-episode clip statistics; NaN-weighted networks are caught at the same guard |
 
-**Conventional-PD assistance (policy-external).** Three passive posture
-hinges — `waist_yaw`, `left_foot_yaw`, `right_foot_yaw` — are held by the
-env with fixed conventional PD (target 0 rad; waist 50/5, foot_yaw 8/1 —
-the same magnitudes the gait controller uses for these families) tagged
-`source="env_posture"`. They are outside the action space and cannot be
-commanded by a policy. Optional additional assistance:
+**Conventional-PD assistance (policy-external).** Under v4 the two passive
+posture hinges — `left_foot_yaw`, `right_foot_yaw` — are held by the env
+with fixed conventional PD (target 0 rad, 8/1 — the same magnitudes the
+gait controller uses for this family) tagged `source="env_posture"`. The
+WAIST left this set at M7-0a: it is policy-commanded at frozen (50, 5)
+gains, and its standing-neutral regime is measured torque-free (P1A;
+N2 re-measures over ≥ 4,800 windows). The legacy v3 mode keeps the
+historical three-hinge table (waist 50/5 + foot_yaw 8/1, all
+`env_posture`, outside the action space). Optional additional assistance:
 `upright_assist` (0..1, curriculum-controlled) blends the policy's targets
 toward neutral on spine + hips + knees through the SAME PD path — a
 curriculum knob, never a teleport, never a qpos write.

@@ -49,6 +49,6 @@ def test_real_short_session(tmp_path):
     assert ck.exists()
     body = json.loads(ck.read_text(encoding="utf-8"))
     assert body["format"] == "rl_checkpoint/1"
-    assert body["meta"]["contract"]["obs_dim"] in (40, 43)   # B2 or B3 obs
+    assert body["meta"]["contract"]["obs_dim"] in (40, 43, 68)   # B2/B3/v4 obs
     r = s.save(tag="manual")                    # save allowed once stopped
     assert r["ok"] is True
