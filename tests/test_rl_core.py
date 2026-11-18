@@ -90,6 +90,47 @@ def test_alive_upright_effort_components():
     assert upright_reward(0.6, DEFAULTS["upright"]) == pytest.approx(0.3)
 
 
+def test_chest_aware_upright_min_rule():
+    """B4 posture ask (b4_posture1, the ONE reward change per Jamie's decision):
+    upright/alive consume min(torso up-z, chest up-z). The slide-root pelvis
+    cannot pitch, so torso up alone was blind to the chest fold — measured in
+    b4_head1's sustained fold (torso ≈ 1.0 every window while chest_up_z mean
+    0.115). Standing (chest fully upright) must be BIT-IDENTICAL to the old
+    rule: min(1, 1) = 1."""
+    # folded chest: upright collapses and alive flips even though torso is up
+    ms_fold = _ms(up_z=1.0)
+    ms_fold.chest_up_z = 0.1
+    _, comp = compute_reward(ms_fold, np.zeros(14), np.zeros(14))
+    assert comp["upright"] == pytest.approx(0.05)      # 0.5 * min(1.0, 0.1)
+    assert comp["alive"] == -1.0                       # min 0.1 <= margin 0.4
+    # modest chest tilt pays proportionally through the min, alive still +1
+    ms_tilt = _ms(up_z=1.0)
+    ms_tilt.chest_up_z = 0.85
+    _, comp2 = compute_reward(ms_tilt, np.zeros(14), np.zeros(14))
+    assert comp2["upright"] == pytest.approx(0.425)    # 0.5 * 0.85
+    assert comp2["alive"] == 1.0
+    # chest up beyond torso up cannot inflate upright above the torso term
+    ms_high = _ms(up_z=0.6)
+    ms_high.chest_up_z = 1.0
+    _, comp3 = compute_reward(ms_high, np.zeros(14), np.zeros(14))
+    assert comp3["upright"] == pytest.approx(0.3)      # min(0.6, 1.0) = 0.6
+    # standing invariance: the dataclass default (chest_up_z = 1.0) keeps every
+    # pre-change fixture and the standing equilibrium exactly as before
+    _, comp4 = compute_reward(_ms(up_z=1.0), np.zeros(14), np.zeros(14))
+    assert comp4["upright"] == pytest.approx(0.5)
+    assert comp4["alive"] == 1.0
+    # measured step built by the env carries the chest measurement (real path)
+    env_ms = compute_reward(
+        MeasuredStep(
+            position_before=np.zeros(3), position_after=np.zeros(3),
+            velocity=np.zeros(3), up_z=1.0, effort_j=0.0, window_s=0.02,
+            fell=False, up_z_window=[1.0, 1.0], chest_up_z=0.2,
+            target_velocity=tuple(_TARGET)),
+        np.zeros(14), np.zeros(14))[1]
+    assert env_ms["upright"] == pytest.approx(0.1)
+    assert env_ms["alive"] == -1.0
+
+
 def _ms(up_z=1.0, dpos=(0.0, 0.0, 0.0), vel=(0.0, 0.0, 0.0), fell=False, effort=0.0,
         window=0.02, up_window=None):
     return MeasuredStep(

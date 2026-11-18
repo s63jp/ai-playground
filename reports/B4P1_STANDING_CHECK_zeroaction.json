@@ -1,0 +1,165 @@
+{
+ "summary": {
+  "probe": "standing zero-action, NEW code, OLD rule recomputed offline",
+  "seed_base": 880100,
+  "windows": 4800,
+  "chest_up_z": {
+   "min": 0.9999999999558421,
+   "max": 1.0,
+   "mean": 0.9999999999982784,
+   "frac_ge_0.9": 1.0,
+   "frac_ge_0.8": 1.0,
+   "frac_lt_0.4_alive_flip": 0.0
+  },
+  "up_z_pelvis_mean": 1.0,
+  "reward_per_window_mean_new_code": 2.4972308545608364,
+  "delta_per_window_mean": -8.607979606889415e-13,
+  "delta_abs_frac_nonzero_gt_1e-4": 0.0
+ },
+ "episodes_detail": [
+  {
+   "ep": 0,
+   "windows": 400,
+   "fell": false,
+   "net_displacement_m": 0.01001432952475822,
+   "reward_total": 998.8923418243347,
+   "reward_per_window": 2.497230854560837,
+   "old_rule_total_offline": 998.8923418246791,
+   "delta_upright_alive_total": -3.443191842755766e-10,
+   "chest_up_z_min": 0.9999999999558421,
+   "chest_up_z_mean": 0.9999999999982785
+  },
+  {
+   "ep": 1,
+   "windows": 400,
+   "fell": false,
+   "net_displacement_m": 0.010014329524075907,
+   "reward_total": 998.8923418243348,
+   "reward_per_window": 2.4972308545608373,
+   "old_rule_total_offline": 998.8923418246792,
+   "delta_upright_alive_total": -3.443191842755766e-10,
+   "chest_up_z_min": 0.9999999999558421,
+   "chest_up_z_mean": 0.9999999999982785
+  },
+  {
+   "ep": 2,
+   "windows": 400,
+   "fell": false,
+   "net_displacement_m": 0.010014329524407155,
+   "reward_total": 998.8923418243348,
+   "reward_per_window": 2.4972308545608373,
+   "old_rule_total_offline": 998.8923418246792,
+   "delta_upright_alive_total": -3.443191842755766e-10,
+   "chest_up_z_min": 0.9999999999558421,
+   "chest_up_z_mean": 0.9999999999982785
+  },
+  {
+   "ep": 3,
+   "windows": 400,
+   "fell": false,
+   "net_displacement_m": 0.01001432952545463,
+   "reward_total": 998.8923418243344,
+   "reward_per_window": 2.497230854560836,
+   "old_rule_total_offline": 998.8923418246787,
+   "delta_upright_alive_total": -3.443191842755766e-10,
+   "chest_up_z_min": 0.9999999999558421,
+   "chest_up_z_mean": 0.9999999999982785
+  },
+  {
+   "ep": 4,
+   "windows": 400,
+   "fell": false,
+   "net_displacement_m": 0.010014329525171657,
+   "reward_total": 998.8923418243346,
+   "reward_per_window": 2.4972308545608364,
+   "old_rule_total_offline": 998.892341824679,
+   "delta_upright_alive_total": -3.443191842755766e-10,
+   "chest_up_z_min": 0.9999999999558421,
+   "chest_up_z_mean": 0.9999999999982785
+  },
+  {
+   "ep": 5,
+   "windows": 400,
+   "fell": false,
+   "net_displacement_m": 0.010014329524577512,
+   "reward_total": 998.8923418243347,
+   "reward_per_window": 2.497230854560837,
+   "old_rule_total_offline": 998.8923418246791,
+   "delta_upright_alive_total": -3.443191842755766e-10,
+   "chest_up_z_min": 0.9999999999558421,
+   "chest_up_z_mean": 0.9999999999982785
+  },
+  {
+   "ep": 6,
+   "windows": 400,
+   "fell": false,
+   "net_displacement_m": 0.010014329525055323,
+   "reward_total": 998.8923418243346,
+   "reward_per_window": 2.4972308545608364,
+   "old_rule_total_offline": 998.892341824679,
+   "delta_upright_alive_total": -3.443191842755766e-10,
+   "chest_up_z_min": 0.9999999999558421,
+   "chest_up_z_mean": 0.9999999999982785
+  },
+  {
+   "ep": 7,
+   "windows": 400,
+   "fell": false,
+   "net_displacement_m": 0.010014329524146971,
+   "reward_total": 998.892341824335,
+   "reward_per_window": 2.4972308545608373,
+   "old_rule_total_offline": 998.8923418246793,
+   "delta_upright_alive_total": -3.443191842755766e-10,
+   "chest_up_z_min": 0.9999999999558421,
+   "chest_up_z_mean": 0.9999999999982785
+  },
+  {
+   "ep": 8,
+   "windows": 400,
+   "fell": false,
+   "net_displacement_m": 0.0100143295250892,
+   "reward_total": 998.8923418243346,
+   "reward_per_window": 2.4972308545608364,
+   "old_rule_total_offline": 998.892341824679,
+   "delta_upright_alive_total": -3.443191842755766e-10,
+   "chest_up_z_min": 0.9999999999558421,
+   "chest_up_z_mean": 0.9999999999982785
+  },
+  {
+   "ep": 9,
+   "windows": 400,
+   "fell": false,
+   "net_displacement_m": 0.010014329525263778,
+   "reward_total": 998.8923418243346,
+   "reward_per_window": 2.4972308545608364,
+   "old_rule_total_offline": 998.892341824679,
+   "delta_upright_alive_total": -3.443191842755766e-10,
+   "chest_up_z_min": 0.9999999999558421,
+   "chest_up_z_mean": 0.9999999999982785
+  },
+  {
+   "ep": 10,
+   "windows": 400,
+   "fell": false,
+   "net_displacement_m": 0.010014329524769468,
+   "reward_total": 998.8923418243346,
+   "reward_per_window": 2.4972308545608364,
+   "old_rule_total_offline": 998.892341824679,
+   "delta_upright_alive_total": -3.443191842755766e-10,
+   "chest_up_z_min": 0.9999999999558421,
+   "chest_up_z_mean": 0.9999999999982785
+  },
+  {
+   "ep": 11,
+   "windows": 400,
+   "fell": false,
+   "net_displacement_m": 0.010014329525378576,
+   "reward_total": 998.8923418243345,
+   "reward_per_window": 2.4972308545608364,
+   "old_rule_total_offline": 998.8923418246789,
+   "delta_upright_alive_total": -3.443191842755766e-10,
+   "chest_up_z_min": 0.9999999999558421,
+   "chest_up_z_mean": 0.9999999999982785
+  }
+ ]
+}

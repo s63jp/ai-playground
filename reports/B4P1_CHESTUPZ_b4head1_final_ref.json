@@ -1,0 +1,178 @@
+{
+ "ckpt": "C:/Users/jamie/ai-playground/experiments/rl/b4_head1/ckpt_final.json",
+ "stage": "sustained",
+ "episodes": 12,
+ "seed_base": 990100,
+ "up_z_pelvis": {
+  "min": 0.9999999999999999,
+  "mean": 1.0,
+  "frac_ge_0.9": 1.0
+ },
+ "chest_up_z": {
+  "min": -0.009088957875396153,
+  "max": 0.9999734916713495,
+  "mean": 0.11525024019069344,
+  "sign_negative_frac": 0.00716403162055336,
+  "frac_ge_0.9": 0.021739130434782608,
+  "frac_ge_0.8": 0.029891304347826088,
+  "frac_ge_0.5": 0.04841897233201581,
+  "frac_ge_0.4_alive_margin": 0.055830039525691696
+ },
+ "posture_min": {
+  "min": -0.009088957875396153,
+  "mean": 0.11525024019069344,
+  "frac_ge_0.9": 0.021739130434782608,
+  "frac_ge_0.4": 0.055830039525691696
+ },
+ "windows": 4048,
+ "delta_upright_total": -1790.7335138540368,
+ "delta_alive_total": -7644.0,
+ "delta_total_over_run": -9434.733513854037,
+ "delta_window_mean": -2.33071480085327,
+ "episodes_detail": [
+  {
+   "ep": 0,
+   "windows": 400,
+   "up_z_min": 0.9999999999999999,
+   "chest_up_z_min": 0.003560163833731367,
+   "chest_up_z_mean": 0.11682783261767182,
+   "fell": false,
+   "delta_upright_ep": -176.63443347646586,
+   "delta_alive_ep": -760.0,
+   "delta_total_ep": -936.6344334764658,
+   "reward_total_old": 640.5349219823493
+  },
+  {
+   "ep": 1,
+   "windows": 92,
+   "up_z_min": 0.9999999999999999,
+   "chest_up_z_min": 0.06264500372057419,
+   "chest_up_z_mean": 0.26248344084724085,
+   "fell": true,
+   "delta_upright_ep": -33.92576172102692,
+   "delta_alive_ep": -148.0,
+   "delta_total_ep": -181.92576172102693,
+   "reward_total_old": 123.47109660724719
+  },
+  {
+   "ep": 2,
+   "windows": 400,
+   "up_z_min": 0.9999999999999999,
+   "chest_up_z_min": -0.002161775105534114,
+   "chest_up_z_mean": 0.10292635912550167,
+   "fell": false,
+   "delta_upright_ep": -179.41472817489964,
+   "delta_alive_ep": -754.0,
+   "delta_total_ep": -933.4147281748997,
+   "reward_total_old": 625.5729456813721
+  },
+  {
+   "ep": 3,
+   "windows": 168,
+   "up_z_min": 0.9999999999999999,
+   "chest_up_z_min": -0.008307722671471673,
+   "chest_up_z_mean": 0.1612749944263147,
+   "fell": true,
+   "delta_upright_ep": -70.45290046818955,
+   "delta_alive_ep": -302.0,
+   "delta_total_ep": -372.45290046818957,
+   "reward_total_old": 248.57043712965196
+  },
+  {
+   "ep": 4,
+   "windows": 400,
+   "up_z_min": 0.9999999999999999,
+   "chest_up_z_min": -0.0041358153844898715,
+   "chest_up_z_mean": 0.10171529717250088,
+   "fell": false,
+   "delta_upright_ep": -179.65694056549998,
+   "delta_alive_ep": -758.0,
+   "delta_total_ep": -937.6569405655,
+   "reward_total_old": 644.1766721642902
+  },
+  {
+   "ep": 5,
+   "windows": 400,
+   "up_z_min": 0.9999999999999999,
+   "chest_up_z_min": -0.0021060415429193236,
+   "chest_up_z_mean": 0.11101156320334349,
+   "fell": false,
+   "delta_upright_ep": -177.79768735933123,
+   "delta_alive_ep": -768.0,
+   "delta_total_ep": -945.7976873593312,
+   "reward_total_old": 628.8781787173783
+  },
+  {
+   "ep": 6,
+   "windows": 400,
+   "up_z_min": 0.9999999999999999,
+   "chest_up_z_min": 0.003105035131779843,
+   "chest_up_z_mean": 0.10856187018417333,
+   "fell": false,
+   "delta_upright_ep": -178.28762596316542,
+   "delta_alive_ep": -760.0,
+   "delta_total_ep": -938.2876259631654,
+   "reward_total_old": 605.9948432593166
+  },
+  {
+   "ep": 7,
+   "windows": 400,
+   "up_z_min": 0.9999999999999999,
+   "chest_up_z_min": -0.009088957875396153,
+   "chest_up_z_mean": 0.10508368388977278,
+   "fell": false,
+   "delta_upright_ep": -178.98326322204548,
+   "delta_alive_ep": -764.0,
+   "delta_total_ep": -942.9832632220455,
+   "reward_total_old": 633.8824514612004
+  },
+  {
+   "ep": 8,
+   "windows": 188,
+   "up_z_min": 0.9999999999999999,
+   "chest_up_z_min": -0.007459714585699051,
+   "chest_up_z_mean": 0.13402699633143406,
+   "fell": true,
+   "delta_upright_ep": -81.40146234484524,
+   "delta_alive_ep": -338.0,
+   "delta_total_ep": -419.40146234484524,
+   "reward_total_old": 292.4566719634313
+  },
+  {
+   "ep": 9,
+   "windows": 400,
+   "up_z_min": 0.9999999999999999,
+   "chest_up_z_min": 0.0063976672026839765,
+   "chest_up_z_mean": 0.11428859114327343,
+   "fell": false,
+   "delta_upright_ep": -177.14228177134532,
+   "delta_alive_ep": -766.0,
+   "delta_total_ep": -943.1422817713453,
+   "reward_total_old": 641.6710580210703
+  },
+  {
+   "ep": 10,
+   "windows": 400,
+   "up_z_min": 0.9999999999999999,
+   "chest_up_z_min": -0.005544464257357273,
+   "chest_up_z_mean": 0.10673840439946577,
+   "fell": false,
+   "delta_upright_ep": -178.6523191201068,
+   "delta_alive_ep": -764.0,
+   "delta_total_ep": -942.6523191201068,
+   "reward_total_old": 643.592802182153
+  },
+  {
+   "ep": 11,
+   "windows": 400,
+   "up_z_min": 0.9999999999999999,
+   "chest_up_z_min": -0.0035347681227011485,
+   "chest_up_z_mean": 0.1080794516644228,
+   "fell": false,
+   "delta_upright_ep": -178.38410966711544,
+   "delta_alive_ep": -762.0,
+   "delta_total_ep": -940.3841096671155,
+   "reward_total_old": 631.4845703657135
+  }
+ ]
+}

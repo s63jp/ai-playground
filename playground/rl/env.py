@@ -439,11 +439,21 @@ class LocoEnv:
                                 float(np.linalg.norm(self._target_vel)) * self.action_repeat * dt)
             self._metrics["heading_progress_raw"] += prog_raw
             self._metrics["heading_progress_rewarded"] += prog_rewarded
+            # B4 posture ask measurement: the chest's world up-vector z. The
+            # spine_L2 BODY (same name as its hinge) is the chest — it carries
+            # the g:chest geom and the arms/head subtree, and its hinge pitch
+            # is the chest tilt the posture probes measure. Same channel as
+            # the torso up-vector (xmat col 2, z component) so it composes
+            # with the existing reward weights without renormalisation.
+            chest_mat = np.asarray(self.world.d.xmat[
+                int(self.world.m.body('spine_L2').id)], dtype=np.float64)
+            chest_up_z = float(chest_mat.reshape(3, 3)[2, 2])
             ms = MeasuredStep(
                 position_before=pos_before, position_after=pos_after,
                 velocity=vel, up_z=up_z, effort_j=effort_j,
                 window_s=self.action_repeat * dt, fell=fell,
                 up_z_window=list(self._upright_window),
+                chest_up_z=chest_up_z,
                 target_velocity=tuple(float(x) for x in self._target_vel))
             reward, components = compute_reward(ms, action, self.prev_action,
                                                 self._reward_cfg)

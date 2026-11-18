@@ -15,8 +15,13 @@ normalized observation slice:
 - ``velocity_tracking``     exp(-||v - v*||^2 / sigma) on the FULL 3-D world
                             velocity: sideways and backwards motion cannot
                             out-score honest progress (anti-exploit, v1).
-- ``upright``               torso up z component (world frame).
-- ``alive``                 ±1 on the upright margin staying above threshold.
+- ``upright``               min(torso, chest) up z in the world frame —
+                            CHEST-AWARE since the B4 posture ask (b4_posture1,
+                            Jamie 2026-11-18): the slide-root pelvis cannot
+                            pitch, so the torso up-vector alone was blind to a
+                            folding chest (measured in b4_head1: torso up ≈ 1
+                            while chest_up_z mean 0.115 in the sustained fold).
+- ``alive``                 ±1 on the same chest-aware upright margin.
 - ``effort``                mechanical work the policy's own PD torques did
                             this window, sum(|qfrc_applied*qvel|)*dt over the
                             14 policy dofs, in joules (measured, not the
@@ -143,6 +148,11 @@ class MeasuredStep:
     window_s: float                  # simulated seconds in this window
     fell: bool                       # terminated because agent_fallen() tripped
     up_z_window: list = field(default_factory=list)  # recent up_z samples (stability)
+    chest_up_z: float = 1.0          # chest (spine_L2 body) up-vector z, world
+                                     # frame, [−1, 1], +1 upright. B4 posture
+                                     # ask: built by LocoEnv.step; default 1.0
+                                     # keeps hand-built fixtures at the old
+                                     # (pelvis-only) behaviour bit-for-bit.
     target_velocity: tuple = (0.5, 0.0, 0.0)
 
 
@@ -161,13 +171,23 @@ def compute_reward(m: MeasuredStep, action, prev_action, coeffs: dict | None = N
         c.update(coeffs)
     action = np.asarray(action, dtype=np.float64)
     prev = np.asarray(prev_action, dtype=np.float64)
+    # B4 posture ask (b4_posture1, ONE reward change per Jamie's decision):
+    # the upright/alive margin is CHEST-AWARE — min of the pelvis and chest
+    # (spine_L2 body) world up-vector z components. The pelvis cannot pitch
+    # (slide root, no pitch dof), so the torso term alone was blind to the
+    # chest fold; the chest term is what the folding failure actually lives on.
+    # Standing equilibrium (spine 0 => chest_up_z 1.0) is bit-identical:
+    # min(1, 1) = 1. Nothing else changes — stability stays on torso up_z
+    # (repoint deferred), the fall truth stays agent_fallen(), and chest_up_z
+    # is an engine MEASUREMENT, never an observation slice.
+    posture = min(float(m.up_z), float(m.chest_up_z))
     comp = {
         "progress": progress_reward(m.position_after - m.position_before,
                                     m.target_velocity, m.window_s, c["progress"]),
         "velocity_tracking": velocity_tracking_reward(
             m.velocity, m.target_velocity, c["tracking_sigma"], c["velocity_tracking"]),
-        "upright": upright_reward(m.up_z, c["upright"]),
-        "alive": alive_reward(m.up_z, c["alive_margin"], c["alive"]),
+        "upright": upright_reward(posture, c["upright"]),
+        "alive": alive_reward(posture, c["alive_margin"], c["alive"]),
         "effort": effort_penalty(m.effort_j, c["effort"]),
         "smoothness": smoothness_penalty(action, prev, c["smoothness"]),
         "stability": stability_penalty(m.up_z_window, c["stability"]),

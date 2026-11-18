@@ -189,11 +189,11 @@ per step; `episode_summary()` accumulates it per episode.
 |---|---|---|---|
 | `progress` | 8.0 m⁻¹ | metres advanced along the commanded heading THIS window (`(p−p_prev)·ĥ`, ĥ = v*/‖v*‖; negative/sideways → 0), CLAMPED at ‖v*‖·window_s | pays displacement, not velocity sampling; stop-and-go cannot out-earn a walk covering more metres; round trips pay the half rate; target speed caps the payout |
 | `velocity_tracking` | 1.0, σ=0.1 | exp(−‖v−v*‖²/σ) on the FULL 3-D world velocity | sideways/backwards motion scores below standing with the same target (v1 semantics, kept) |
-| `upright` | 0.5 | torso up-z per window | integral = upright duration |
-| `alive` | ±1.0 (margin 0.4) | up-z above 0.4 → +1, else −1 | fall states pay negatively |
+| `upright` | 0.5 | **chest-aware** per window: `min(torso up-z, chest up-z)` — the chest measure is the `spine_L2` body's world up-vector z (`xmat` col 2, same channel/scale as torso). B4 posture ask (b4_posture1, one change per Jamie's decision): pelvis up alone is blind to a chest fold because the slide-root pelvis has no pitch dof — measured b4_head1 sustained fold: torso ≈ 1.0 while chest mean 0.115 | integral = chest-aware upright duration; standing (spine 0) is bit-identical `min(1,1)=1` |
+| `alive` | ±1.0 (margin 0.4) | same chest-aware posture above 0.4 → +1, else −1 | fold states (chest_up_z < 0.4) pay −1 every window, not just at termination |
 | `effort` | −0.005 J⁻¹ | measured mechanical work Σ\|qfrc_applied·qvel\|·dt over the 14 policy dofs | flail costs real joules (scripted walk ≈ 3.3 J/window vs standing ≈ 0.04); the normalized command magnitude is NOT what is penalised |
 | `smoothness` | −0.1 | ‖a−a_prev‖² on the clipped-encoded actions | control chatter shaping |
-| `stability` | −0.2 | variance of up-z over the last 25 decisions | body jitter penalty |
+| `stability` | −0.2 | variance of up-z over the last 25 decisions | body jitter penalty (B4 note: mathematically ≡ 0 on this rig — the pelvis cannot pitch; repointing it at the chest axis is a deliberately SEPARATE future change, deferred to keep reward causality attributable) |
 | `fall` | −5.0 once | emitted at a fall-terminated window only | falling is worse than slow progress |
 
 **Honest assessment (not "this reward is good because the numbers look
