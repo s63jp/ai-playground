@@ -34,4 +34,37 @@ jobs:
       - name: Run the test suite (XPU + platform-physics tests excluded)
         env:
           MUJOCO_GL: egl
-        run: python -m pytest -m "not xpu and not physics" -q
+        run: |
+          mkdir -p ci
+          python -m pytest -m "not xpu and not physics" -q --junitxml=ci/results.xml
+
+      # JUnit -> $GITHUB_STEP_SUMMARY: the failing test names + first line of
+      # each failure surface in the checks API (job summaries are readable
+      # without log-level auth, unlike the raw run logs).
+      - name: Failure summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import xml.etree.ElementTree as ET
+
+          out = pathlib.Path(os.environ["GITHUB_STEP_SUMMARY"])
+          results = pathlib.Path("ci/results.xml")
+          if not results.exists():
+              out.write_text("no ci/results.xml produced\n")
+              raise SystemExit(0)
+          suite = ET.parse(results).getroot().find("testsuite")
+          head = (f"pytest: {suite.get('failures')} failed / "
+                  f"{suite.get('errors')} errors / {suite.get('skipped')} "
+                  f"skipped / {suite.get('tests')} total")
+          rows = []
+          for case in suite.iter("testcase"):
+              for bad in ("failure", "error"):
+                  n = case.find(bad)
+                  if n is not None:
+                      text = (n.get("message") or "")[:220].replace("\n", " ")
+                      rows.append(f"{case.get('classname')}::{case.get('name')} "
+                                  f"— {text}")
+          out.write_text("\n".join([head] + (rows[:80] or ["all green"])) + "\n")
+          PY
