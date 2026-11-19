@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from '/static/vendor/OrbitControls.js';
 import { HumanoidView } from './humanoid_view.js';
+import { createHumanoidV2 } from '/static/js/humanoid_v2.js?v=2';
 
 const $ = (id) => document.getElementById(id);
 const fmt = (v, n = 3) => (v === null || v === undefined || Number.isNaN(v))
@@ -47,6 +48,31 @@ scene.add(fillLight);
 
 const rigMeshes = new Map();
 let humanoidFallback = new HumanoidView(scene);
+
+/* ---- Humanoid V2 (Blender FBX, retargeted from live MuJoCo frames) ----
+ * Default when it loads and verifies. ?rig=v1 keeps the primitive V1 rig.
+ * Any V2 error at load or per frame falls back to V1 and says so. */
+const v2Requested = new URLSearchParams(location.search).get('rig') !== 'v1';
+let v2 = null;
+const rigBodyNames = new Set();
+function setRigPrimitivesVisible(visible) {
+  for (const name of rigBodyNames) { const g = rigMeshes.get(name); if (g) g.visible = visible; }
+}
+function v2Fallback(reason) {
+  console.error('humanoid V2 disabled:', reason);
+  if (v2) { v2.dispose(); v2 = null; }
+  window.__humanoidV2 = null;
+  setRigPrimitivesVisible(true);
+  flash(`V2 humanoid unavailable, showing V1: ${reason}`);
+}
+if (v2Requested) {
+  createHumanoidV2(scene).then((h) => {
+    v2 = h;
+    window.__humanoidV2 = h;
+    setRigPrimitivesVisible(false);
+  }).catch((e) => v2Fallback(e.message));
+}
+
 function resize() {
   const w = holder.clientWidth, h = holder.clientHeight || 340;
   if (!w) return;
@@ -85,6 +111,7 @@ function geomMesh(g) {
 function buildScene(spec) {
   for (const [, m] of rigMeshes) scene.remove(m);
   rigMeshes.clear();
+  rigBodyNames.clear();
   if (humanoidFallback) { scene.remove(humanoidFallback.group); humanoidFallback = null; }
   let rig = 0, other = 0;
   for (const body of spec.bodies || []) {
@@ -103,21 +130,27 @@ function buildScene(spec) {
     } else {
       group.quaternion.identity();
     }
-    if (body.rig) rig++; else other++;
+    if (body.rig) { rig++; rigBodyNames.add(body.name); } else other++;
     rigMeshes.set(body.name, group);
+    if (body.rig && v2) group.visible = false;   // V2 replaces the V1 primitive rig
     scene.add(group);
   }
   $('live-scene-note').textContent =
-    `· rig ${rig} bodies, island ${other} · meshes not drawn: ${spec.meshes_skipped ?? 0}`;
+    `· rig ${rig} bodies, island ${other} · meshes not drawn: ${spec.meshes_skipped ?? 0}`
+    + (v2 ? ` · V2: ${v2.meshes.size} FBX meshes` : '');
 }
 
 function applyFrame(f) {
+  if (f.t === 'reset') { if (v2) v2.reset(); return; }
   if (humanoidFallback) { scene.remove(humanoidFallback.group); humanoidFallback = null; }
   for (const [name, pose] of Object.entries(f.bodies || {})) {
     let obj = rigMeshes.get(name);
     if (!obj) { obj = new THREE.Group(); rigMeshes.set(name, obj); scene.add(obj); }
     obj.position.set(pose.p[0], pose.p[1], pose.p[2]);
     obj.quaternion.set(pose.q[1], pose.q[2], pose.q[3], pose.q[0]);
+  }
+  if (v2 && f.bodies) {
+    try { v2.update(f); } catch (e) { v2Fallback(e.message); }
   }
   controls.target.lerp(new THREE.Vector3(f.root.pos[0], f.root.pos[1], 0.9), 0.05);
   $('live-episode').value = f.episode;
@@ -314,6 +347,7 @@ $('live-eval').onclick = async () => {
 const ev = new EventSource('/api/rl_live/stream');
 ev.addEventListener('spec', (e) => buildScene(JSON.parse(e.data)));
 ev.addEventListener('frame', (e) => { try { applyFrame(JSON.parse(e.data)); } catch (_) { /* partial */ } });
+ev.addEventListener('reset', () => { if (v2) v2.reset(); });
 ev.addEventListener('iteration', (e) => onIteration(JSON.parse(e.data)));
 ev.addEventListener('b3_iteration', (e) => onB3(JSON.parse(e.data)));
 ev.addEventListener('status', (e) => { lastState = JSON.parse(e.data); refreshControls(); });
