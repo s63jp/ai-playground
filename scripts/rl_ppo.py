@@ -159,16 +159,15 @@ def cmd_train(a):
     env, cur = _make_env_and_curriculum(cfg)
     op, fork_from = _resolve_operation(a)
     if getattr(a, "stages", None):
-        from playground.rl.curriculum import M7_S1_PROVISIONAL, STAGE_LADDERS
+        from playground.rl.curriculum import (STAGE_LADDERS,
+                                              m7_s1_launch_block_reason)
         if a.stages not in STAGE_LADDERS:
             raise PPOError(f"unknown --stages {a.stages!r}: allowed "
                            f"{sorted(STAGE_LADDERS)}")
-        if a.stages == "m7_s1" and M7_S1_PROVISIONAL:
-            raise PPOError(
-                "the M7-1a limb ladder is STILL PROVISIONAL: the "
-                "untrained-baseline probe must record the measured "
-                "limb_tracking coefficient + gate bands before the first "
-                "M7 lineage trains (reports/M7_1A_LIMB_STAGES_CHANGE.md §4)")
+        if a.stages == "m7_s1":
+            reason = m7_s1_launch_block_reason()
+            if reason:
+                raise PPOError(f"M7-1a limb ladder blocked: {reason}")
         run_ladder = a.stages
         cur = Curriculum(env, stages=STAGE_LADDERS[run_ladder])
         cur.select(0)
@@ -411,6 +410,24 @@ def policy_eval_checkpoint(a):
 
 
 # ------------------------------------------------------------------ baselines
+def cmd_eval_s1(a):
+    """Held-out S1 capability (mastery) eval for one individual limb — the
+    honest gate: a limb is reported mastered ONLY on measured tracking against
+    the recorded bands, never on step count."""
+    from playground.rl.s1_eval import (EVAL_EPISODES, EVAL_SEED_BASE,
+                                        evaluate_s1_limb)
+    verdict = evaluate_s1_limb(
+        a.checkpoint, a.stage,
+        episodes=(a.episodes or EVAL_EPISODES),
+        seed_base=(a.seed_base if a.seed_base is not None else EVAL_SEED_BASE),
+        write_to=a.out)
+    print(json.dumps(verdict, indent=2))
+    if a.require_mastered and not verdict["mastered"]:
+        raise PPOError(f"{a.stage} is NOT mastered "
+                       f"({sum(1 for r in verdict['joints'].values() if not r['pass'])} "
+                       f"joint band(s) failing)")
+
+
 def cmd_baselines(a):
     cfg = load_config(None, overrides={})
     rl = _rl_cfg(cfg)
@@ -487,6 +504,15 @@ def main(argv=None):
     e.add_argument("--seed-base", type=int, default=None)
     e.add_argument("--gait-heading", type=float, default=0.0)
     e.add_argument("--out", default=None)
+    es = sub.add_parser("eval-s1")
+    es.add_argument("--checkpoint", required=True)
+    es.add_argument("--stage", required=True,
+                    help="S1 limb stage id (e.g. m7_s1_head, m7_s1_left_leg)")
+    es.add_argument("--episodes", type=int, default=None)
+    es.add_argument("--seed-base", type=int, default=None)
+    es.add_argument("--out", default=None, help="write the verdict JSON here")
+    es.add_argument("--require-mastered", action="store_true",
+                    help="exit non-zero unless the limb meets every gate band")
     b = sub.add_parser("baselines")
     b.add_argument("--stage", default="sustained")
     b.add_argument("--episodes", type=int, default=None)
@@ -498,6 +524,8 @@ def main(argv=None):
             cmd_train(args)
         elif args.cmd == "eval":
             cmd_eval(args)
+        elif args.cmd == "eval-s1":
+            cmd_eval_s1(args)
         elif args.cmd == "baselines":
             cmd_baselines(args)
     except CheckpointError as exc:

@@ -116,7 +116,11 @@ def test_status_objectives_b3(http):
     assert st["session"]["state"] in ("idle", "error")
     assert st["b3_available"] is True
     objs = json.loads(_get(http, "/api/rl_live/objectives"))
-    assert [o["id"] for o in objs["objectives"]] == ["walking"]
+    ids = [o["id"] for o in objs["objectives"]]
+    assert ids[0] == "walking"
+    # the standalone sidecar lists every objective (incl. the S1 limb stages);
+    # the rich S1 training/eval UI lives on the dashboard tab, not here.
+    assert {"m7_s1_head", "m7_s1_left_leg", "m7_s1_all"} <= set(ids)
     assert objs["stage_ladder"][0]["id"] == "standing"
     assert objs["trainer_available"] == interop.trainer_available()
     assert isinstance(objs["trainer_available"], bool)

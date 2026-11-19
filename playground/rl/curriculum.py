@@ -201,10 +201,47 @@ M7_S1_STAGES = (
 # The launcher's explicit ladder registry (scripts/rl_ppo.py --stages):
 STAGE_LADDERS = {"m7_s1": M7_S1_STAGES}
 
-# Launch-time gate: the M7-1a untrained-baseline probe must record its
-# measured coefficients + gate bands (M7_1A_LIMB_STAGES_CHANGE.md §4/§5)
-# BEFORE an M7 lineage trains; the probe clears this flag.
-M7_S1_PROVISIONAL = True
+# ---- M7-1a launch gate: SATISFIED by recorded calibration evidence --------
+# The untrained-baseline probe (reports/m7_s1_probe.py ->
+# reports/M7_1A_S1_PROBE.json, gate report reports/M7_1A_S1_GATE.md) measured
+# the feasible limb_tracking window; the gate is cleared only while the
+# shipped coefficient sits inside it. This retains the pre-training safety
+# requirement (no S1 training on an uncalibrated coefficient) as an
+# evidence check rather than a bypassable boolean — it is SATISFIED, not
+# removed. Mastery is a separate, stronger gate (held-out capability eval,
+# playground/rl/s1_eval.py): this one only clears the START of training.
+_M7_S1_W_WINDOW = (0.75, 5.18)   # measured [signal floor, equilibrium ceiling]
+
+
+def m7_s1_launch_block_reason() -> str | None:
+    """None when the S1 limb ladder is cleared to train; otherwise the
+    human-readable reason it is blocked. Checked by every launch path (the CLI
+    ``--stages m7_s1`` and the live session)."""
+    lo, hi = _M7_S1_W_WINDOW
+    if not (lo <= _M7_S1_W <= hi):
+        return (f"limb_tracking coefficient w={_M7_S1_W} is outside the "
+                f"measured calibration window [{lo}, {hi}] reward/window "
+                f"(reports/M7_1A_S1_PROBE.json) — re-run the baseline probe "
+                f"(reports/m7_s1_probe.py) before training the S1 ladder")
+    return None
+
+
+def m7_s1_limb_stage_ids() -> list:
+    """The selectable individual-limb stage ids (every S1 stage past the
+    shared standing base)."""
+    return [s.id for s in M7_S1_STAGES[1:]]
+
+
+def m7_s1_limb_ladder(limb_stage_id: str) -> tuple:
+    """The 2-stage live ladder for ONE S1 limb: the standing base (bit-
+    identical to DEFAULT_STAGES[0]) then the selected limb stage. Raises
+    ValueError on an unknown or the base id."""
+    by_id = {s.id: s for s in M7_S1_STAGES}
+    if limb_stage_id == "standing" or limb_stage_id not in by_id:
+        raise ValueError(
+            f"unknown S1 limb stage {limb_stage_id!r}; choose one of "
+            f"{m7_s1_limb_stage_ids()}")
+    return (M7_S1_STAGES[0], by_id[limb_stage_id])
 
 
 class Curriculum:

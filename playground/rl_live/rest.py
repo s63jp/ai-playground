@@ -115,6 +115,9 @@ def register_rl_live_routes(app, cfg: dict | None = None, *,
         from .interop import trainer_available
         return {"objectives": [{"id": k, "label": v["label"],
                                 "stage_budgets": v["stage_budgets"],
+                                "s1": bool(v.get("s1")),
+                                "limb_stage_id": v.get("limb_stage_id"),
+                                "group": ("limb" if v.get("s1") else "locomotion"),
                                 "default": k == "walking"}
                                for k, v in OBJECTIVES.items()],
                 "stage_ladder": [{"index": i, "id": s.id, "name": s.name,
@@ -122,9 +125,10 @@ def register_rl_live_routes(app, cfg: dict | None = None, *,
                                   "env_ready": s.env_ready}
                                  for i, s in enumerate(_stage_ladder())],
                 "trainer_available": trainer_available(),
-                "note": "the first supported objective is walking (the B3 "
-                        "ladder); climbing / navigation / obstacle avoidance "
-                        "deliberately not offered yet"}
+                "note": "walking is the B3 ladder; the S1 objectives are the "
+                        "M7-1a individual-limb-control stages (left/right arm, "
+                        "head, torso, left/right leg, all) gated by recorded "
+                        "calibration evidence"}
 
     # ------------------------------------------------------------- routes
     @app.get("/api/rl_live/status")
@@ -161,7 +165,8 @@ def register_rl_live_routes(app, cfg: dict | None = None, *,
             objective=body.get("objective", "walking"),
             name=body.get("name"), seed=body.get("seed"),
             total_steps=body.get("total_steps"),
-            ppo_overrides=body.get("ppo_overrides")), ERROR_CODES)
+            ppo_overrides=body.get("ppo_overrides"),
+            stage_budgets=body.get("stage_budgets")), ERROR_CODES)
 
     @app.post("/api/rl_live/pause")
     def rl_live_pause():
@@ -178,6 +183,46 @@ def register_rl_live_routes(app, cfg: dict | None = None, *,
     @app.post("/api/rl_live/save")
     def rl_live_save(body: dict | None = None):
         return ok_or(session.save(tag=(body or {}).get("tag")), ERROR_CODES)
+
+    # --------------------------------------------- per-experiment management
+    @app.get("/api/rl_live/experiments")
+    def rl_live_experiments():
+        from .interop import list_experiments
+        return list_experiments(root)
+
+    @app.get("/api/rl_live/experiment/{name}/eval/{fname}")
+    def rl_live_experiment_eval(name: str, fname: str):
+        if any(bad in name for bad in ("/", "\\", "..")) or \
+                any(bad in fname for bad in ("/", "\\", "..")):
+            return JSONResponse(status_code=400, content={"error": "bad path"})
+        p = root / name / fname
+        if not p.exists():
+            return JSONResponse(status_code=404, content={"error": "not found"})
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return JSONResponse(status_code=500, content={"error": str(exc)})
+
+    @app.post("/api/rl_live/evaluate")
+    def rl_live_evaluate(body: dict | None = None):
+        """Run the S1 capability (mastery) eval on a saved checkpoint. Refused
+        while training is actively running (torch state must be quiescent) —
+        pause or stop first. Writes the verdict into the experiment dir."""
+        body = body or {}
+        if session.state == "running":
+            return JSONResponse(status_code=409, content={"ok": False,
+                "error": {"code": "busy", "message": "pause or stop before "
+                          "evaluating (torch state must be quiescent)"}})
+        from .interop import run_s1_evaluation
+        res = run_s1_evaluation(root, experiment=body.get("experiment"),
+                                checkpoint=body.get("checkpoint", "ckpt_final.json"),
+                                stage_id=body.get("stage_id"),
+                                episodes=body.get("episodes", 12))
+        if not res.get("ok"):
+            code = res["error"]["code"]
+            status = {"not_found": 404, "invalid_config": 400}.get(code, 400)
+            return JSONResponse(status_code=status, content=res)
+        return res
 
     @app.get("/api/rl_live/stream")
     def rl_live_stream():

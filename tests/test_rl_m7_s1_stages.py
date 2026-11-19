@@ -220,20 +220,48 @@ def test_limb_tracking_active_group_only():
 
 
 # -------------------------------------------------------------- launcher
-def test_launcher_refuses_provisional_m7_ladder(tmp_path):
-    """The launch-time gate: no M7 lineage trains while the ladder's
-    limb_tracking coefficient is provisional (the untrained-baseline probe
-    must first record the measured w + gate bands and clear the flag)."""
+def test_s1_launch_gate_cleared_when_calibrated():
+    """The calibration launch gate is SATISFIED while the shipped
+    limb_tracking coefficient sits inside the measured feasible window (the
+    baseline probe recorded w=2.0 in [0.75, 5.18])."""
+    from playground.rl.curriculum import m7_s1_launch_block_reason
+    assert m7_s1_launch_block_reason() is None
+
+
+def test_s1_launch_gate_blocks_uncalibrated(monkeypatch, tmp_path):
+    """Retains the pre-training safety requirement: an out-of-window
+    (uncalibrated) coefficient blocks the S1 ladder, and the launcher refuses
+    rather than training on it."""
     import argparse
+    import playground.rl.curriculum as cur
     import scripts.rl_ppo as rl_ppo
     from playground.rl.ppo import PPOError
+    monkeypatch.setattr(cur, "_M7_S1_W", 0.1)   # below the measured signal floor
+    reason = cur.m7_s1_launch_block_reason()
+    assert reason and "outside the measured calibration window" in reason
     args = argparse.Namespace(
         name="m7", steps=512, seed=20261117, rollout_steps=512, ent_coef=None,
-        lr=None, stage_budget=None, resume=None, fork_from=None,
+        lr=None, stage_budget=None, resume=None, fork_from=None, hidden=None,
         out=str(tmp_path / "m7_run"), operation="fresh", stages="m7_s1")
     with pytest.raises(PPOError) as e:
         rl_ppo.cmd_train(args)
-    assert "STILL PROVISIONAL" in str(e.value)
+    assert "blocked" in str(e.value)
+
+
+def test_s1_limb_ladder_is_standing_plus_one_limb():
+    """m7_s1_limb_ladder builds the 2-stage live ladder (standing base +
+    the selected limb); unknown / base ids raise."""
+    from playground.rl.curriculum import (DEFAULT_STAGES, m7_s1_limb_ladder,
+                                          m7_s1_limb_stage_ids)
+    ladder = m7_s1_limb_ladder("m7_s1_head")
+    assert len(ladder) == 2
+    assert ladder[0] is DEFAULT_STAGES[0]          # bit-identical standing base
+    assert ladder[1].id == "m7_s1_head"
+    assert "m7_s1_left_arm" in m7_s1_limb_stage_ids()
+    assert "standing" not in m7_s1_limb_stage_ids()
+    for bad in ("standing", "walking", "nope"):
+        with pytest.raises(ValueError):
+            m7_s1_limb_ladder(bad)
 
 
 def test_launcher_records_stage_ladder_tag(tmp_path):
