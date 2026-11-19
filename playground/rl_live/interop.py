@@ -55,6 +55,17 @@ def build_session_trainer(env, curriculum, *, name: str, seed: int,
                 "rollout_steps", "epochs", "minibatch", "max_grad_norm"):
         if key in overrides and overrides[key] is not None:
             setattr(ppo_cfg, key, type(getattr(ppo_cfg, key))(overrides[key]))
+
+    if "hidden" in overrides and overrides["hidden"] is not None:
+        try:
+            hidden = tuple(int(width) for width in overrides["hidden"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("hidden must be a sequence of positive layer widths") from exc
+
+        if not hidden or len(hidden) > 8 or any(width < 1 for width in hidden):
+            raise ValueError("hidden must contain 1-8 positive layer widths")
+
+        ppo_cfg.hidden = hidden
     torch.manual_seed(int(seed))
 
     env_cfg = {"agent_body": {"type": "humanoid"}, **rl}

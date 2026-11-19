@@ -105,6 +105,27 @@ def _parse_stage_budgets(s: str | None):
     return out
 
 
+def _rl_cfg_with_hidden_override(rl: dict, hidden_arg) -> dict:
+    """Per-run architecture override (scripts/rl_ppo.py train --hidden).
+
+    `--hidden 256,256` selects the actor/critic trunk widths for THIS run
+    without editing `config/default.yaml` (whose 64x64 default stays the B3/B4
+    baseline). The override is spliced into the rl dict BEFORE PPOConfig
+    validation, so the resulting widths pass through exactly the same
+    from_rl_cfg rules as a YAML-set value (1..8 layers of positive ints,
+    PPOError otherwise), and the selected widths are recorded wherever the
+    config is echoed (config.json carries ppo_cfg.as_dict()).
+    """
+    if hidden_arg is None or str(hidden_arg).strip() == "":
+        return rl
+    try:
+        widths = [int(h) for h in str(hidden_arg).split(",")]
+    except ValueError as e:
+        raise PPOError(f"--hidden must be comma-separated layer widths "
+                       f"(e.g. 256,256): {e}") from e
+    return {**rl, "ppo": {**(rl.get("ppo") or {}), "hidden": widths}}
+
+
 def _make_env_and_curriculum(cfg):
     env = LocoEnv(cfg={"agent_body": {"type": "humanoid"},
                        **(_rl_cfg(cfg) or {})})
@@ -122,7 +143,8 @@ def cmd_train(a):
     cp_freq = int(run.get("checkpoint_freq", 200_000))
     stage_budgets = _parse_stage_budgets(a.stage_budget) if a.stage_budget \
         else run.get("stage_budgets")
-    ppo_cfg = PPOConfig.from_rl_cfg(rl)
+    ppo_cfg = PPOConfig.from_rl_cfg(
+        _rl_cfg_with_hidden_override(rl, getattr(a, "hidden", None)))
     if a.ent_coef is not None:
         ppo_cfg.ent_coef = float(a.ent_coef)
     if a.lr is not None:
@@ -136,6 +158,22 @@ def cmd_train(a):
 
     env, cur = _make_env_and_curriculum(cfg)
     op, fork_from = _resolve_operation(a)
+    if getattr(a, "stages", None):
+        from playground.rl.curriculum import M7_S1_PROVISIONAL, STAGE_LADDERS
+        if a.stages not in STAGE_LADDERS:
+            raise PPOError(f"unknown --stages {a.stages!r}: allowed "
+                           f"{sorted(STAGE_LADDERS)}")
+        if a.stages == "m7_s1" and M7_S1_PROVISIONAL:
+            raise PPOError(
+                "the M7-1a limb ladder is STILL PROVISIONAL: the "
+                "untrained-baseline probe must record the measured "
+                "limb_tracking coefficient + gate bands before the first "
+                "M7 lineage trains (reports/M7_1A_LIMB_STAGES_CHANGE.md §4)")
+        run_ladder = a.stages
+        cur = Curriculum(env, stages=STAGE_LADDERS[run_ladder])
+        cur.select(0)
+    else:
+        run_ladder = "default"
     out = Path(a.out) if a.out else _run_dir(cfg, a.name)
     out.mkdir(parents=True, exist_ok=True)
     fork_record = None
@@ -294,6 +332,7 @@ def cmd_train(a):
     (out / "config.json").write_text(json.dumps({
         "ppo": ppo_cfg.as_dict(), "total_steps": total_steps, "seed": seed,
         "stage_budgets": stage_budgets,
+        "stage_ladder": run_ladder,
         "operation": op,
         "fork_from": (str(fork_from) if fork_from else None),
         "run_parent": fork_record,
@@ -304,6 +343,7 @@ def cmd_train(a):
     (out / "result.json").write_text(json.dumps({
         **summary, "wall_s": round(wall, 1),
         "operation": op,
+        "stage_ladder": run_ladder,
         "fork_from": (str(fork_from) if fork_from else None),
         "final_checkpoint": final["path"],
         "faulted_windows_total": trainer.faulted_windows_total,
@@ -432,6 +472,14 @@ def main(argv=None):
                         "is given, fresh otherwise (the tag is recorded in "
                         "every checkpoint + the run metadata)")
     t.add_argument("--out", default=None)
+    t.add_argument("--hidden", default=None,
+                   help="comma-separated actor/critic trunk widths for this "
+                        "run (e.g. 256,256); default: rl.ppo.hidden from the "
+                        "YAML config (64,64)")
+    t.add_argument("--stages", default=None,
+                   help="the stage ladder for this run: a ladder name "
+                        "exported by playground.rl.curriculum (e.g. "
+                        "m7_s1); default: the B2 standing ladder")
     e = sub.add_parser("eval")
     e.add_argument("--checkpoint", required=True)
     e.add_argument("--stage", default="sustained")

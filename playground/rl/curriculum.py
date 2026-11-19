@@ -28,6 +28,11 @@ pointer) and fully deterministic (no RNG anywhere; identical sequences give
 identical phase progressions). Transitions are non-cumulative by
 construction — every apply() routes through set_phase, which rewrites each
 parameter from its source of truth rather than incrementing it.
+
+M7-1a adds the SECOND ladder: `M7_S1_STAGES`, the individual limb-control
+ladder for the M7 lineages — selected explicitly at run launch, never a
+mutation of DEFAULT_STAGES (the B2/B3/B4 fixtures keep their indices and
+their bit-identical behaviour). See reports/M7_1A_LIMB_STAGES_CHANGE.md.
 """
 
 from __future__ import annotations
@@ -92,6 +97,114 @@ DEFAULT_STAGES = (
           "Reserved: needs heading/waypoint task sampling support.",
           0, {}, False),
 )
+
+
+# ---------------------------------------------------------------- M7-1a limb
+# The M7 S1 limb-control ladder (reports/M7_1A_LIMB_STAGES_CHANGE.md) — a
+# SEPARATE ladder for the M7 lineages, selected explicitly at run launch
+# (scripts/rl_ppo.py --stages m7_s1). DEFAULT_STAGES is UNTOUCHED: the B2/B3/
+# B4 fixtures keep their indices and bit-identical behaviour. Index 0 is the
+# SAME standing Stage object as the B4 ladder (bit-identical base stage).
+#
+# Scope (Jamie's M7-1 directive 2026-11-18): INDIVIDUAL limb control with
+# head/neck and trunk posture included; NO walking curriculum — every phase
+# carries target_velocity [0, 0, 0] EXPLICITLY (never the stale [0.5,0,0]
+# default that set_phase falls back to when the key is absent, the M7-3
+# flagged figure). The waist is NEVER commanded (P1B/P2 dead-band ⇒
+# neutral-hold only) and ankle schedules are PINNED at 0 (P2: ground-pinned
+# under load — the finding rides the M7-2 COM-shift stage, not S1).
+#
+# Stage order = ascending measured physical load (P2 torque rows): arms
+# ≤1.56 N·m → head ≤0.88 → torso 2.27 → legs 8.5–10.1 N·m. Duration default
+# 200,000 decisions per stage (the standing-stage precedent); the training
+# run's stage_budgets (--stage-budget id=budget) override at launch.
+
+_M7_HOLD_TARGETS = (-0.7, -0.35, 0.35, 0.7)   # P2-measured holdable set (rad)
+
+_M7_SCHED_KW = {"hold_windows": 120, "transition_windows": 30, "shuffle": False}
+
+
+def _m7_sched(group: str, targets: dict) -> dict:
+    return {"group": group, "targets_rad": targets, **_M7_SCHED_KW}
+
+
+def _m7_phase(group: str, targets: dict, limb_tracking_w: float) -> dict:
+    return {"gravity_scale": 1.0, "upright_assist": 0.6, "max_steps": 400,
+            "target_velocity": [0.0, 0.0, 0.0],
+            "reward_coeffs": {"limb_tracking": limb_tracking_w},
+            "commands": {"mask": (1, 0, 0, 0), "limb_group": group},
+            "command_schedule": _m7_sched(group, targets)}
+
+
+# M7-1a limb_tracking coefficient — MEASURED-CONFIRMED. The untrained-baseline
+# probe (reports/m7_s1_probe.py -> reports/M7_1A_S1_PROBE.json, 2026-11-19;
+# gate report reports/M7_1A_S1_GATE.md) measured the feasible window
+# [0.75, 5.18] reward/window and confirms 2.0 sits inside it: signal floor
+# w>=0.75 (separation>=0.05/window for every group; legs bind) and equilibrium
+# ceiling w<=5.18 (good-tracking residual <=5% of the 2.50 base reward/window).
+# The value was validated, not changed. The launch gate (M7_S1_PROVISIONAL)
+# stays closed until the gate report is reviewed (M7-1a report Sec.7).
+_M7_S1_W = 2.0
+
+_M7_T = _M7_HOLD_TARGETS
+_M7_N = (0.0,)   # pinned-neutral (the P1B waist gate / P2 ankle pins)
+
+M7_S1_STAGES = (
+    DEFAULT_STAGES[0],        # standing — the same base stage, bit-identical
+    Stage("m7_s1_left_arm", "Left arm control",
+          "Hold tracked left shoulder+elbow targets while standing; head and "
+          "trunk posture bands live from the base reward.",
+          200_000, _m7_phase("left_arm", {"left_shoulder": _M7_T,
+                                          "left_elbow": _M7_T}, _M7_S1_W), True),
+    Stage("m7_s1_right_arm", "Right arm control",
+          "Hold tracked right shoulder+elbow targets while standing.",
+          200_000, _m7_phase("right_arm", {"right_shoulder": _M7_T,
+                                           "right_elbow": _M7_T}, _M7_S1_W), True),
+    Stage("m7_s1_head", "Head and neck control",
+          "Hold tracked head pitch/yaw/roll targets while standing (Jamie's "
+          "S1 scope: head/neck included).",
+          200_000, _m7_phase("head", {"head_pitch": _M7_T, "head_yaw": _M7_T,
+                                      "head_roll": _M7_T}, _M7_S1_W), True),
+    Stage("m7_s1_torso", "Trunk (torso) control",
+          "Hold tracked spine_L2 targets while standing — the trunk-posture "
+          "ask under the chest-aware base reward.",
+          200_000, _m7_phase("torso", {"spine_L2": _M7_T}, _M7_S1_W), True),
+    Stage("m7_s1_left_leg", "Left leg control",
+          "Hold tracked left hip+knee targets; the ankle stays pinned at "
+          "neutral (P2: ground-pinned under load).",
+          200_000, _m7_phase("left_leg", {"left_hip": _M7_T,
+                                          "left_knee": _M7_T,
+                                          "left_ankle": _M7_N}, _M7_S1_W), True),
+    Stage("m7_s1_right_leg", "Right leg control",
+          "Hold tracked right hip+knee targets; the ankle stays pinned.",
+          200_000, _m7_phase("right_leg", {"right_hip": _M7_T,
+                                           "right_knee": _M7_T,
+                                           "right_ankle": _M7_N}, _M7_S1_W), True),
+    Stage("m7_s1_all", "All limbs together",
+          "Every joint commanded at once; the waist is pinned at neutral in "
+          "every window (the P1B neutral-hold gate — its error is measured "
+          "as a gate, never trained).",
+          200_000, _m7_phase("all", {"left_shoulder": _M7_T,
+                                     "left_elbow": _M7_T,
+                                     "right_shoulder": _M7_T,
+                                     "right_elbow": _M7_T,
+                                     "head_pitch": _M7_T, "head_yaw": _M7_T,
+                                     "head_roll": _M7_T,
+                                     "spine_L2": _M7_T,
+                                     "left_hip": _M7_T, "left_knee": _M7_T,
+                                     "left_ankle": _M7_N,
+                                     "right_hip": _M7_T, "right_knee": _M7_T,
+                                     "right_ankle": _M7_N,
+                                     "waist_yaw": _M7_N}, _M7_S1_W), True),
+)
+
+# The launcher's explicit ladder registry (scripts/rl_ppo.py --stages):
+STAGE_LADDERS = {"m7_s1": M7_S1_STAGES}
+
+# Launch-time gate: the M7-1a untrained-baseline probe must record its
+# measured coefficients + gate bands (M7_1A_LIMB_STAGES_CHANGE.md §4/§5)
+# BEFORE an M7 lineage trains; the probe clears this flag.
+M7_S1_PROVISIONAL = True
 
 
 class Curriculum:

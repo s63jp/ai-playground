@@ -39,7 +39,7 @@ OBJECTIVES = {
 }
 
 _ALLOWED_PPO_KEYS = ("lr", "ent_coef", "clip_eps", "gamma", "gae_lambda",
-                     "rollout_steps", "epochs", "minibatch", "max_grad_norm")
+                     "rollout_steps", "epochs", "minibatch", "max_grad_norm", "hidden")
 
 ITERATION_CACHE = 200
 

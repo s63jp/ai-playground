@@ -73,6 +73,11 @@ _V3_JOINT_ORDER = (
 _V4_JOINT_ORDER = _V3_JOINT_ORDER + ("waist_yaw",)
 _COMMAND_GROUPS = ("limb", "balance", "waypoint", "stop")
 
+# M7-1a: the measured P2 per-joint holdable candidate set for command
+# schedules (ai-playground-audit/m7_p2_pd_reference.json — every non-waist
+# joint completed holds at ±0.35/±0.70 rad; the waist is neutral-hold only).
+_M7_P2_HOLDABLE_RADS = (0.0, -0.7, -0.35, 0.35, 0.7)
+
 # Fixed normalisation constants (rl.observation in config; documented). Vel
 # scales come from measured scripting envelopes: knee peak 4.83 rad/s during
 # the scripted walk (ai-playground-audit/probe_b2_audit), root speed capped
@@ -208,6 +213,12 @@ class LocoEnv:
         self._commands = {"mask": (0, 0, 0, 0), "limb_targets": None,
                           "com_shift": (0.0, 0.0), "waypoint": (0.0, 0.0, 0.0),
                           "stop": 0, "limb_group": "all"}
+        # ---- M7-1a: per-episode command schedule (S1 limb stages; spec set
+        # by set_phase, plan built per reset(seed), ticked per step) ----
+        self._cmd_schedule = None    # validated spec dict, or None
+        self._cmd_plan = None        # this episode's segments [(prev, tgt, len)]
+        self._cmd_window = 0         # decision windows since the last reset
+
         self._target_point = None   # env-side target point, metres world xyz
         self._upright_window = deque(maxlen=25)  # stability window (decisions)
         for name in self.joint_names:
@@ -344,6 +355,178 @@ class LocoEnv:
                     f"limb_group must be one of {sorted(LIMB_GROUPS)}")
             self._commands["limb_group"] = limb_group
 
+    # ---------------------------------------------------------- M7-1a schedule
+    def _set_command_schedule(self, spec) -> None:
+        """Validate + store a per-episode limb command schedule (M7-1a).
+
+        Spec (all fields validated loudly; None clears — non-cumulative like
+        every phase knob):
+          group               name in LIMB_GROUPS (the stage's active group)
+          targets_rad         {joint: [candidate hold targets in rad]} — every
+                              candidate must be inside the joint's range_rad
+                              AND inside the MEASURED P2 holdable set
+                              {0, ±0.35, ±0.70}; waist candidates ⊆ {0} (the
+                              P1B neutral-hold gate); ankle candidates ⊆ {0}
+                              (P2: ground-pinned, an M7-2 COM-shift finding)
+          hold_windows        decision windows held per segment (>0)
+          transition_windows  windows ramping between holds (≥0)
+          shuffle             false (default): candidates cycle in listed
+                              order per joint; true: seeded per-episode draw
+        """
+        if self._is_v3:
+            raise ValueError(
+                "phase 'command_schedule' requires contract version 4")
+        if spec is None:
+            self._cmd_schedule = None
+            self._cmd_plan = None
+            self._cmd_window = 0
+            return
+        if not isinstance(spec, dict):
+            raise TypeError("phase 'command_schedule' must be a dict or None")
+        g = spec.get("group")
+        if g not in LIMB_GROUPS:
+            raise ValueError(
+                f"command_schedule group must be one of {sorted(LIMB_GROUPS)}")
+        targets = spec.get("targets_rad")
+        if not isinstance(targets, dict) or not targets:
+            raise ValueError("command_schedule needs targets_rad: "
+                             "{joint: [candidate rads]}")
+        hold = int(spec.get("hold_windows", 120))
+        trans = int(spec.get("transition_windows", 30))
+        if hold <= 0:
+            raise ValueError("command_schedule hold_windows must be > 0")
+        if trans < 0:
+            raise ValueError("command_schedule transition_windows must be >= 0")
+        if hold + trans > self.max_steps:
+            raise ValueError(
+                f"command_schedule segment ({hold}+{trans}) exceeds the "
+                f"episode max_steps ({self.max_steps})")
+        idxs = LIMB_GROUPS[g]
+        sets = {}
+        for i in idxs:
+            j = self.joint_names[i]
+            if j not in targets and \
+                    not (j in ("waist_yaw",)
+                         or j.endswith("_ankle")
+                         or j.endswith("_foot_yaw")):
+                raise ValueError(
+                    f"command_schedule is missing joint '{j}' (group '{g}'); "
+                    "every group joint needs an explicit candidate list — "
+                    "pinned-neutral joints declare [0.0]")
+            cands = targets.get(j, [0.0])
+            if not isinstance(cands, (list, tuple)) or not cands:
+                raise ValueError(f"command_schedule targets for '{j}' must "
+                                 "be a non-empty list of rads")
+            norm = []
+            lo, hi = self.joint_range[j]
+            for rad in cands:
+                r = float(rad)
+                if not np.isfinite(r):
+                    raise ValueError(f"command_schedule target for '{j}' "
+                                     "must be finite")
+                if not (lo <= r <= hi):
+                    raise ValueError(
+                        f"command_schedule target {r} rad outside joint "
+                        f"'{j}' range [{lo}, {hi}]")
+                if j == "waist_yaw":
+                    if r != 0.0:
+                        raise ValueError(
+                            "the waist is NEVER commanded in S1 (P1B/P2 "
+                            "dead-band): candidates must be [0.0]")
+                elif j.endswith("_ankle") or j.endswith("_foot_yaw"):
+                    if r != 0.0:
+                        raise ValueError(
+                            f"'{j}' is ground-pinned under load (P2: 0.344 "
+                            "rad tracking err — the M7-2 COM-shift finding): "
+                            "S1 schedules must pin it at 0.0")
+                elif min(abs(r - allowed) for allowed in
+                         _M7_P2_HOLDABLE_RADS) > 1e-9:
+                    raise ValueError(
+                        f"command_schedule target {r} rad is outside the "
+                        "measured P2 holdable set {0, ±0.35, ±0.70} for "
+                        f"'{j}'")
+                norm.append((r - lo) / (hi - lo) * 2.0 - 1.0)   # action encoding
+            sets[j] = tuple(sorted(set(norm)))
+        # joint-name keyed candidate sets, in NORMALIZED action units
+        self._cmd_schedule = {"group": g,
+                              "joints": tuple(self.joint_names[i] for i in idxs),
+                              "idxs": tuple(int(x) for x in idxs),
+                              "sets": sets,
+                              "hold_windows": hold,
+                              "transition_windows": trans,
+                              "shuffle": bool(spec.get("shuffle", False))}
+        self._cmd_plan = None
+        self._cmd_window = 0
+        # The scheduled group IS the active limb group: arm the limb mask and
+        # the group here (one source of truth) — a schedule without a live
+        # limb mask would be a silent no-op reward, which is exactly the
+        # silent-misconfig pattern the loud-validated command seam exists to
+        # prevent. Conflicts with a phase-declared 'commands' block are
+        # refused in set_phase.
+        self.set_commands(mask=(1, 0, 0, 0), limb_group=g)
+
+    def _plan_command_episode(self, seed) -> None:
+        """Build this episode's hold plan from the schedule spec. Deterministic
+        per (spec, seed); the default (shuffle off) cycles each commanded
+        joint's candidates in listed order (seeded rotation for variety) —
+        identical seeds give identical plans, shuffled mode seeds its draws."""
+        self._cmd_plan = None
+        self._cmd_window = 0
+        if self._cmd_schedule is None:
+            return
+        import zlib
+        sched = self._cmd_schedule
+        # int-entropy SeedSequence (string seeds are refused); crc32 keeps
+        # the group derivation stable across processes/python runs
+        entropy = [int(seed or 0), zlib.crc32(
+            sched["group"].encode("utf-8"))]
+        rng = np.random.default_rng(entropy)
+        hold, trans = sched["hold_windows"], sched["transition_windows"]
+        seg = hold + trans
+        n_seg = int(np.ceil(max(self.max_steps, 1) / seg)) + 1
+        rot = int(rng.integers(0, 10_000))    # fixed per-episode phase offset
+        neutral = np.zeros(self.action_dim, dtype=float)
+        plan, prev = [], neutral
+        for k in range(n_seg):
+            tgt = neutral.copy()
+            for pos, idx in enumerate(sched["idxs"]):
+                j = sched["joints"][pos]
+                cands = sched["sets"][j]
+                if sched["shuffle"]:
+                    tgt[idx] = float(cands[int(rng.integers(len(cands)))])
+                else:
+                    tgt[idx] = float(cands[(rot + k + pos) % len(cands)])
+            plan.append((prev, tgt, seg))
+            prev = tgt
+        self._cmd_plan = plan
+        self._cmd_window = 0
+        v = self._schedule_value_at(0)
+        self.set_commands(limb_targets=tuple(float(x) for x in v))
+
+    def _schedule_value_at(self, window: int) -> np.ndarray:
+        """The commanded 15-vector at decision window `window` under the
+        episode plan: transitions interpolate linearly, holds are flat."""
+        seg = self._cmd_schedule["hold_windows"] + \
+            self._cmd_schedule["transition_windows"]
+        s = (window // seg) % len(self._cmd_plan)
+        t = window - (window // seg) * seg
+        prev_t, tgt, _ = self._cmd_plan[s]
+        t_trans = self._cmd_schedule["transition_windows"]
+        if t < t_trans and t_trans > 0:
+            a = t / t_trans
+            return (1.0 - a) * prev_t + a * tgt
+        return tgt.copy()
+
+    def _tick_command_schedule(self) -> None:
+        """Advance the schedule one decision window and publish the window's
+        command (engine-owned: the command block feeds obs + reward this
+        window; the action space is never masked)."""
+        if self._cmd_schedule is None or self._cmd_plan is None:
+            return
+        self._cmd_window += 1
+        v = self._schedule_value_at(self._cmd_window)
+        self.set_commands(limb_targets=tuple(float(x) for x in v))
+
     def _command_block_obs(self) -> np.ndarray:
         """The 25-dim v4 command block: masked groups emit their command
         values, inactive groups emit zeros (the policy reads zeros; the value
@@ -478,6 +661,28 @@ class LocoEnv:
                               "com_shift": (0.0, 0.0),
                               "waypoint": (0.0, 0.0, 0.0), "stop": 0,
                               "limb_group": "all"}
+        if 'command_schedule' in phase:
+            # M7-1a: per-episode limb hold schedule (the plan itself is built
+            # per reset(seed) — stage-agnostic episode data). Non-cumulative
+            # like every phase knob: a phase without the key clears it. A
+            # schedule declares its own limb mask + group; a phase-declared
+            # 'commands' block must not contradict it (the schedule sets a
+            # consistent one itself).
+            c = phase.get('commands')
+            if isinstance(c, dict):
+                sched_g = phase['command_schedule'].get('group')
+                if 'limb_group' in c and c['limb_group'] != sched_g:
+                    raise ValueError(
+                        "phase 'commands.limb_group' contradicts "
+                        "command_schedule.group "
+                        f"({c.get('limb_group')!r} != {sched_g!r})")
+                if c.get('mask') is not None and tuple(c['mask'])[0] != 1:
+                    raise ValueError(
+                        "phase 'commands.mask' with a command_schedule must "
+                        "arm the limb bit (bit 0 = 1)")
+            self._set_command_schedule(phase['command_schedule'])
+        elif not self._is_v3:
+            self._set_command_schedule(None)
         if 'max_steps' in phase:
             self.max_steps = int(phase['max_steps'])
 
@@ -521,6 +726,9 @@ class LocoEnv:
         for name in self.joint_names:
             kp, kd = self._gains.get(name, (15.0, 1.5))
             self.world.set_joint_target(name, 0.0, kp=kp, kd=kd, source="neural_policy")
+        # M7-1a: build this episode's command plan AFTER the reset pose is
+        # placed and the neutral PD is registered; apply window 0's command.
+        self._plan_command_episode(seed)
         self._collect_bodies()
         self.prev_action = np.zeros(self.action_dim, dtype=np.float32)
         self.step_count = 0
@@ -564,6 +772,10 @@ class LocoEnv:
                 max(self.clip_stats["max_elements_in_call"], clipped_elems)
             action = np.clip(action, -1.0, 1.0).astype(np.float32)
         self.clip_stats["calls"] += 1
+        # M7-1a: publish this window's scheduled command (before the PD
+        # mapping, so the window's obs, MeasuredStep.commands and reward all
+        # read the same command state; actions are never masked by it).
+        self._tick_command_schedule()
         # map normalized action to target positions (documented encoding)
         for i, name in enumerate(self.joint_names):
             low, high = self.joint_range[name]
