@@ -112,8 +112,8 @@ def build_session_env(env_cfg_overrides: dict | None = None, *,
 
 def list_experiments(root) -> dict:
     """List experiment run dirs under `root` with their checkpoints, S1 eval
-    verdicts, and objective/limb metadata. Read-only; shared by both the
-    dashboard mount and the standalone sidecar so the two never drift."""
+    verdicts, and objective/limb metadata. Read-only; shared by the live and
+    playback dashboard mounts so the two never drift."""
     import json
     from pathlib import Path
     root = Path(root)

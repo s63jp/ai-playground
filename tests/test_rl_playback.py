@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import socket
 import threading
 import time
 from pathlib import Path
@@ -482,84 +481,3 @@ def test_playback_never_writes_b3_run1(need_ckpt, tmp_path):
         stopsess(sess)
     after = snap(b3)
     assert after == before, "the playback session wrote to b3_run1"
-
-
-# ------------------------------------------------------- SSE + server seam
-def _free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-def test_sse_delivers_spec_and_frames_to_an_early_subscriber(need_ckpt,
-                                                             tmp_path):
-    from playground.rl_live.bus import Bus
-    from playground.rl_live.server import App, LiveHTTPServer
-
-    port = _free_port()
-    pbsess = make_session(tmp_path, name="pb_sse", action_repeat=10)
-    bus = Bus(frame_hz=10_000)
-    app = App(session=pbsess, bus=bus, b3=None, out_root=tmp_path,
-              frame_hz=10_000, refresher=False)
-    httpd = LiveHTTPServer(("127.0.0.1", port), app)
-    th = threading.Thread(target=httpd.serve_forever, daemon=True)
-    th.start()
-    try:
-        s = socket.create_connection(("127.0.0.1", port), timeout=10)
-        try:
-            s.sendall(b"GET /api/rl_live/stream HTTP/1.1\r\nHost: x\r\n\r\n")
-            s.settimeout(30)
-            # the viewer connects BEFORE the session starts (the normal flow)
-            assert pbsess.start()["ok"] is True
-            buf = b""
-            deadline = time.time() + 45
-            while time.time() < deadline and b"event: spec" not in buf:
-                try:
-                    chunk = s.recv(65536)
-                except socket.timeout:
-                    continue
-                if not chunk:
-                    break
-                buf += chunk
-            assert b"event: spec" in buf, buf[:400]
-            spec = json.loads(buf.split(b"event: spec\ndata: ", 1)[1]
-                              .split(b"\n", 1)[0])
-            assert spec["spec_version"] == 1
-            assert any(b.get("rig") for b in spec["bodies"])
-            deadline = time.time() + 30
-            while time.time() < deadline and b"event: frame" not in buf:
-                try:
-                    s.settimeout(15)
-                    chunk = s.recv(65536)
-                except socket.timeout:
-                    break
-                if not chunk:
-                    break
-                buf += chunk
-            assert b"event: frame" in buf, "a connected viewer got no frames"
-        finally:
-            s.close()
-    finally:
-        stopsess(pbsess)
-        wait_state(pbsess, "stopped", 10)
-        httpd.shutdown()
-        httpd.server_close()
-        th.join(timeout=5)
-
-
-def test_playback_status_shape_through_the_app(need_ckpt, tmp_path):
-    from playground.rl_live.bus import Bus
-    from playground.rl_live.server import App
-    pbsess = make_session(tmp_path)
-    bus = Bus()
-    _app = App(session=pbsess, bus=bus, b3=None, out_root=tmp_path,
-               refresher=False)
-    payload = _app.status_payload()
-    assert "session" in payload
-    st = payload["session"]
-    assert st["trainer_available"] is True      # injected by the server app
-    assert st["is_playback"] is True
-    assert st["config"]["inference"] == "deterministic"
-    assert payload["server"]["bus"]["frame_hz"] == 30.0

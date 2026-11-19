@@ -33,7 +33,7 @@ must work with sensible in-code defaults until the parent merges it (read with `
   exercise and in tests, so the contention experiments are not disturbed.
 - Don't touch `experiments/` data except under a temp dir or a clearly named subfolder you create
   (`experiments/_wp<N>_scratch/`), which you delete at the end. Tests use tmp dirs (see `tests/conftest.py`).
-- Don't start/stop the dashboard on port 8765 (in use). Use 8766+ if you need a live server.
+- Don't start/stop the dashboard on port 8765 (in use). Use another free port if you need your own server.
 - "Done" = your new tests pass + `tests/test_hve.py tests/test_smoke.py` still pass, with the real pytest
   output pasted in your final report. Never claim a result you did not run.
 

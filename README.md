@@ -173,10 +173,10 @@ for the full catalogue):
   The scripted gait remains a benchmark, never a learned policy.
 * **Live neural training** (`playground/rl_live/`, *this branch*; see
   [docs/LIVE_TRAINING.md](docs/LIVE_TRAINING.md)): a viewer/controls surface
-  over the ONE authoritative stack — "Live neural training" dashboard tab
-  (tab mounts via `register_rl_live_routes(app, cfg)`, gateway convention)
-  and an optional standalone sidecar (`-m playground.rl_live.server` on
-  127.0.0.1:8766). `FrameTapEnv` forwards every trainer call unchanged to
+  over the ONE authoritative stack — "Live neural training" and "Checkpoint
+  playback" dashboard tabs, mounted on the single dashboard server via
+  `register_rl_live_routes(app, cfg)` and `register_rl_playback_routes(app,
+  cfg)` (no separate sidecar process). `FrameTapEnv` forwards every trainer call unchanged to
   the real `LocoEnv` (identity- and coupling-tested: viewer frames are the
   trained env's own `d.xpos`/`d.xquat`, no second simulation); telemetry
   follows `progress.jsonl` read-only; pause/stop ride the trainer's

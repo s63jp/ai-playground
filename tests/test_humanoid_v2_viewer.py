@@ -3,7 +3,7 @@
 Browser evidence (screenshots, live playback sampling) is recorded separately in
 playground/rl_live/humanoid_v2/evidence/. These tests check the static contract that
 the browser relies on: asset provenance, the driver plan, L/R separation, the JS parity
-run, server content types, the no-scripted-motion rule, and the frozen frame contract.
+run, dashboard asset serving, the no-scripted-motion rule, and the frozen frame contract.
 """
 from __future__ import annotations
 
@@ -94,11 +94,23 @@ def test_js_parity_suite_passes_against_python_retarget():
 
 
 # ----------------------------------------------------------------- Validate
-def test_server_serves_fbx_and_json_with_content_types():
-    from playground.rl_live.server import _Handler
-    assert _Handler._ctype(".fbx") == "application/octet-stream"
-    assert _Handler._ctype(".json") == "application/json"
-    assert _Handler._ctype(".js") == "text/javascript"
+def test_dashboard_static_mount_serves_viewer_assets():
+    """The V2 viewer's FBX + JSON assets load from the one dashboard static
+    mount (the standalone sidecar that hand-rolled these content types is gone;
+    the dashboard serves them via Starlette StaticFiles / stdlib mimetypes)."""
+    from fastapi import FastAPI
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.testclient import TestClient
+    static = ROOT / "playground" / "dashboard" / "static"
+    app = FastAPI()
+    app.mount("/static", StaticFiles(directory=static), name="static")
+    c = TestClient(app)
+    j = c.get("/static/assets/humanoid_v2/retarget_plan.json")
+    assert j.status_code == 200
+    assert j.headers["content-type"].startswith("application/json")
+    fbx = c.get("/static/assets/humanoid_v2/humanoid_robot_rigged.fbx")
+    assert fbx.status_code == 200
+    assert int(fbx.headers["content-length"]) > 100_000   # the real rig, not a 404 page
 
 
 def test_viewer_has_no_second_animation_system():

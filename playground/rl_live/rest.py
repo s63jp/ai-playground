@@ -1,9 +1,9 @@
 """FastAPI mount for Live Neural Training on the main dashboard server.
 
-This is the primary integration surface (Jamie: "the project has a full
-dashboard it can be added to"). The standalone sidecar
-(`-m playground.rl_live.server`) remains as an optional isolated entry
-point; both drive the same session/bus/telemetry modules.
+This is the sole integration surface (Jamie: "the project has a full
+dashboard it can be added to"). Live training and checkpoint playback both run
+on the ONE dashboard server — this mount plus rest_playback.py — driving the
+shared session/bus/telemetry modules. There is no separate sidecar process.
 
     from ..rl_live.rest import register_rl_live_routes    # dashboard/server.py
     register_rl_live_routes(app, cfg)

@@ -11,19 +11,26 @@ branch, based on the B2 commit `cbac1cd`). The real-trainer wiring becomes
 active the moment the B3 commit (ppo.py / checkpoint.py / eval.py) lands on
 main — nothing else in this layer needs to change (see §7).
 
-## 0. Two surfaces, one engine
+## 0. One server, one engine
 
-**Primary: the main dashboard.** `register_rl_live_routes(app, cfg)`
-(`playground/rl_live/rest.py`) mounts everything on the existing
-`playground serve` FastAPI app (the gateway/player-router mounting
-convention), and the dashboard gains a **"Live neural training"** tab
-(`static/js/rl_live_tab.js`) beside "RL environment" — same three.js vendor
-set, `OrbitControls` and `HumanoidView` the other agent-run viewers use.
+**Everything runs on the main dashboard server.** `playground serve` builds one
+FastAPI app and mounts both neural surfaces on it (the gateway/player-router
+mounting convention):
 
-**Optional: a standalone sidecar** (`python -m playground.rl_live.server`,
-port 8766) for when you want an isolated window without the whole dashboard.
-Both surfaces drive the SAME session/bus/telemetry modules; the sidecar is a
-convenience, not a second engine.
+- `register_rl_live_routes(app, cfg)` (`playground/rl_live/rest.py`) → the
+  **"Live neural training"** tab (`static/js/rl_live_tab.js`), under
+  `/api/rl_live/*`.
+- `register_rl_playback_routes(app, cfg)` (`playground/rl_live/rest_playback.py`)
+  → the **"Checkpoint playback"** tab (`static/playback.html`), under
+  `/api/rl_playback/*` with its own Bus/SSE so training and playback never
+  collide.
+
+Both drive the SAME session/bus/telemetry/playback modules. There is **no
+separate sidecar process and no second server** — the earlier standalone
+`:8766`/`:8770` surfaces have been consolidated into these dashboard mounts.
+The viewer reuses the same three.js vendor set, `OrbitControls`, and both the
+primitive `HumanoidView` (V1 fallback) and the Blender-FBX `createHumanoidV2`
+(V2, default) rig renderers.
 
 ## 1. Honest-display contract
 
@@ -43,15 +50,16 @@ training process itself:
 ## 2. Architecture (one process, one thread per concern)
 
 ```
-┌───────────────────────────── rl_live sidecar (:8766, 127.0.0.1 only) ───────┐
+┌─────────────────────── dashboard server (:8765, `playground serve`) ────────┐
 │ session thread:  LocoEnv → FrameTapEnv (read-only) → PPOTrainer (the B3     │
 │                  algorithm, unmodified; pause/stop via should_stop;         │
 │                  telemetry via on_iteration)                                │
 │ tap → frames.py  → bus (30 Hz latest-wins fanout) → SSE → browser           │
 │ on_iteration     → run dir progress.jsonl + SSE iteration events            │
 │ B3 refresher     → read-only tail of experiments/rl/b3_run1/progress.jsonl  │
-│ HTTP: /rl_live.html + /static/* (reuses dashboard vendor three.js,          │
-│       OrbitControls, HumanoidView) + JSON control/status endpoints          │
+│ HTTP: /static/* (dashboard shell, vendor three.js, OrbitControls,          │
+│       HumanoidView, humanoid_v2 + FBX assets) + /api/rl_live/* and          │
+│       /api/rl_playback/* JSON control/status/SSE endpoints                  │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -64,8 +72,9 @@ Key pieces (`playground/rl_live/`):
 | `session.py` | state machine `idle → starting → running ⇄ paused → stopped \| error`; fresh Actor/Critic per start; own `progress.jsonl` + `run_config.json` + checkpoints under `experiments/rl_live/<name>/`. |
 | `interop.py` | the single seam to the B3 trainer modules (lazy imports; clear `InteropUnavailable` behaviour while B3 is not on the tree). |
 | `bus.py` | SSE fanout; frames latest-wins (a slow viewer shows the freshest pose, never a stale backlog). |
-| `rest.py` | the FastAPI mount for the main dashboard server (`register_rl_live_routes(app, cfg)`) — same session/bus/B3 objects as the sidecar, exposed under `/api/rl_live/*` on :8765. |
-| `server.py` | stdlib HTTP+SSE sidecar (optional isolated surface); localhost-only by policy; traversal-guarded statics; the only writes go to the session's own run dir. |
+| `rest.py` | the FastAPI mount for live training on the dashboard server (`register_rl_live_routes(app, cfg)`), exposed under `/api/rl_live/*` on :8765. |
+| `rest_playback.py` | the FastAPI mount for checkpoint playback on the same server (`register_rl_playback_routes(app, cfg)`), under `/api/rl_playback/*` with its own Bus/SSE. |
+| `playback.py` | `PlaybackSession`: a saved, verified checkpoint drives the real MuJoCo sim through its own inference — no PPO updates, no scripted motion (see §10). |
 
 Dashboard UI files (small, additive diffs in shared files so the tab fits
 the existing shell):
@@ -80,23 +89,19 @@ the existing shell):
 
 ## 3. Running it
 
-Dashboard (primary):
+One server, both surfaces:
 ```bash
 cd <repo>
 .venv/Scripts/python.exe -m playground serve
-# → http://127.0.0.1:8765/#live   (the "Live neural training" tab)
+# → http://127.0.0.1:8765/#live       (the "Live neural training" tab)
+# → http://127.0.0.1:8765/#playback   (the "Checkpoint playback" tab)
 ```
 
-Optional standalone sidecar (isolated window on its own port):
-```bash
-.venv/Scripts/python.exe -m playground.rl_live.server
-# → http://127.0.0.1:8766/rl_live.html
-```
-
-Sidecar flags: `--port` (8766), `--frame-hz` (30; MuJoCo gives 50),
-`--out-root` (default `experiments/rl_live`), `--b3-progress` / `--no-b3`.
-On the dashboard mount the same knobs come from the `rl_live:` config block
-(`out_root`, `b3_progress`, `no_b3`) with the same defaults.
+Knobs come from the `rl_live:` config block (`out_root`, `b3_progress`,
+`no_b3`, `frame_hz`) with the same defaults the mounts were built with
+(`out_root` → `experiments/rl_live`, frame_hz 30). Checkpoint playback is
+started per-checkpoint from its tab (or `POST /api/rl_playback/start`); its
+run artifacts land under `experiments/rl_playback/<name>/`.
 
 A live training session uses the same one-thread CPU budget conventions as
 `scripts/rl_ppo.py train` (`torch.set_num_threads(1)`); do not run long live
@@ -141,7 +146,7 @@ matching the project's error convention.
 
 - The branch is a git worktree from `cbac1cd`; the B3 session's working tree
   is physically unreachable from this branch's file operations.
-- The sidecar never opens B3 paths for writing. The only B3 access is
+- The live mount never opens B3 paths for writing. The only B3 access is
   `read_records()`/`ProgressTail.read_new()` on its `progress.jsonl`.
 - Live training only starts when a user asks for it via API/CLI; nothing in
   this module launches training on import, and no second trainer exists here
@@ -181,25 +186,32 @@ telemetry + live-frame plumbing. After B3 merges to main:
 
 ## 9. Known limitations (honest list)
 
-- Mesh geoms do not render (the humanoid rig is primitives, so the rig is
-  accurate; island-level meshes would appear as omitted).
+- The humanoid rig renders as the retargeted Blender FBX mesh (V2, the
+  default; `?rig=v1` or any V2 error falls back to the primitive rig).
+  Island-level (non-rig) MuJoCo meshes are still counted, not rendered.
 - Pause granularity is the rollout, not the decision (algorithm-respecting).
-- One live session per sidecar process; objective registry offers walking
-  only, per the mission scoping.
+- One live session per server; the objective registry offers walking plus the
+  M7-1a S1 individual-limb ladder.
 - `AgentHandle.agent_skeleton()` is not used for rig rendering (it is the
   box-agent/limb layout); the geom-accurate spec replaces it, with
   `HumanoidView` retained as the no-spec fallback.
 
 ## 10. Checkpoint playback (read-only demo surface)
 
-`playground.rl_live.playback` is a THIRD surface — a dedicated sidecar that
-replays a saved, verified checkpoint through the real MuJoCo simulation and
-streams it through the same SSE pipeline. Nothing here trains.
+`playground.rl_live.playback.PlaybackSession` replays a saved, verified
+checkpoint through the real MuJoCo simulation and streams it through the same
+SSE pipeline. Nothing here trains. It is served by the **same dashboard
+server** via `register_rl_playback_routes` (`rest_playback.py`) on the
+`/api/rl_playback/*` family with its own Bus — the **"Checkpoint playback"**
+dashboard tab — so no separate process or port is involved.
 
-    .venv/Scripts/python.exe -m playground.rl_live.playback --port 8770 \
-        --checkpoint experiments/rl/b3_run1/ckpt_final.json \
-        --stage sustained --inference deterministic
-    -> http://127.0.0.1:8770/playback.html
+    # start the dashboard, open the "Checkpoint playback" tab, pick a
+    # checkpoint + stage + inference mode and press start, or equivalently:
+    POST /api/rl_playback/start
+      {"experiment": "<run>", "checkpoint": "ckpt_final.json",
+       "stage": "sustained", "inference": "deterministic", "speed": 1.0}
+    # (a checkpoint outside experiments/rl_live may be given as {"path": ...}
+    #  under an allowed training-output root)
 
 - **The rig is the checkpoint's own era.** Before any world is built, the
   sidecar extracts the historical asset from git (`e7e81ac:assets/
@@ -231,6 +243,8 @@ streams it through the same SSE pipeline. Nothing here trains.
   only ever READ (writes verified absent by test).
 - **Proof hooks**: the deterministic band against the recorded
   10-episode held-out evaluation is asserted bit-exact by
-  `tests/test_rl_playback.py::test_playback_rig_reproduces_the_recorded_heldout_eval`.
-  The live-training surfaces (dashboard tab :8765, sidecar :8766) are
-  untouched: playback is its own process, port and run dir.
+  `tests/test_rl_playback.py::test_playback_rig_reproduces_the_recorded_heldout_eval`,
+  and the playback HTTP mount is covered by `tests/test_rl_playback_rest.py`.
+  Playback shares the dashboard server with live training but keeps its own
+  Bus/SSE, `/api/rl_playback/*` routes and `experiments/rl_playback/` run dir,
+  so the two never collide.
