@@ -78,6 +78,39 @@ on any agent path.
 | jumping | a force rocket on the payload (rig fact: the column has no stride-jump; documented cap) |
 | carrying | a hold pin in front of the chest; the load is added to body mass and turns with the figure |
 
+### The humanoid_v2 robot shell — visual only, physics untouched
+
+An optional 35-part robot shell (Blender-built, blue-grey, articulated neck and
+joints) mounts on the rig above with `agent_body.visual: humanoid_v2`. Anything
+else — including a typo — yields the legacy model unchanged.
+
+It is **visual geometry only**: the Blender armature is *not* a physics
+skeleton, so the MuJoCo bodies, joints, limits and actuators stay authoritative
+and existing brains are unaffected.
+
+| compiled physics | legacy | humanoid_v2 |
+|---|---:|---:|
+| `nq` / `nv` / `njnt` / `nbody` | 174 / 152 / 42 / 39 | **identical** |
+| total body mass | 161.050253 kg | **161.050253 kg** (delta 0.0) |
+| per-body mass & inertia | — | **bit-identical** |
+| colliding geoms | 52 | **52** (the 35 added meshes never collide) |
+| 300-step trajectory from `qpos0` | — | `qpos`/`qvel`/`qacc` delta **0.000e+00** |
+
+The RL contract is untouched: **68 obs / 15 actions (v4), waist at action 15**,
+no added actuators, and a checkpoint saved against the legacy world loads
+against the visual world.
+
+MuJoCo derives mass from geoms when a body has no explicit `<inertial>`, so the
+legacy inertials are frozen and re-injected. That table is **fingerprinted
+against `assets/humanoid_mujoco.xml`** and the bodies needing it are discovered
+rather than hardcoded — a stale freeze would otherwise silently undo a rig mass
+correction (exactly what the B4 head fix changed). Re-run
+`scripts/humanoid_v2_freeze_inertials.py` after any rig change; `spec.py`
+refuses a mismatched table.
+
+Reproduce: `python scripts/humanoid_v2_physics_diff.py` (non-zero exit if any
+physics quantity moves). Detail: [integration record](assets/humanoid_v2/INTEGRATION.md).
+
 ### Rig facts agents discover (and we publish, not hide)
 
 * Turning happens **through the stride** — the waist twists against planted-foot

@@ -5,7 +5,7 @@ session reset is simply "build the world from the spec again".
 """
 from __future__ import annotations
 
-import math, os, re
+import hashlib, json, math, os, re
 from dataclasses import dataclass, field, asdict
 from typing import Any
 
@@ -180,6 +180,97 @@ def _f(*vals: float) -> str:
 
 
 
+def _hv2_dir() -> str:
+    return os.path.abspath(os.path.join(
+        os.path.dirname(__file__), "..", "..", "assets", "meshes", "humanoid_v2"))
+
+
+_HV2_CACHE: dict | None = None
+
+
+def _hv2_data() -> dict:
+    """manifest + frozen inertials for the humanoid_v2 visual set (cached).
+
+    The frozen inertials are tied to a FINGERPRINT of the humanoid asset. If
+    assets/humanoid_mujoco.xml changes (as it did when the head mass/COM was
+    corrected in the B4 head-mechanics fix), a stale table would silently
+    re-impose the old masses, so a mismatch raises instead.
+    """
+    global _HV2_CACHE
+    if _HV2_CACHE is None:
+        base = _hv2_dir()
+        with open(os.path.join(base, "manifest.json"), "r", encoding="utf-8") as fh:
+            mf = json.load(fh)
+        with open(os.path.join(base, "inertials.json"), "r", encoding="utf-8") as fh:
+            inert = json.load(fh)
+        with open(HUMANOID_ASSET_PATH, "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()
+        recorded = inert.get("humanoid_asset_sha256")
+        if recorded and recorded != digest:
+            raise AssertionError(
+                "humanoid_v2: inertials.json was frozen against "
+                "humanoid_mujoco.xml %s but the asset is now %s. Re-run "
+                "scripts/humanoid_v2_freeze_inertials.py - using the stale "
+                "table would silently restore the old body masses."
+                % (recorded[:12], digest[:12]))
+        _HV2_CACHE = {"mf": mf, "inert": inert, "base": base}
+    return _HV2_CACHE
+
+
+def _hv2_on(ac: dict) -> bool:
+    """Opt-in: only agent_body.visual == 'humanoid_v2' changes generated XML."""
+    return ac.get("visual") == "humanoid_v2"
+
+
+def _hv2_mesh_assets() -> str:
+    """<compiler meshdir> + <asset> entries for the humanoid_v2 visual set."""
+    parts = sorted(_hv2_data()["mf"]["parts"])
+    meshdir = _hv2_dir().replace("\\", "/")
+    rows = "\n".join('    <mesh name="hv2_%s" file="%s.obj"/>' % (p, p) for p in parts)
+    return '  <compiler meshdir="%s"/>\n  <asset>\n%s\n  </asset>' % (meshdir, rows)
+
+
+def _hv2_visual_inject(block: str, ac: dict) -> str:
+    """Attach humanoid_v2 visual meshes to a humanoid torso block.
+
+    Two edits per target body:
+      * an explicit <inertial> from inertials.json for bodies whose mass is
+        geom-derived - MuJoCo recomputes mass from geoms, so adding 35 meshes
+        would otherwise change those bodies' mass and invalidate training.
+      * a non-colliding mesh <geom> (contype/conaffinity 0, group 1, density 0).
+    """
+    if not _hv2_on(ac):
+        return block
+    d = _hv2_data()
+    mf = d["mf"]
+    bodies = d["inert"]["bodies"]
+    # manifest schema: bodies = {rig body -> [part names]}, parts[p]["rgba"]
+    by_body = {b: sorted(items) for b, items in mf["bodies"].items()}
+
+    for body, items in sorted(by_body.items()):
+        anchor = '<body name="%s"' % body
+        idx = block.find(anchor)
+        if idx < 0:
+            raise AssertionError(
+                "humanoid_v2: body '%s' missing from the rig block" % body)
+        close = block.index(">", idx) + 1
+        ins = []
+        fr = bodies.get(body)
+        if fr is not None:
+            ins.append('<inertial pos="%s" quat="%s" mass="%.17g" diaginertia="%s"/>'
+                       % (" ".join("%.17g" % v for v in fr["pos"]),
+                          " ".join("%.17g" % v for v in fr["quat"]),
+                          fr["mass"],
+                          " ".join("%.17g" % v for v in fr["diaginertia"])))
+        for part in items:
+            rgba = " ".join("%.4g" % v for v in mf["parts"][part]["rgba"])
+            ins.append('<geom name="g:hv2:%s" type="mesh" mesh="hv2_%s" rgba="%s" '
+                       'contype="0" conaffinity="0" group="1" density="0"/>'
+                       % (part, part, rgba))
+        block = block[:close] + "".join(ins) + block[close:]
+    return block
+
+
 def _humanoid_torso_block(ac: dict) -> str:
     """Extract the asset torso body and apply the world's rig contract edits.
 
@@ -231,6 +322,9 @@ def _humanoid_torso_block(ac: dict) -> str:
         # tipping moment into leg-joint fold instead of walking). When
         # false (the current default — the humanoid walks CONTACT-DRIVEN
         # and needs foot grip), the asset's original friction stays.
+        # humanoid_v2 visual meshes (opt-in). Injected here so BOTH the
+        # single-agent and multi-agent (_prefix_names) paths carry them.
+        torso_block = _hv2_visual_inject(torso_block, ac)
         if bool(ac.get("limb_friction_engine", False)):
             # priority="-1": contact parameters come from the geom with
             # the LOWER priority, and the floor specs compile at priority
@@ -324,6 +418,11 @@ def build_mjcf(cfg: dict, specs: list[ObjectSpec]) -> str:
         asset_match = re.search(r'<asset>.*?</asset>', hum_xml, re.DOTALL)
         if asset_match:
             out.append(asset_match.group(0))
+        # humanoid_v2 visual meshes: a second <compiler meshdir>/<asset> pair
+        # (MuJoCo merges repeated sections) so the opt-in leaves the asset's
+        # own block untouched.
+        if _hv2_on(a):
+            out.append(_hv2_mesh_assets())
         # Include the humanoid's <default> block too. It carries the asset's
         # own rig contract for joints (damping="1.5" limited="true" range
         # "-90 90"). The previous integration copied only <asset>, so every
@@ -434,6 +533,11 @@ def build_mjcf(cfg: dict, specs: list[ObjectSpec]) -> str:
                        '<joint name="waist_yaw" type="hinge" axis="0 0 1" '
                        'limited="true" range="-3.1416 3.1416" damping="2.0"/>')
                 torso_block = torso_block.replace(old, new, 1)
+                # humanoid_v2 visual meshes (opt-in). The single-agent path keeps
+                # its own inline copy of this block, so the injection has to
+                # happen here too — injecting only in _humanoid_torso_block()
+                # silently produced a mesh-less model (nmesh 35, ngeom unchanged).
+                torso_block = _hv2_visual_inject(torso_block, a)
                 # With the waist joint the torso is an articulated child, so the
                 # agent container no longer carries welded mass and MuJoCo would
                 # refuse (or, with a token mass, destabilise: a near-massless

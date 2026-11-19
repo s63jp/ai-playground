@@ -1,0 +1,1160 @@
+{
+  "bodies": {
+    "head": [
+      "faceplate",
+      "head",
+      "neck",
+      "neck_ring_1",
+      "neck_ring_2"
+    ],
+    "left_ankle": [
+      "ankle_L"
+    ],
+    "left_elbow": [
+      "elbow_L",
+      "forearm_L",
+      "hand_L",
+      "wrist_L"
+    ],
+    "left_foot": [
+      "foot_L"
+    ],
+    "left_hip": [
+      "hip_L",
+      "thigh_L"
+    ],
+    "left_knee": [
+      "knee_L",
+      "shin_L"
+    ],
+    "left_shoulder": [
+      "shoulder_L",
+      "upperarm_L"
+    ],
+    "right_ankle": [
+      "ankle_R"
+    ],
+    "right_elbow": [
+      "elbow_R",
+      "forearm_R",
+      "hand_R",
+      "wrist_R"
+    ],
+    "right_foot": [
+      "foot_R"
+    ],
+    "right_hip": [
+      "hip_R",
+      "thigh_R"
+    ],
+    "right_knee": [
+      "knee_R",
+      "shin_R"
+    ],
+    "right_shoulder": [
+      "shoulder_R",
+      "upperarm_R"
+    ],
+    "spine_L2": [
+      "chest",
+      "chest_plate",
+      "spine_joint_up"
+    ],
+    "torso": [
+      "abdomen",
+      "pelvis",
+      "spine_joint_low"
+    ]
+  },
+  "checks": {
+    "components": 1,
+    "foot_sole_z": -0.0,
+    "forearm_distal_to_wrist": 2.87e-07,
+    "head_top_z": 1.755,
+    "height_m": 1.755,
+    "lr_mirror_max_dev": 0.0,
+    "shin_distal_to_ankle": 1.2e-07,
+    "thigh_distal_to_knee": 5.2e-08,
+    "upperarm_distal_to_elbow": 9.2e-08
+  },
+  "frame": "qpos0, body-local, Z-up, +Y forward (matches Blender)",
+  "generator": "scripts/humanoid_v2_build_meshes.py",
+  "parts": {
+    "abdomen": {
+      "body": "torso",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "identity",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 96
+    },
+    "ankle_L": {
+      "body": "left_ankle",
+      "material": "RBT_Joint_Gunmetal",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        -0.01,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        -0.055,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.3,
+        0.32,
+        0.35,
+        1.0
+      ],
+      "verts": 762
+    },
+    "ankle_R": {
+      "body": "right_ankle",
+      "material": "RBT_Joint_Gunmetal",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.01,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        -0.055,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.3,
+        0.32,
+        0.35,
+        1.0
+      ],
+      "verts": 762
+    },
+    "chest": {
+      "body": "spine_L2",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "identity",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 96
+    },
+    "chest_plate": {
+      "body": "spine_L2",
+      "material": "RBT_Accent_Light",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "identity",
+      "rgba": [
+        0.6,
+        0.66,
+        0.71,
+        1.0
+      ],
+      "verts": 96
+    },
+    "elbow_L": {
+      "body": "left_elbow",
+      "material": "RBT_Joint_Gunmetal",
+      "matrix": [
+        0.951056627,
+        0.0,
+        0.309016654,
+        -0.414058225,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.309016654,
+        0.0,
+        0.951056627,
+        0.122598649,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.3,
+        0.32,
+        0.35,
+        1.0
+      ],
+      "verts": 762
+    },
+    "elbow_R": {
+      "body": "right_elbow",
+      "material": "RBT_Joint_Gunmetal",
+      "matrix": [
+        0.951056627,
+        0.0,
+        -0.309016654,
+        0.414058225,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.309016654,
+        0.0,
+        0.951056627,
+        0.122598649,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.3,
+        0.32,
+        0.35,
+        1.0
+      ],
+      "verts": 762
+    },
+    "faceplate": {
+      "body": "head",
+      "material": "RBT_Visor_Dark",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "identity",
+      "rgba": [
+        0.11,
+        0.12,
+        0.14,
+        1.0
+      ],
+      "verts": 96
+    },
+    "foot_L": {
+      "body": "left_foot",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        -0.01,
+        0.0,
+        1.0,
+        0.0,
+        -0.025,
+        0.0,
+        0.0,
+        1.0,
+        -0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 96
+    },
+    "foot_R": {
+      "body": "right_foot",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.01,
+        0.0,
+        1.0,
+        0.0,
+        -0.025,
+        0.0,
+        0.0,
+        1.0,
+        -0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 96
+    },
+    "forearm_L": {
+      "body": "left_elbow",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        0.951056615,
+        0.0,
+        0.309016692,
+        -0.414058264,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.303185781,
+        0.0,
+        0.933111152,
+        0.141041211,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 64
+    },
+    "forearm_R": {
+      "body": "right_elbow",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        0.951056615,
+        0.0,
+        -0.309016692,
+        0.414058264,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.303185781,
+        0.0,
+        0.933111152,
+        0.141041211,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 64
+    },
+    "hand_L": {
+      "body": "left_elbow",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        0.951056627,
+        0.0,
+        0.309016654,
+        -0.414058785,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.309016654,
+        0.0,
+        0.951056627,
+        0.127598825,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 96
+    },
+    "hand_R": {
+      "body": "right_elbow",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        0.951056627,
+        0.0,
+        -0.309016654,
+        0.414058785,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.309016654,
+        0.0,
+        0.951056627,
+        0.127598825,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 96
+    },
+    "head": {
+      "body": "head",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "identity",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 762
+    },
+    "hip_L": {
+      "body": "left_hip",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        -0.005,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        -0.04,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 762
+    },
+    "hip_R": {
+      "body": "right_hip",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.005,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        -0.04,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 762
+    },
+    "knee_L": {
+      "body": "left_knee",
+      "material": "RBT_Joint_Gunmetal",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        -0.01,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.03,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.3,
+        0.32,
+        0.35,
+        1.0
+      ],
+      "verts": 762
+    },
+    "knee_R": {
+      "body": "right_knee",
+      "material": "RBT_Joint_Gunmetal",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.01,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.03,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.3,
+        0.32,
+        0.35,
+        1.0
+      ],
+      "verts": 762
+    },
+    "neck": {
+      "body": "head",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "identity",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 64
+    },
+    "neck_ring_1": {
+      "body": "head",
+      "material": "RBT_Joint_Gunmetal",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "identity",
+      "rgba": [
+        0.3,
+        0.32,
+        0.35,
+        1.0
+      ],
+      "verts": 64
+    },
+    "neck_ring_2": {
+      "body": "head",
+      "material": "RBT_Joint_Gunmetal",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "identity",
+      "rgba": [
+        0.3,
+        0.32,
+        0.35,
+        1.0
+      ],
+      "verts": 64
+    },
+    "pelvis": {
+      "body": "torso",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "identity",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 96
+    },
+    "shin_L": {
+      "body": "left_knee",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        -0.01,
+        0.0,
+        1.0,
+        -0.0,
+        0.0,
+        0.0,
+        -0.0,
+        1.294118,
+        -0.08882369,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 64
+    },
+    "shin_R": {
+      "body": "right_knee",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.01,
+        0.0,
+        1.0,
+        -0.0,
+        0.0,
+        0.0,
+        -0.0,
+        1.294118,
+        -0.08882369,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 64
+    },
+    "shoulder_L": {
+      "body": "left_shoulder",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        0.951056627,
+        0.0,
+        0.309016654,
+        -0.414058225,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.309016654,
+        0.0,
+        0.951056627,
+        0.102598637,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 762
+    },
+    "shoulder_R": {
+      "body": "right_shoulder",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        0.951056627,
+        0.0,
+        -0.309016654,
+        0.414058225,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.309016654,
+        0.0,
+        0.951056627,
+        0.102598637,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 762
+    },
+    "spine_joint_low": {
+      "body": "torso",
+      "material": "RBT_Joint_Gunmetal",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "identity",
+      "rgba": [
+        0.3,
+        0.32,
+        0.35,
+        1.0
+      ],
+      "verts": 64
+    },
+    "spine_joint_up": {
+      "body": "spine_L2",
+      "material": "RBT_Joint_Gunmetal",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "identity",
+      "rgba": [
+        0.3,
+        0.32,
+        0.35,
+        1.0
+      ],
+      "verts": 64
+    },
+    "thigh_L": {
+      "body": "left_hip",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        0.999983177,
+        0.0,
+        0.005800528,
+        -0.012724566,
+        0.0,
+        1.0,
+        -0.0,
+        0.0,
+        -0.005114209,
+        0.0,
+        0.881665167,
+        0.0861289,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 64
+    },
+    "thigh_R": {
+      "body": "right_hip",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        0.999983177,
+        -0.0,
+        -0.005800528,
+        0.012724566,
+        -0.0,
+        1.0,
+        -0.0,
+        0.0,
+        0.005114209,
+        0.0,
+        0.881665167,
+        0.0861289,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 64
+    },
+    "upperarm_L": {
+      "body": "left_shoulder",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        0.951056627,
+        0.0,
+        0.309016654,
+        -0.414058225,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.288415441,
+        0.0,
+        0.887652535,
+        0.187759153,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 64
+    },
+    "upperarm_R": {
+      "body": "right_shoulder",
+      "material": "RBT_Shell_BlueGrey",
+      "matrix": [
+        0.951056627,
+        0.0,
+        -0.309016654,
+        0.414058225,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.288415441,
+        0.0,
+        0.887652535,
+        0.187759153,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.42,
+        0.5,
+        0.58,
+        1.0
+      ],
+      "verts": 64
+    },
+    "wrist_L": {
+      "body": "left_elbow",
+      "material": "RBT_Joint_Gunmetal",
+      "matrix": [
+        0.951056627,
+        0.0,
+        0.309016654,
+        -0.414058785,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.309016654,
+        0.0,
+        0.951056627,
+        0.127598825,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.3,
+        0.32,
+        0.35,
+        1.0
+      ],
+      "verts": 762
+    },
+    "wrist_R": {
+      "body": "right_elbow",
+      "material": "RBT_Joint_Gunmetal",
+      "matrix": [
+        0.951056627,
+        0.0,
+        -0.309016654,
+        0.414058785,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.309016654,
+        0.0,
+        0.951056627,
+        0.127598825,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mode": "retarget",
+      "rgba": [
+        0.3,
+        0.32,
+        0.35,
+        1.0
+      ],
+      "verts": 762
+    }
+  },
+  "segments": {
+    "forearm": {
+      "bl_len": 0.265,
+      "ex_len": 0.26,
+      "scale": 0.981131
+    },
+    "shin": {
+      "bl_len": 0.34,
+      "ex_len": 0.44,
+      "scale": 1.294118
+    },
+    "thigh": {
+      "bl_len": 0.430995,
+      "ex_len": 0.38,
+      "scale": 0.88168
+    },
+    "upperarm": {
+      "bl_len": 0.3,
+      "ex_len": 0.28,
+      "scale": 0.933333
+    }
+  },
+  "source": {
+    "path": "assets/humanoid_v2/source/humanoid_robot_rigged.obj",
+    "sha256": "190b57ad9023bb604489e1bcb2d43dfe3df5cae6add48991a433814acace503c"
+  }
+}
