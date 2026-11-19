@@ -1,0 +1,892 @@
+{
+ "armature": "humanoid_rig",
+ "rig_bodies": [
+  "agent",
+  "torso",
+  "spine_L2",
+  "left_shoulder",
+  "left_elbow",
+  "right_shoulder",
+  "right_elbow",
+  "head",
+  "left_hip",
+  "left_knee",
+  "left_ankle",
+  "left_foot",
+  "right_hip",
+  "right_knee",
+  "right_ankle",
+  "right_foot"
+ ],
+ "excluded_meshes": [
+  "setup_floor"
+ ],
+ "counts": {
+  "direct": 22,
+  "approximate": 5,
+  "rigid": 8
+ },
+ "bones": {
+  "pelvis": {
+   "parent": null,
+   "mode": "rigid",
+   "body": "torso",
+   "head_world": [
+    0.0,
+    0.0,
+    0.885
+   ],
+   "rest_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     -1.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.885
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "spine": {
+   "parent": "pelvis",
+   "mode": "approximate",
+   "body": "torso",
+   "head_world": [
+    0.0,
+    0.0,
+    1.015
+   ],
+   "rest_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     -1.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     1.015
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "chest": {
+   "parent": "spine",
+   "mode": "approximate",
+   "body": "spine_L2",
+   "head_world": [
+    0.0,
+    0.0,
+    1.17
+   ],
+   "rest_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     -1.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     1.17
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "neck": {
+   "parent": "chest",
+   "mode": "rigid",
+   "body": "spine_L2",
+   "head_world": [
+    0.0,
+    0.0,
+    1.44
+   ],
+   "rest_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     -1.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     1.44
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "head": {
+   "parent": "neck",
+   "mode": "direct",
+   "body": "head",
+   "head_world": [
+    0.0,
+    0.0,
+    1.56
+   ],
+   "rest_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     -1.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     1.56
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "clavicle.L": {
+   "parent": "chest",
+   "mode": "rigid",
+   "body": "spine_L2",
+   "head_world": [
+    0.03,
+    0.0,
+    1.39
+   ],
+   "rest_world": [
+    [
+     -0.068802,
+     0.997631,
+     0.0,
+     0.03
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.99763,
+     0.068802,
+     0.0,
+     1.39
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "upperarm.L": {
+   "parent": "clavicle.L",
+   "mode": "direct",
+   "body": "left_shoulder",
+   "head_world": [
+    0.175,
+    0.0,
+    1.4
+   ],
+   "rest_world": [
+    [
+     0.951057,
+     0.309017,
+     0.0,
+     0.175
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.309017,
+     -0.951057,
+     0.0,
+     1.4
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "forearm.L": {
+   "parent": "upperarm.L",
+   "mode": "direct",
+   "body": "left_elbow",
+   "head_world": [
+    0.267705,
+    0.0,
+    1.114683
+   ],
+   "rest_world": [
+    [
+     0.951057,
+     0.309017,
+     0.0,
+     0.267705
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.309017,
+     -0.951057,
+     0.0,
+     1.114683
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "hand.L": {
+   "parent": "forearm.L",
+   "mode": "rigid",
+   "body": "left_elbow",
+   "head_world": [
+    0.349595,
+    0.0,
+    0.862653
+   ],
+   "rest_world": [
+    [
+     0.951057,
+     0.309017,
+     0.0,
+     0.349595
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.309017,
+     -0.951057,
+     0.0,
+     0.862653
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "clavicle.R": {
+   "parent": "chest",
+   "mode": "rigid",
+   "body": "spine_L2",
+   "head_world": [
+    -0.03,
+    0.0,
+    1.39
+   ],
+   "rest_world": [
+    [
+     -0.068802,
+     -0.997631,
+     0.0,
+     -0.03
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     -0.99763,
+     0.068802,
+     0.0,
+     1.39
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "upperarm.R": {
+   "parent": "clavicle.R",
+   "mode": "direct",
+   "body": "right_shoulder",
+   "head_world": [
+    -0.175,
+    0.0,
+    1.4
+   ],
+   "rest_world": [
+    [
+     0.951057,
+     -0.309017,
+     0.0,
+     -0.175
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     -0.309017,
+     -0.951057,
+     0.0,
+     1.4
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "forearm.R": {
+   "parent": "upperarm.R",
+   "mode": "direct",
+   "body": "right_elbow",
+   "head_world": [
+    -0.267705,
+    0.0,
+    1.114683
+   ],
+   "rest_world": [
+    [
+     0.951057,
+     -0.309017,
+     0.0,
+     -0.267705
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     -0.309017,
+     -0.951057,
+     0.0,
+     1.114683
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "hand.R": {
+   "parent": "forearm.R",
+   "mode": "rigid",
+   "body": "right_elbow",
+   "head_world": [
+    -0.349595,
+    0.0,
+    0.862653
+   ],
+   "rest_world": [
+    [
+     0.951057,
+     -0.309017,
+     0.0,
+     -0.349595
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     -0.309017,
+     -0.951057,
+     0.0,
+     0.862653
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "thigh.L": {
+   "parent": "pelvis",
+   "mode": "direct",
+   "body": "left_hip",
+   "head_world": [
+    0.095,
+    0.0,
+    0.9
+   ],
+   "rest_world": [
+    [
+     0.999932,
+     0.011627,
+     0.0,
+     0.095
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.011627,
+     -0.999932,
+     0.0,
+     0.9
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "shin.L": {
+   "parent": "thigh.L",
+   "mode": "direct",
+   "body": "left_knee",
+   "head_world": [
+    0.1,
+    0.0,
+    0.47
+   ],
+   "rest_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.1
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     -1.0,
+     0.0,
+     0.47
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "foot.L": {
+   "parent": "shin.L",
+   "mode": "direct",
+   "body": "left_foot",
+   "head_world": [
+    0.1,
+    0.0,
+    0.115
+   ],
+   "rest_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.1
+    ],
+    [
+     0.0,
+     0.928477,
+     0.371391,
+     0.0
+    ],
+    [
+     0.0,
+     -0.371391,
+     0.928477,
+     0.115
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "thigh.R": {
+   "parent": "pelvis",
+   "mode": "direct",
+   "body": "right_hip",
+   "head_world": [
+    -0.095,
+    0.0,
+    0.9
+   ],
+   "rest_world": [
+    [
+     0.999932,
+     -0.011627,
+     0.0,
+     -0.095
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     -0.011627,
+     -0.999932,
+     0.0,
+     0.9
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "shin.R": {
+   "parent": "thigh.R",
+   "mode": "direct",
+   "body": "right_knee",
+   "head_world": [
+    -0.1,
+    0.0,
+    0.47
+   ],
+   "rest_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     -0.1
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     -1.0,
+     0.0,
+     0.47
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "foot.R": {
+   "parent": "shin.R",
+   "mode": "direct",
+   "body": "right_foot",
+   "head_world": [
+    -0.1,
+    0.0,
+    0.115
+   ],
+   "rest_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     -0.1
+    ],
+    [
+     0.0,
+     0.928477,
+     0.371391,
+     0.0
+    ],
+    [
+     0.0,
+     -0.371391,
+     0.928477,
+     0.115
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  }
+ },
+ "meshes": {
+  "abdomen": {
+   "bone": "spine",
+   "mode": "approximate",
+   "body": "torso"
+  },
+  "ankle_L": {
+   "bone": "foot.L",
+   "mode": "direct",
+   "body": "left_foot"
+  },
+  "ankle_R": {
+   "bone": "foot.R",
+   "mode": "direct",
+   "body": "right_foot"
+  },
+  "chest": {
+   "bone": "chest",
+   "mode": "approximate",
+   "body": "spine_L2"
+  },
+  "chest_plate": {
+   "bone": "chest",
+   "mode": "approximate",
+   "body": "spine_L2"
+  },
+  "elbow_L": {
+   "bone": "forearm.L",
+   "mode": "direct",
+   "body": "left_elbow"
+  },
+  "elbow_R": {
+   "bone": "forearm.R",
+   "mode": "direct",
+   "body": "right_elbow"
+  },
+  "faceplate": {
+   "bone": "head",
+   "mode": "direct",
+   "body": "head"
+  },
+  "foot_L": {
+   "bone": "foot.L",
+   "mode": "direct",
+   "body": "left_foot"
+  },
+  "foot_R": {
+   "bone": "foot.R",
+   "mode": "direct",
+   "body": "right_foot"
+  },
+  "forearm_L": {
+   "bone": "forearm.L",
+   "mode": "direct",
+   "body": "left_elbow"
+  },
+  "forearm_R": {
+   "bone": "forearm.R",
+   "mode": "direct",
+   "body": "right_elbow"
+  },
+  "hand_L": {
+   "bone": "hand.L",
+   "mode": "rigid",
+   "body": "left_elbow"
+  },
+  "hand_R": {
+   "bone": "hand.R",
+   "mode": "rigid",
+   "body": "right_elbow"
+  },
+  "head": {
+   "bone": "head",
+   "mode": "direct",
+   "body": "head"
+  },
+  "hip_L": {
+   "bone": "thigh.L",
+   "mode": "direct",
+   "body": "left_hip"
+  },
+  "hip_R": {
+   "bone": "thigh.R",
+   "mode": "direct",
+   "body": "right_hip"
+  },
+  "knee_L": {
+   "bone": "shin.L",
+   "mode": "direct",
+   "body": "left_knee"
+  },
+  "knee_R": {
+   "bone": "shin.R",
+   "mode": "direct",
+   "body": "right_knee"
+  },
+  "neck": {
+   "bone": "neck",
+   "mode": "rigid",
+   "body": "spine_L2"
+  },
+  "neck_ring_1": {
+   "bone": "neck",
+   "mode": "rigid",
+   "body": "spine_L2"
+  },
+  "neck_ring_2": {
+   "bone": "neck",
+   "mode": "rigid",
+   "body": "spine_L2"
+  },
+  "pelvis": {
+   "bone": "pelvis",
+   "mode": "rigid",
+   "body": "torso"
+  },
+  "shin_L": {
+   "bone": "shin.L",
+   "mode": "direct",
+   "body": "left_knee"
+  },
+  "shin_R": {
+   "bone": "shin.R",
+   "mode": "direct",
+   "body": "right_knee"
+  },
+  "shoulder_L": {
+   "bone": "upperarm.L",
+   "mode": "direct",
+   "body": "left_shoulder"
+  },
+  "shoulder_R": {
+   "bone": "upperarm.R",
+   "mode": "direct",
+   "body": "right_shoulder"
+  },
+  "spine_joint_low": {
+   "bone": "spine",
+   "mode": "approximate",
+   "body": "torso"
+  },
+  "spine_joint_up": {
+   "bone": "chest",
+   "mode": "approximate",
+   "body": "spine_L2"
+  },
+  "thigh_L": {
+   "bone": "thigh.L",
+   "mode": "direct",
+   "body": "left_hip"
+  },
+  "thigh_R": {
+   "bone": "thigh.R",
+   "mode": "direct",
+   "body": "right_hip"
+  },
+  "upperarm_L": {
+   "bone": "upperarm.L",
+   "mode": "direct",
+   "body": "left_shoulder"
+  },
+  "upperarm_R": {
+   "bone": "upperarm.R",
+   "mode": "direct",
+   "body": "right_shoulder"
+  },
+  "wrist_L": {
+   "bone": "hand.L",
+   "mode": "rigid",
+   "body": "left_elbow"
+  },
+  "wrist_R": {
+   "bone": "hand.R",
+   "mode": "rigid",
+   "body": "right_elbow"
+  }
+ }
+}

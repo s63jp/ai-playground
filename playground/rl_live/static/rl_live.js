@@ -13,6 +13,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from '/static/vendor/OrbitControls.js';
 import { HumanoidView } from '/static/js/humanoid_view.js';
+import { createHumanoidV2 } from '/static/js/humanoid_v2.js?v=2';
 
 const $ = (id) => document.getElementById(id);
 const fmt = (v, n = 3) => (v === null || v === undefined || Number.isNaN(v))
@@ -55,6 +56,31 @@ scene.add(keyLight);
 const fillLight = new THREE.DirectionalLight(0x9db9ff, 0.5);
 fillLight.position.set(-3, 4.5, 2.5);
 scene.add(fillLight);
+
+/* ---- Humanoid V2 (Blender FBX, retargeted from live MuJoCo frames) ----
+ * Default when it loads and verifies. ?rig=v1 keeps the primitive V1 rig.
+ * Any V2 error at load or per frame falls back to V1 and says so on screen. */
+const v2Requested = new URLSearchParams(location.search).get('rig') !== 'v1';
+let v2 = null;
+const rigBodyNames = new Set();
+function setRigPrimitivesVisible(visible) {
+  for (const name of rigBodyNames) { const g = rigMeshes.get(name); if (g) g.visible = visible; }
+}
+function v2Fallback(reason) {
+  console.error('humanoid V2 disabled:', reason);
+  if (v2) { v2.dispose(); v2 = null; }
+  window.__humanoidV2 = null;
+  setRigPrimitivesVisible(true);
+  flashBanner(`V2 humanoid unavailable, showing V1: ${reason}`, 'bad');
+}
+if (v2Requested) {
+  createHumanoidV2(scene).then((h) => {
+    v2 = h;
+    window.__humanoidV2 = h;
+    setRigPrimitivesVisible(false);
+    $('sceneNote').textContent = `V2 humanoid: ${h.meshes.size} FBX meshes · ${$('sceneNote').textContent}`;
+  }).catch((e) => v2Fallback(e.message));
+}
 
 function geomMesh(g) {
   const rgba = (g.rgba && g.rgba.length >= 4) ? g.rgba : [0.7, 0.72, 0.78, 1];
@@ -107,6 +133,7 @@ function geomMesh(g) {
 function buildScene(spec) {
   for (const [, m] of rigMeshes) scene.remove(m);
   rigMeshes.clear();
+  rigBodyNames.clear();
   if (humanoidFallback) { scene.remove(humanoidFallback.group); humanoidFallback = null; }
   let rigCount = 0, otherCount = 0, skipped = spec.meshes_skipped || 0;
   for (const body of spec.bodies || []) {
@@ -122,8 +149,9 @@ function buildScene(spec) {
     if (!drawn) continue;
     group.position.fromArray(body.pos || [0, 0, 0]);
     if (body.quat && body.quat.length === 4) group.quaternion.set(body.quat[1], body.quat[2], body.quat[3], body.quat[0]);
-    if (body.rig) rigCount++; else otherCount++;
+    if (body.rig) { rigCount++; rigBodyNames.add(body.name); } else otherCount++;
     rigMeshes.set(body.name, group);
+    if (body.rig && v2) group.visible = false;   // V2 replaces the V1 primitive rig
     scene.add(group);
   }
   grid.position.y = 0;
@@ -133,6 +161,7 @@ function buildScene(spec) {
 }
 
 function applyFrame(frame) {
+  if (frame.t === 'reset') { if (v2) v2.reset(); return; }
   if (humanoidFallback) {   // no geom spec yet (should not happen after spec)
     scene.remove(humanoidFallback.group);
     humanoidFallback = null;
@@ -147,6 +176,9 @@ function applyFrame(frame) {
     }
     obj.position.set(pose.p[0], pose.p[1], pose.p[2]);
     obj.quaternion.set(pose.q[1], pose.q[2], pose.q[3], pose.q[0]);
+  }
+  if (v2 && frame.bodies) {
+    try { v2.update(frame); } catch (e) { v2Fallback(e.message); }
   }
   if (followRoot && frame.root) {
     controls.target.lerp(new THREE.Vector3(frame.root.pos[0], frame.root.pos[1], 0.9), 0.06);
@@ -317,6 +349,7 @@ const ev = new EventSource('/api/rl_live/stream');
 
 ev.addEventListener('spec', (e) => buildScene(JSON.parse(e.data)));
 ev.addEventListener('frame', (e) => applyFrame(JSON.parse(e.data)));
+ev.addEventListener('reset', () => { if (v2) v2.reset(); });
 ev.addEventListener('iteration', (e) => onIteration(JSON.parse(e.data)));
 ev.addEventListener('b3_iteration', (e) => onB3(JSON.parse(e.data)));
 ev.addEventListener('status', (e) => {

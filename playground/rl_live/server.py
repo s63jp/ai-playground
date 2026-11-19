@@ -273,6 +273,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _ctype(suffix: str):
         return {".html": "text/html", ".js": "text/javascript",
                 ".css": "text/css", ".map": "application/json",
+                ".json": "application/json", ".fbx": "application/octet-stream",
                 ".svg": "image/svg+xml", ".ico": "image/x-icon",
                 ".png": "image/png"}.get(suffix)
 
