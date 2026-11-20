@@ -1,0 +1,218 @@
+{
+  "manifest_version": 3,
+  "purpose": "Protected M6-B comparison baselines (B3, B4). Read-only reference brains. Paths are relative to this folder (baselines/).",
+  "repository_path": "baselines/",
+  "legacy_contract_required": 3,
+  "default_contract_version_on_this_checkout": 4,
+  "brains": {
+    "b3_run1": {
+      "role": "B3 PPO learning baseline (old rig, pre head-mass fix)",
+      "final_checkpoint": "b3_run1/ckpt_final.json",
+      "content_sha256": "b6d68a3525082d24e7c775cafc2d04459e633f92d5b879c0a38f9c2c6f6b3382",
+      "content_hash_ok": true,
+      "format": "rl_checkpoint/1",
+      "contract_version": 3,
+      "obs_dim": 43,
+      "action_dim": 14,
+      "training_steps": 2000896,
+      "stage_at_save": "sustained",
+      "file_count": 6,
+      "files": [
+        {
+          "path": "b3_run1/ckpt_final.json",
+          "role": "final_checkpoint",
+          "size_bytes": 1012609,
+          "sha256": "7c307aee249920de1273bf5aec14c10acf5c2d9927918054459266702f311f9a",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b3_run1\\ckpt_final.json",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b3_run1/ckpt_final.json"
+        },
+        {
+          "path": "b3_run1/config.json",
+          "role": "run_config",
+          "size_bytes": 657,
+          "sha256": "1498a03fe4551cc3525b1f5f23550c227c0059cf25a5bf25405fa53991b369ae",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b3_run1\\config.json",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b3_run1/config.json"
+        },
+        {
+          "path": "b3_run1/result.json",
+          "role": "run_result",
+          "size_bytes": 261,
+          "sha256": "a4da887672dfe3f105d0f740b5346aa68fe1e658b8e2e0498c7d064066c95abc",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b3_run1\\result.json",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b3_run1/result.json"
+        },
+        {
+          "path": "b3_run1/progress.jsonl",
+          "role": "training_log",
+          "size_bytes": 1936780,
+          "sha256": "8d23f22e6898ed816e8ef081ef0bee311623f3e2f61c8c096500d4e6dd731de4",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b3_run1\\progress.jsonl",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b3_run1/progress.jsonl"
+        },
+        {
+          "path": "b3_run1/eval_sustained_s97010000_10ep.json",
+          "role": "evaluation",
+          "size_bytes": 7548,
+          "sha256": "f8aa5d1dada08fa8dcee89a332bd6a77855f237764db9b5c5a8bd2010c7d5f29",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b3_run1\\eval_sustained_s97010000_10ep.json",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b3_run1/eval_sustained_s97010000_10ep.json"
+        },
+        {
+          "path": "b3_run1/eval_sustained_s97010000_12ep.json",
+          "role": "evaluation",
+          "size_bytes": 7572,
+          "sha256": "79e262248b9c1643c570a48426d2ebb31d76aa40d138877b69f5fa8a1d5f96d9",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b3_run1\\eval_sustained_s97010000_12ep.json",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b3_run1/eval_sustained_s97010000_12ep.json"
+        }
+      ]
+    },
+    "b4_head1": {
+      "role": "B4 head-mechanics fix baseline (fixed rig; resumed from ckpt_000401408)",
+      "final_checkpoint": "b4_head1/ckpt_final.json",
+      "content_sha256": "0dcd782595d0f49f08b068eb6e302cfc1da1de05e9dcb23e8521bba87445ca7c",
+      "content_hash_ok": true,
+      "format": "rl_checkpoint/1",
+      "contract_version": 3,
+      "obs_dim": 43,
+      "action_dim": 14,
+      "training_steps": 1200128,
+      "stage_at_save": "sustained",
+      "file_count": 7,
+      "files": [
+        {
+          "path": "b4_head1/ckpt_final.json",
+          "role": "final_checkpoint",
+          "size_bytes": 1015450,
+          "sha256": "1072edeaa4d3fc4a9e9381bc755f7ff61da91acfe6f2aa83db2a93628c6a435c",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b4_head1\\ckpt_final.json",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b4_head1/ckpt_final.json"
+        },
+        {
+          "path": "b4_head1/config.json",
+          "role": "run_config",
+          "size_bytes": 668,
+          "sha256": "8286fd8afd416089841e200db0e3a89be7f8458e79324ed1cc777b82e7eba12c",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b4_head1\\config.json",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b4_head1/config.json"
+        },
+        {
+          "path": "b4_head1/result.json",
+          "role": "run_result",
+          "size_bytes": 260,
+          "sha256": "c422be00a36e2e1bebadadaf57770f992843201b8d46fb23566604d989bdd51c",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b4_head1\\result.json",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b4_head1/result.json"
+        },
+        {
+          "path": "b4_head1/progress.jsonl",
+          "role": "training_log",
+          "size_bytes": 1135694,
+          "sha256": "a25390e939a67a653c3afb7ff1943abd0663b6563df923ed725016afbb8b4018",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b4_head1\\progress.jsonl",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b4_head1/progress.jsonl"
+        },
+        {
+          "path": "b4_head1/eval_standing_s97010000_12ep.json",
+          "role": "evaluation",
+          "size_bytes": 6945,
+          "sha256": "156408ba0b4b6fcab3c0fbc73620ec0732ac45fc5e251f8fd3707ce2ec10bad3",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b4_head1\\eval_standing_s97010000_12ep.json",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b4_head1/eval_standing_s97010000_12ep.json"
+        },
+        {
+          "path": "b4_head1/eval_sustained_s97010000_12ep.json",
+          "role": "evaluation",
+          "size_bytes": 7602,
+          "sha256": "b8708b5a9a66c86db9b32c4178812da75d01e1fedfaf30cc7c1361fc3dc9a3c3",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b4_head1\\eval_sustained_s97010000_12ep.json",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b4_head1/eval_sustained_s97010000_12ep.json"
+        },
+        {
+          "path": "b4_head1/baselines_sustained.json/baselines_sustained_s97010000_10ep.json",
+          "role": "evaluation",
+          "size_bytes": 9837,
+          "sha256": "2736987f60eae09aab99e045b77a246cd39a21ef73a136d91fc4ab72b51eef6f",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b4_head1\\baselines_sustained.json\\baselines_sustained_s97010000_10ep.json",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b4_head1/baselines_sustained.json/baselines_sustained_s97010000_10ep.json"
+        }
+      ]
+    },
+    "b4_posture1": {
+      "role": "B4 posture-ask reward baseline (fixed rig; trained from scratch)",
+      "final_checkpoint": "b4_posture1/ckpt_final.json",
+      "content_sha256": "cea2794313a532bbb871c64b8a3749ca32cb0dbe062ca7c501d2734b0734ca8a",
+      "content_hash_ok": true,
+      "format": "rl_checkpoint/1",
+      "contract_version": 3,
+      "obs_dim": 43,
+      "action_dim": 14,
+      "training_steps": 1200128,
+      "stage_at_save": "sustained",
+      "file_count": 7,
+      "files": [
+        {
+          "path": "b4_posture1/ckpt_final.json",
+          "role": "final_checkpoint",
+          "size_bytes": 1013211,
+          "sha256": "e81702ec17be904e9454c20bb751e15a211884ee3246f5d9b489c9cc943a71f3",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b4_posture1\\ckpt_final.json",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b4_posture1/ckpt_final.json"
+        },
+        {
+          "path": "b4_posture1/config.json",
+          "role": "run_config",
+          "size_bytes": 627,
+          "sha256": "67c1533296b8bdd32a4dcf53ec6416977e9dac95ff9cbe75c1baf324bdc9e30a",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b4_posture1\\config.json",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b4_posture1/config.json"
+        },
+        {
+          "path": "b4_posture1/result.json",
+          "role": "run_result",
+          "size_bytes": 263,
+          "sha256": "bd2407fa7a380e0163c8e316f5757ca638ce8ae1a8f3ef2c5660bc062b58b8f1",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b4_posture1\\result.json",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b4_posture1/result.json"
+        },
+        {
+          "path": "b4_posture1/progress.jsonl",
+          "role": "training_log",
+          "size_bytes": 1052359,
+          "sha256": "b881924b21b8ff380718feb4d4ab5f3e3810d19e7ed8a360259f39858709fd64",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b4_posture1\\progress.jsonl",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b4_posture1/progress.jsonl"
+        },
+        {
+          "path": "b4_posture1/eval_standing_s97010000_12ep.json",
+          "role": "evaluation",
+          "size_bytes": 6959,
+          "sha256": "926721cac37dc53812a71fe788c72916587abd8faad84f5e90d3f9325f47c4e7",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b4_posture1\\eval_standing_s97010000_12ep.json",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b4_posture1/eval_standing_s97010000_12ep.json"
+        },
+        {
+          "path": "b4_posture1/eval_sustained_s97010000_12ep.json",
+          "role": "evaluation",
+          "size_bytes": 7568,
+          "sha256": "2f0460b2f2130f56ea210347a9ec6ae1a6425e923792141dfc9fedd63a0d06ec",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b4_posture1\\eval_sustained_s97010000_12ep.json",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b4_posture1/eval_sustained_s97010000_12ep.json"
+        },
+        {
+          "path": "b4_posture1/baselines_sustained_s97010000_10ep.json",
+          "role": "evaluation",
+          "size_bytes": 9834,
+          "sha256": "ca85c4acec18de67e2681e002b7aad0ab141267b84b67d5d5d517a9bd9e72a7d",
+          "original_source": "C:/Users/jamie/ai-playground/experiments/rl\\b4_posture1\\baselines_sustained_s97010000_10ep.json",
+          "backup_copy": "C:/Users/jamie/ai-playground-backups/preservation_2026-11-20/second_checkout/experiments/rl/b4_posture1/baselines_sustained_s97010000_10ep.json"
+        }
+      ]
+    }
+  },
+  "verification": {
+    "all_ok_at_copy": true,
+    "method": "SHA-256 of each file recorded from the original second-checkout source before copying; this folder is verified by baselines/ integrity test in CI."
+  }
+}

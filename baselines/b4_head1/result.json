@@ -1,0 +1,9 @@
+{
+  "stopped": false,
+  "total_valid_steps": 1200128,
+  "iteration": 586,
+  "wall_s": 2727.1,
+  "final_checkpoint": "C:\\Users\\jamie\\ai-playground\\experiments\\rl\\b4_head1\\ckpt_final.json",
+  "faulted_windows_total": 0,
+  "rollout_rejections": 0
+}

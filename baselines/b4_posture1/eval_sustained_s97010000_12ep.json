@@ -1,0 +1,286 @@
+{
+  "checkpoint": "experiments/rl/b4_posture1/ckpt_final.json",
+  "stage": "sustained",
+  "episodes": 12,
+  "seed_base": 97010000,
+  "max_steps": 400,
+  "meta_stage": "sustained",
+  "training_steps": 1200128,
+  "policy": {
+    "net_displacement_m": {
+      "mean": 3.538242415840807,
+      "std": 0.06958041359020273,
+      "median": 3.5035344177547394,
+      "min": 3.502849307884936,
+      "max": 3.6994171360155845
+    },
+    "axis_displacement_m": {
+      "mean": 3.5194315558940468,
+      "std": 0.06987460871620778,
+      "median": 3.4843141889503952,
+      "min": 3.4839383678329603,
+      "max": 3.68131546278774
+    },
+    "mean_speed_m_s": {
+      "mean": 0.48477534314284426,
+      "std": 0.007906506981502326,
+      "median": 0.48092004574917496,
+      "min": 0.48065960614322273,
+      "max": 0.5032803620084355
+    },
+    "upright_fraction": {
+      "mean": 1.0,
+      "std": 0.0,
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0
+    },
+    "min_up_z": {
+      "mean": 1.0,
+      "std": 0.0,
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0
+    },
+    "effort_mean_w": {
+      "mean": 618.0089833630137,
+      "std": 5.5923726228579405,
+      "median": 614.9018814640531,
+      "min": 614.8371587042233,
+      "max": 630.5598015106156
+    },
+    "reward_total": {
+      "mean": 745.9768985417777,
+      "std": 1.2275578096131827,
+      "median": 746.5331859355135,
+      "min": 742.9073475342661,
+      "max": 746.7740126163455
+    },
+    "action_clip_rate": {
+      "mean": 0.0,
+      "std": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "path_len_m": {
+      "mean": 3.878202745142435,
+      "std": 0.06325205585201352,
+      "median": 3.8473603659930826,
+      "min": 3.845276849145465,
+      "max": 4.026242896067153
+    },
+    "heading_progress_rewarded_m": {
+      "mean": 3.0624260834906285,
+      "std": 0.02157439694817868,
+      "median": 3.0523936134789116,
+      "min": 3.0520372008045205,
+      "max": 3.110624987527477
+    },
+    "episodes": 12,
+    "falls_total": 0,
+    "faulted_windows_total": 0,
+    "completed_truncated": 12,
+    "axis_displacement_m_no_fall": {
+      "mean": 3.5194315558940468,
+      "std": 0.06987460871620778,
+      "min": 3.4839383678329603,
+      "max": 3.68131546278774,
+      "n": 12
+    },
+    "axis_displacement_m_fell": null,
+    "net_displacement_m_no_fall": {
+      "mean": 3.538242415840807,
+      "std": 0.06958041359020273,
+      "min": 3.502849307884936,
+      "max": 3.6994171360155845,
+      "n": 12
+    },
+    "net_displacement_m_fell": null
+  },
+  "zero_action": {
+    "net_displacement_m": {
+      "mean": 0.01001432952491027,
+      "std": 4.350332478664727e-13,
+      "median": 0.010014329525023291,
+      "min": 0.010014329524056616,
+      "max": 0.010014329525544022
+    },
+    "axis_displacement_m": {
+      "mean": -8.923235696788306e-05,
+      "std": 4.810513597537226e-11,
+      "median": -8.923236942029109e-05,
+      "min": -8.923242710071055e-05,
+      "max": -8.923226255248828e-05
+    },
+    "mean_speed_m_s": {
+      "mean": 0.001289674187705426,
+      "std": 6.013163921901929e-12,
+      "median": 0.001289674189261946,
+      "min": 0.0012896741759035242,
+      "max": 0.0012896741964721061
+    },
+    "upright_fraction": {
+      "mean": 1.0,
+      "std": 0.0,
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0
+    },
+    "min_up_z": {
+      "mean": 1.0,
+      "std": 0.0,
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0
+    },
+    "effort_mean_w": {
+      "mean": 6.686069524450321e-06,
+      "std": 1.2451224838581096e-13,
+      "median": 6.68606955596414e-06,
+      "min": 6.6860692787396325e-06,
+      "max": 6.686069705977629e-06
+    },
+    "reward_total": {
+      "mean": 632.7393560662962,
+      "std": 1.976124405252854e-09,
+      "median": 632.7393560657905,
+      "min": 632.739356063408,
+      "max": 632.7393560701647
+    },
+    "action_clip_rate": {
+      "mean": 0.0,
+      "std": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "path_len_m": {
+      "mean": 0.01031739350164256,
+      "std": 4.810531137521544e-11,
+      "median": 0.010317393514094718,
+      "min": 0.010317393407227343,
+      "max": 0.010317393571776
+    },
+    "heading_progress_rewarded_m": {
+      "mean": 2.0544665382334244e-06,
+      "std": 2.8574896450461887e-16,
+      "median": 2.054466538319727e-06,
+      "min": 2.0544665376709403e-06,
+      "max": 2.054466538545241e-06
+    },
+    "episodes": 12,
+    "falls_total": 0,
+    "faulted_windows_total": 0,
+    "completed_truncated": 12,
+    "axis_displacement_m_no_fall": {
+      "mean": -8.923235696788306e-05,
+      "std": 4.810513597537226e-11,
+      "min": -8.923242710071055e-05,
+      "max": -8.923226255248828e-05,
+      "n": 12
+    },
+    "axis_displacement_m_fell": null,
+    "net_displacement_m_no_fall": {
+      "mean": 0.01001432952491027,
+      "std": 4.350332478664727e-13,
+      "min": 0.010014329524056616,
+      "max": 0.010014329525544022,
+      "n": 12
+    },
+    "net_displacement_m_fell": null
+  },
+  "gait_benchmark": {
+    "net_displacement_m": {
+      "mean": 0.7300809338362136,
+      "std": 0.0,
+      "median": 0.7300809338362136,
+      "min": 0.7300809338362136,
+      "max": 0.7300809338362136
+    },
+    "axis_displacement_m": {
+      "mean": 0.05610320263223334,
+      "std": 0.0,
+      "median": 0.05610320263223334,
+      "min": 0.05610320263223334,
+      "max": 0.05610320263223334
+    },
+    "mean_speed_m_s": {
+      "mean": 0.11260231366604127,
+      "std": 0.0,
+      "median": 0.11260231366604127,
+      "min": 0.11260231366604127,
+      "max": 0.11260231366604127
+    },
+    "upright_fraction": {
+      "mean": 1.0,
+      "std": 0.0,
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0
+    },
+    "min_up_z": {
+      "mean": 1.0,
+      "std": 0.0,
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0
+    },
+    "effort_mean_w": {
+      "mean": 157.82676089610032,
+      "std": 0.0,
+      "median": 157.82676089610032,
+      "min": 157.82676089610032,
+      "max": 157.82676089610032
+    },
+    "reward_total": {
+      "mean": 627.7550972158691,
+      "std": 0.0,
+      "median": 627.7550972158691,
+      "min": 627.7550972158691,
+      "max": 627.7550972158691
+    },
+    "action_clip_rate": {
+      "mean": 0.0,
+      "std": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "path_len_m": {
+      "mean": 0.900818509328256,
+      "std": 0.0,
+      "median": 0.900818509328256,
+      "min": 0.900818509328256,
+      "max": 0.900818509328256
+    },
+    "heading_progress_rewarded_m": {
+      "mean": 0.12051356756561134,
+      "std": 0.0,
+      "median": 0.12051356756561134,
+      "min": 0.12051356756561134,
+      "max": 0.12051356756561134
+    },
+    "episodes": 1,
+    "falls_total": 0,
+    "faulted_windows_total": 0,
+    "completed_truncated": 1,
+    "axis_displacement_m_no_fall": {
+      "mean": 0.05610320263223334,
+      "std": 0.0,
+      "min": 0.05610320263223334,
+      "max": 0.05610320263223334,
+      "n": 1
+    },
+    "axis_displacement_m_fell": null,
+    "net_displacement_m_no_fall": {
+      "mean": 0.7300809338362136,
+      "std": 0.0,
+      "min": 0.7300809338362136,
+      "max": 0.7300809338362136,
+      "n": 1
+    },
+    "net_displacement_m_fell": null
+  },
+  "gait_heading_deg": 0.0
+}

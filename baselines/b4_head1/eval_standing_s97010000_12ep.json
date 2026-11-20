@@ -1,0 +1,286 @@
+{
+  "checkpoint": "experiments/rl/b4_head1/ckpt_final.json",
+  "stage": "standing",
+  "episodes": 12,
+  "seed_base": 97010000,
+  "max_steps": 400,
+  "meta_stage": "sustained",
+  "training_steps": 1200128,
+  "policy": {
+    "net_displacement_m": {
+      "mean": 0.4455104510572874,
+      "std": 5.456024216835075e-13,
+      "median": 0.445510451057439,
+      "min": 0.44551045105603776,
+      "max": 0.4455104510580077
+    },
+    "axis_displacement_m": {
+      "mean": 0.0,
+      "std": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "mean_speed_m_s": {
+      "mean": 0.06121406367395571,
+      "std": 1.6140541655349414e-14,
+      "median": 0.06121406367395575,
+      "min": 0.06121406367393194,
+      "max": 0.06121406367398619
+    },
+    "upright_fraction": {
+      "mean": 1.0,
+      "std": 0.0,
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0
+    },
+    "min_up_z": {
+      "mean": 1.0,
+      "std": 0.0,
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0
+    },
+    "effort_mean_w": {
+      "mean": 20.638587848760746,
+      "std": 7.03046814350253e-11,
+      "median": 20.638587848791186,
+      "min": 20.63858784860272,
+      "max": 20.638587848798203
+    },
+    "reward_total": {
+      "mean": 976.8437514007923,
+      "std": 2.1627009827416426e-11,
+      "median": 976.8437514007927,
+      "min": 976.8437514007388,
+      "max": 976.8437514008233
+    },
+    "action_clip_rate": {
+      "mean": 0.0,
+      "std": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "path_len_m": {
+      "mean": 0.48971250939160527,
+      "std": 1.2912434119762907e-13,
+      "median": 0.48971250939160565,
+      "min": 0.48971250939141514,
+      "max": 0.4897125093918492
+    },
+    "heading_progress_rewarded_m": {
+      "mean": 0.0,
+      "std": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "episodes": 12,
+    "falls_total": 0,
+    "faulted_windows_total": 0,
+    "completed_truncated": 12,
+    "axis_displacement_m_no_fall": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "n": 12
+    },
+    "axis_displacement_m_fell": null,
+    "net_displacement_m_no_fall": {
+      "mean": 0.4455104510572874,
+      "std": 5.456024216835075e-13,
+      "min": 0.44551045105603776,
+      "max": 0.4455104510580077,
+      "n": 12
+    },
+    "net_displacement_m_fell": null
+  },
+  "zero_action": {
+    "net_displacement_m": {
+      "mean": 0.01001432952491027,
+      "std": 4.350332478664727e-13,
+      "median": 0.010014329525023291,
+      "min": 0.010014329524056616,
+      "max": 0.010014329525544022
+    },
+    "axis_displacement_m": {
+      "mean": 0.0,
+      "std": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "mean_speed_m_s": {
+      "mean": 0.001289674187705426,
+      "std": 6.013163921901929e-12,
+      "median": 0.001289674189261946,
+      "min": 0.0012896741759035242,
+      "max": 0.0012896741964721061
+    },
+    "upright_fraction": {
+      "mean": 1.0,
+      "std": 0.0,
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0
+    },
+    "min_up_z": {
+      "mean": 1.0,
+      "std": 0.0,
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0
+    },
+    "effort_mean_w": {
+      "mean": 6.686069524450321e-06,
+      "std": 1.2451224838581096e-13,
+      "median": 6.68606955596414e-06,
+      "min": 6.6860692787396325e-06,
+      "max": 6.686069705977629e-06
+    },
+    "reward_total": {
+      "mean": 998.8923418246792,
+      "std": 1.9691137908567693e-13,
+      "median": 998.892341824679,
+      "min": 998.8923418246789,
+      "max": 998.8923418246793
+    },
+    "action_clip_rate": {
+      "mean": 0.0,
+      "std": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "path_len_m": {
+      "mean": 0.01031739350164256,
+      "std": 4.810531137521544e-11,
+      "median": 0.010317393514094718,
+      "min": 0.010317393407227343,
+      "max": 0.010317393571776
+    },
+    "heading_progress_rewarded_m": {
+      "mean": 0.0,
+      "std": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "episodes": 12,
+    "falls_total": 0,
+    "faulted_windows_total": 0,
+    "completed_truncated": 12,
+    "axis_displacement_m_no_fall": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "n": 12
+    },
+    "axis_displacement_m_fell": null,
+    "net_displacement_m_no_fall": {
+      "mean": 0.01001432952491027,
+      "std": 4.350332478664727e-13,
+      "min": 0.010014329524056616,
+      "max": 0.010014329525544022,
+      "n": 12
+    },
+    "net_displacement_m_fell": null
+  },
+  "gait_benchmark": {
+    "net_displacement_m": {
+      "mean": 0.7300809338362136,
+      "std": 0.0,
+      "median": 0.7300809338362136,
+      "min": 0.7300809338362136,
+      "max": 0.7300809338362136
+    },
+    "axis_displacement_m": {
+      "mean": 0.0,
+      "std": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "mean_speed_m_s": {
+      "mean": 0.11260231366604127,
+      "std": 0.0,
+      "median": 0.11260231366604127,
+      "min": 0.11260231366604127,
+      "max": 0.11260231366604127
+    },
+    "upright_fraction": {
+      "mean": 1.0,
+      "std": 0.0,
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0
+    },
+    "min_up_z": {
+      "mean": 1.0,
+      "std": 0.0,
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0
+    },
+    "effort_mean_w": {
+      "mean": 157.82676089610032,
+      "std": 0.0,
+      "median": 157.82676089610032,
+      "min": 157.82676089610032,
+      "max": 157.82676089610032
+    },
+    "reward_total": {
+      "mean": 935.122104255823,
+      "std": 0.0,
+      "median": 935.122104255823,
+      "min": 935.122104255823,
+      "max": 935.122104255823
+    },
+    "action_clip_rate": {
+      "mean": 0.0,
+      "std": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "path_len_m": {
+      "mean": 0.900818509328256,
+      "std": 0.0,
+      "median": 0.900818509328256,
+      "min": 0.900818509328256,
+      "max": 0.900818509328256
+    },
+    "heading_progress_rewarded_m": {
+      "mean": 0.0,
+      "std": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "episodes": 1,
+    "falls_total": 0,
+    "faulted_windows_total": 0,
+    "completed_truncated": 1,
+    "axis_displacement_m_no_fall": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "n": 1
+    },
+    "axis_displacement_m_fell": null,
+    "net_displacement_m_no_fall": {
+      "mean": 0.7300809338362136,
+      "std": 0.0,
+      "min": 0.7300809338362136,
+      "max": 0.7300809338362136,
+      "n": 1
+    },
+    "net_displacement_m_fell": null
+  },
+  "gait_heading_deg": 0.0
+}

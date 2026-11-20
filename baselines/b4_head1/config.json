@@ -1,0 +1,32 @@
+{
+  "ppo": {
+    "rollout_steps": 2048,
+    "epochs": 4,
+    "minibatch": 512,
+    "lr": 0.0003,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip_eps": 0.2,
+    "ent_coef": 0.0,
+    "value_coef": 0.5,
+    "max_grad_norm": 0.5,
+    "hidden": [
+      64,
+      64
+    ],
+    "log_std_init": 0.0,
+    "log_std_min": -5.0,
+    "log_std_max": 2.0,
+    "target_kl": null
+  },
+  "total_steps": 1200000,
+  "seed": 20261117,
+  "stage_budgets": {
+    "standing": 200000,
+    "controlled": 500000
+  },
+  "env_contract_version": 3,
+  "obs_dim": 43,
+  "action_dim": 14,
+  "started_from_checkpoint": "experiments/rl/b4_head1/ckpt_000401408.json"
+}

@@ -1,0 +1,5 @@
+# Protected M6-B comparison baselines: keep the stored bytes exactly as written.
+# -text stops Git from converting CRLF/LF on commit or checkout (core.autocrlf),
+# so SHA-256 hashes of these files are identical on every machine and in CI.
+# Textual diffs still work with -text.
+baselines/** -text
