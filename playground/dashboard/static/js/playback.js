@@ -167,6 +167,8 @@ let lastState = null;
 function refreshControls() {
   const st = lastState && lastState.state;
   const running = st === 'running';
+  const sb = $('startBtn');
+  if (sb) sb.disabled = (st === 'starting' || running || st === 'paused');
   $('pauseBtn').disabled = !running;
   $('resumeBtn').disabled = !(lastState && st === 'paused');
   $('resetBtn').disabled = !(running || st === 'paused');
@@ -286,12 +288,48 @@ $('camFollow').onclick = (e) => {
   e.target.classList.toggle('on', followRoot);
 };
 
+/* --------- on-demand playback start (the dashboard picks the checkpoint) --- */
+async function loadCheckpoints() {
+  try {
+    const j = await fetch('/api/rl_playback/checkpoints').then((r) => r.json());
+    const sel = $('pbCheckpoint');
+    sel.innerHTML = '';
+    for (const e of j.experiments || []) {
+      for (const ck of e.checkpoints || []) {
+        const op = document.createElement('option');
+        op.value = JSON.stringify({ experiment: e.name, checkpoint: ck });
+        op.textContent = `${e.name} · ${ck}`;
+        sel.appendChild(op);
+      }
+    }
+    if (!sel.options.length) {
+      const op = document.createElement('option');
+      op.textContent = 'no saved checkpoints found';
+      op.disabled = true;
+      sel.appendChild(op);
+    }
+  } catch (_e) { /* offline */ }
+}
+
+$('startBtn').onclick = async () => {
+  const raw = $('pbCheckpoint').value;
+  if (!raw) return;
+  let pick;
+  try { pick = JSON.parse(raw); } catch (_e) { return; }
+  const r = await post('/api/rl_playback/start', {
+    experiment: pick.experiment, checkpoint: pick.checkpoint,
+    stage: $('pbStage').value, inference: $('pbInference').value,
+  });
+  if (r.ok) flashBanner(`playback started: ${pick.experiment} · ${pick.checkpoint}`, 'good');
+};
+loadCheckpoints();
+
 /* ------------------------------------------------------------------ boot */
 async function bootSnapshot() {
   try {
-    const st = await fetch('/api/rl_live/status').then(r => r.json());
+    const st = await fetch('/api/rl_playback/status').then(r => r.json());
     if (st.session) { lastState = st.session; refreshControls(); renderStatus(lastState); }
-    const spec = await fetch('/api/rl_live/spec').then(r => r.json());
+    const spec = await fetch('/api/rl_playback/spec').then(r => r.json());
     if (spec && spec.available !== false) buildScene(spec);
     else $('sceneNote').textContent =
       'playback is building the verified B3-era rig — frames follow shortly';
@@ -303,7 +341,7 @@ async function bootSnapshot() {
 bootSnapshot();
 
 /* ------------------------------------------------------------------- SSE */
-const ev = new EventSource('/api/rl_live/stream');
+const ev = new EventSource('/api/rl_playback/stream');
 
 ev.addEventListener('spec', (e) => buildScene(JSON.parse(e.data)));
 ev.addEventListener('frame', (e) => applyFrame(JSON.parse(e.data)));

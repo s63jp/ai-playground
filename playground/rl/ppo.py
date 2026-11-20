@@ -307,7 +307,11 @@ class PPOConfig:
         cfg.update(dict((rl_cfg or {}).get("ppo") or {}))
         hidden = cfg["hidden"]
         if isinstance(hidden, (list, tuple)):
-            hidden = tuple(int(h) for h in hidden)
+            try:
+                hidden = tuple(int(h) for h in hidden)
+            except (TypeError, ValueError) as e:
+                raise PPOError("rl.ppo.hidden must be a list of ints: "
+                               f"{e}") from e
         else:
             raise PPOError("rl.ppo.hidden must be a list of ints")
         if hidden and (any(h < 1 for h in hidden) or len(hidden) > 8):

@@ -43,6 +43,7 @@ const PAGE_META = {
   nn: ['Evaluate', 'Neural networks', 'Generate datasets, train models, and inspect quality, metrics, and model lineage.'],
   rl: ['Evaluate', 'RL environment', 'Inspect the consolidated locomotion environment contract, curriculum stages, and bounded measured probe episodes (no trainer yet).'],
   live: ['Evaluate', 'Live neural training', 'Watch a genuinely fresh network learn to walk in the real locomotion environment: the actual training simulation streamed live, the trainer\'s own telemetry, pause/resume/stop/save, and a read-only view of the background B3 run.'],
+  playback: ['Evaluate', 'Checkpoint playback', 'Replay any saved brain driving the real MuJoCo simulation through its own inference — deterministic or stochastic, read-only, no PPO updates.'],
   lab: ['Evaluate', 'Run & models', 'Launch exploration runs, compare model behaviour, and audit session provenance.'],
   infra: ['System', 'Infrastructure', 'Monitor provider health, hardware utilisation, and live request queues.'],
   providers: ['System', 'Providers', 'Inspect discovered model providers, connectivity, capabilities, and available models.'],
@@ -70,6 +71,7 @@ function showTab(name) {
   window.scrollTo(0, 0);
   ({ memory: loadMemory, analytics: loadAnalytics, compare: loadCompare, bench: loadBench, nn: loadNn, rl: loadRl, lab: loadLab,
      live: () => window.__rl_live_show && window.__rl_live_show(),
+     playback: () => { const f = $('#playback-frame'); if (f && f.src.endsWith('about:blank')) f.src = f.dataset.src; },
      infra: loadInfra, providers: loadProviders, monitor: loadMonitor, resources: loadResources }[name] || (() => {}))();
   if (name === 'watch') resize();
 }

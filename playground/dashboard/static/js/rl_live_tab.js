@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from '/static/vendor/OrbitControls.js';
 import { HumanoidView } from './humanoid_view.js';
+import { createHumanoidV2 } from '/static/js/humanoid_v2.js?v=2';
 
 const $ = (id) => document.getElementById(id);
 const fmt = (v, n = 3) => (v === null || v === undefined || Number.isNaN(v))
@@ -47,6 +48,31 @@ scene.add(fillLight);
 
 const rigMeshes = new Map();
 let humanoidFallback = new HumanoidView(scene);
+
+/* ---- Humanoid V2 (Blender FBX, retargeted from live MuJoCo frames) ----
+ * Default when it loads and verifies. ?rig=v1 keeps the primitive V1 rig.
+ * Any V2 error at load or per frame falls back to V1 and says so. */
+const v2Requested = new URLSearchParams(location.search).get('rig') !== 'v1';
+let v2 = null;
+const rigBodyNames = new Set();
+function setRigPrimitivesVisible(visible) {
+  for (const name of rigBodyNames) { const g = rigMeshes.get(name); if (g) g.visible = visible; }
+}
+function v2Fallback(reason) {
+  console.error('humanoid V2 disabled:', reason);
+  if (v2) { v2.dispose(); v2 = null; }
+  window.__humanoidV2 = null;
+  setRigPrimitivesVisible(true);
+  flash(`V2 humanoid unavailable, showing V1: ${reason}`);
+}
+if (v2Requested) {
+  createHumanoidV2(scene).then((h) => {
+    v2 = h;
+    window.__humanoidV2 = h;
+    setRigPrimitivesVisible(false);
+  }).catch((e) => v2Fallback(e.message));
+}
+
 function resize() {
   const w = holder.clientWidth, h = holder.clientHeight || 340;
   if (!w) return;
@@ -85,6 +111,7 @@ function geomMesh(g) {
 function buildScene(spec) {
   for (const [, m] of rigMeshes) scene.remove(m);
   rigMeshes.clear();
+  rigBodyNames.clear();
   if (humanoidFallback) { scene.remove(humanoidFallback.group); humanoidFallback = null; }
   let rig = 0, other = 0;
   for (const body of spec.bodies || []) {
@@ -103,21 +130,27 @@ function buildScene(spec) {
     } else {
       group.quaternion.identity();
     }
-    if (body.rig) rig++; else other++;
+    if (body.rig) { rig++; rigBodyNames.add(body.name); } else other++;
     rigMeshes.set(body.name, group);
+    if (body.rig && v2) group.visible = false;   // V2 replaces the V1 primitive rig
     scene.add(group);
   }
   $('live-scene-note').textContent =
-    `· rig ${rig} bodies, island ${other} · meshes not drawn: ${spec.meshes_skipped ?? 0}`;
+    `· rig ${rig} bodies, island ${other} · meshes not drawn: ${spec.meshes_skipped ?? 0}`
+    + (v2 ? ` · V2: ${v2.meshes.size} FBX meshes` : '');
 }
 
 function applyFrame(f) {
+  if (f.t === 'reset') { if (v2) v2.reset(); return; }
   if (humanoidFallback) { scene.remove(humanoidFallback.group); humanoidFallback = null; }
   for (const [name, pose] of Object.entries(f.bodies || {})) {
     let obj = rigMeshes.get(name);
     if (!obj) { obj = new THREE.Group(); rigMeshes.set(name, obj); scene.add(obj); }
     obj.position.set(pose.p[0], pose.p[1], pose.p[2]);
     obj.quaternion.set(pose.q[1], pose.q[2], pose.q[3], pose.q[0]);
+  }
+  if (v2 && f.bodies) {
+    try { v2.update(f); } catch (e) { v2Fallback(e.message); }
   }
   controls.target.lerp(new THREE.Vector3(f.root.pos[0], f.root.pos[1], 0.9), 0.05);
   $('live-episode').value = f.episode;
@@ -176,6 +209,8 @@ function onIteration(rec) {
   if (rec.stage) $('live-stage').value = rec.stage;
   if (rec.iteration !== undefined) $('live-iter').value = rec.iteration;
   if (rec.total_valid_steps !== undefined) $('live-step').value = rec.total_valid_steps;
+  if (rec.roll_comp_limb_tracking_mean !== undefined)
+    $('live-s1-track').value = fmt(rec.roll_comp_limb_tracking_mean, 3);
 }
 
 let bannerT = null;
@@ -209,6 +244,13 @@ function refreshControls() {
   err.textContent = (st === 'error' && lastState && lastState.error) ? lastState.error : '';
   const cfg = lastState && lastState.config;
   if (cfg) $('live-run-name').value = `${cfg.name} · obj ${cfg.objective} · seed ${cfg.seed}`;
+  if (cfg && cfg.s1) {
+    $('live-s1-card').hidden = false;
+    $('live-s1-group').value = (cfg.limb_stage_id || '').replace('m7_s1_', '') || '—';
+  }
+  // Evaluate needs a quiescent torch state and a saved checkpoint.
+  const cks = (lastState && lastState.checkpoints) || [];
+  $('live-eval').disabled = !(cfg && cfg.s1 && (st === 'stopped' || (st === 'paused' && cks.length)));
   $('live-trainer-note').textContent = lastState && lastState.trainer_available === false
     ? '· trainer modules not on this tree yet (B3 pending): viewer + telemetry only'
     : '';
@@ -221,10 +263,47 @@ async function post(path, body = {}) {
   if (!j.ok && j.error) flash(`${j.error.code}: ${j.error.message}`);
   return j;
 }
-$('live-start').onclick = () => post('/api/rl_live/start', {
-  objective: $('live-objective').value, seed: Number($('live-seed').value),
-  total_steps: Number($('live-steps').value),
-});
+/* ------------- architecture + S1 individual-limb wiring ------------- */
+let OBJ = [];
+const objMeta = (id) => OBJ.find((o) => o.id === id) || {};
+
+function archHidden() {
+  const v = $('live-arch').value;
+  const raw = v === 'custom' ? $('live-arch-custom').value : v;
+  return String(raw).split(',').map((s) => parseInt(s.trim(), 10))
+    .filter((n) => Number.isFinite(n) && n > 0);
+}
+function syncArchCustom() { $('live-arch-custom').parentElement.hidden = $('live-arch').value !== 'custom'; }
+$('live-arch').onchange = syncArchCustom;
+syncArchCustom();
+
+function onObjectiveChange() {
+  const m = objMeta($('live-objective').value);
+  const isS1 = !!m.s1;
+  $('live-warmrow').hidden = !isS1;
+  $('live-s1-card').hidden = !isS1;
+  if (isS1) $('live-s1-group').value = (m.limb_stage_id || '').replace('m7_s1_', '') || '—';
+}
+$('live-objective').onchange = onObjectiveChange;
+
+function startBody() {
+  const ppo = { hidden: archHidden() };
+  const lr = Number($('live-lr').value);
+  if (Number.isFinite(lr) && lr > 0) ppo.lr = lr;
+  const body = {
+    objective: $('live-objective').value,
+    seed: Number($('live-seed').value),
+    total_steps: Number($('live-steps').value),
+    ppo_overrides: ppo,
+  };
+  if (objMeta($('live-objective').value).s1) {
+    const warm = parseInt($('live-warmup').value, 10);
+    if (Number.isFinite(warm) && warm >= 0) body.stage_budgets = { standing: warm };
+  }
+  return body;
+}
+
+$('live-start').onclick = () => post('/api/rl_live/start', startBody());
 $('live-pause').onclick = () => post('/api/rl_live/pause');
 $('live-resume').onclick = () => post('/api/rl_live/resume');
 $('live-stop').onclick = () => { if (confirm('Stop training and save the final checkpoint?')) post('/api/rl_live/stop'); };
@@ -233,10 +312,42 @@ $('live-save').onclick = () => {
   if (tag !== null) post('/api/rl_live/save', { tag });
 };
 
+function latestCheckpointName() {
+  const st = lastState && lastState.state;
+  if (st === 'stopped') return 'ckpt_final.json';
+  const cks = (lastState && lastState.checkpoints) || [];
+  if (!cks.length) return 'ckpt_final.json';
+  return (cks[cks.length - 1].path || '').split(/[\\/]/).pop() || 'ckpt_final.json';
+}
+
+function renderVerdict(v) {
+  const el = $('live-s1-verdict');
+  el.textContent = v.mastered ? 'MASTERED ✓' : 'not yet';
+  el.style.color = v.mastered ? 'var(--good, #57c98b)' : 'var(--warn, #e2b93b)';
+  const rows = Object.entries(v.joints || {}).map(([n, r]) =>
+    [`${n} ${r.pass ? '✓' : '✗'}`, `${fmt(r.steady_abs_err_rad)} / ${fmt(r.band_rad)} rad`]);
+  rows.push(['posture chest-up', `${fmt(v.posture.chest_up_z_min)} (≥${v.posture.band}) ${v.posture.pass ? '✓' : '✗'}`]);
+  rows.push(['falls', `${v.falls.count} ${v.falls.pass ? '✓' : '✗'} · ${v.episodes} held-out episodes`]);
+  $('live-s1-bands').innerHTML = kvRows(rows);
+}
+
+$('live-eval').onclick = async () => {
+  const cfg = lastState && lastState.config;
+  if (!cfg || !cfg.s1) return;
+  $('live-s1-note').textContent = 'evaluating…';
+  const r = await post('/api/rl_live/evaluate', {
+    experiment: cfg.name, checkpoint: latestCheckpointName(),
+    stage_id: cfg.limb_stage_id, episodes: 12,
+  });
+  if (r.ok && r.verdict) { renderVerdict(r.verdict); $('live-s1-note').textContent = ''; }
+  else $('live-s1-note').textContent = (r.error && r.error.message) || 'eval failed';
+};
+
 /* -------------------------------------------------------------------- SSE */
 const ev = new EventSource('/api/rl_live/stream');
 ev.addEventListener('spec', (e) => buildScene(JSON.parse(e.data)));
 ev.addEventListener('frame', (e) => { try { applyFrame(JSON.parse(e.data)); } catch (_) { /* partial */ } });
+ev.addEventListener('reset', () => { if (v2) v2.reset(); });
 ev.addEventListener('iteration', (e) => onIteration(JSON.parse(e.data)));
 ev.addEventListener('b3_iteration', (e) => onB3(JSON.parse(e.data)));
 ev.addEventListener('status', (e) => { lastState = JSON.parse(e.data); refreshControls(); });
@@ -291,13 +402,15 @@ async function pollB3() {
 async function bootSnapshot() {
   try {
     const objs = await fetch('/api/rl_live/objectives').then(r => r.json());
+    OBJ = objs.objectives || [];
     const sel = $('live-objective');
     sel.innerHTML = '';
-    for (const o of objs.objectives || []) {
+    for (const o of OBJ) {
       const op = document.createElement('option');
       op.value = o.id; op.textContent = o.label;
       sel.appendChild(op);
     }
+    onObjectiveChange();
     const spec = await fetch('/api/rl_live/spec').then(r => r.json());
     if (spec && spec.available !== false) buildScene(spec);
     else if (humanoidFallback) $('live-scene-note').textContent = '· no scene yet — start a session to build the rig from the live model';

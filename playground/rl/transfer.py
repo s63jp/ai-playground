@@ -27,6 +27,14 @@ Port:
     preserved), the appended entry = log_std_init;
   - critic input rows same rule; everything else copied.
 
+Architecture law (network-scaling, works for 64x64/128x128/256x256/...):
+the child inherits the PARENT'S true trunk widths — the recorded
+`policy.hidden` when present, otherwise the widths DERIVED from the parent's
+own weight shapes (no historical parent silently becomes (64, 64)). A
+recorded hidden that disagrees with the parent's actual tensor shapes is
+refused as TransferError BEFORE anything is ported; incompatible port shapes
+refuse the same way (never truncate/reshape/partial-copy).
+
 Round-trip proof runs inside the surgery (results returned in the record):
 deterministic outputs on the shared slice equal to 1e-6, log_std exact-equal
 on the shared slice, critic value equal to 1e-5.
@@ -141,10 +149,12 @@ def subset_check(stored_contract: dict, live_contract: dict) -> dict:
 def _actor_hidden_widths(actor_sd: dict) -> tuple:
     """The TRUE hidden widths from a trunk state dict: in-dims[1:] of the
     trunk weights plus the final layer's out-dim (kept identical to
-    checkpoint._actor_hidden — the built-child check compares these)."""
+    checkpoint._actor_hidden — the built-child check compares these). Layer
+    keys sort by INDEX, not name: up to eight Linear layers reach index 14
+    and a bare sort would order "trunk.10.weight" before "trunk.2.weight"."""
     items = sorted(((k, v) for k, v in actor_sd.items()
                     if k.startswith("trunk.") and k.endswith(".weight")),
-                   key=lambda kv: kv[0])
+                   key=lambda kv: int(kv[0].split(".")[1]))
     if not items:
         return ()
     widths = [int(np.asarray(v).shape[1]) for _, v in items][1:]
@@ -175,9 +185,40 @@ def surgery_transfer(path, env_fingerprints: dict, *, log_std_init: float = 0.0)
     body = _load_verified_body(path)
     meta = body["meta"]
     subset = subset_check(meta["contract"], env_fingerprints)
+    # The architecture law: the CHILD inherits the PARENT'S true widths —
+    # never the default and never a configured size. When the parent records
+    # `policy.hidden` (every M7-0b-era save) the record is validated against
+    # the parent trunk's ACTUAL shapes; when the field is absent (every
+    # historical checkpoint) the widths are DERIVED from the trunk shapes, so
+    # non-default historical parents would rebuild correctly instead of
+    # silently assuming (64, 64).
     hidden = meta.get("policy", {}).get("hidden") or None
+    derived = None
+    if hidden is not None:
+        try:
+            hidden = tuple(int(h) for h in hidden)
+        except (TypeError, ValueError) as e:
+            raise TransferError(
+                f"parent policy.hidden is not a list of integer widths: "
+                f"{e}") from e
+        if not hidden or any(h < 1 for h in hidden):
+            raise TransferError(f"parent policy.hidden must be positive "
+                                f"layer widths (got {hidden!r})")
+        derived = _actor_hidden_widths(body["actor"])
+        if tuple(hidden) != derived:
+            raise TransferError(
+                f"parent policy.hidden {list(hidden)} does not match the "
+                f"parent trunk's actual widths {list(derived)}: refusing to "
+                "port a misrecorded architecture")
+    else:
+        derived = _actor_hidden_widths(body["actor"])
+        if not derived:
+            raise TransferError(
+                "the parent checkpoint records no trunk weights: its "
+                "architecture cannot be determined")
+        hidden = derived
     from .ppo import TanhGaussianActor, Critic
-    kw = {"hidden": tuple(hidden)} if hidden else {}
+    kw = {"hidden": tuple(hidden)}
     child_actor = TanhGaussianActor(subset["obs_child"], subset["act_child"],
                                     log_std_init=float(log_std_init), **kw)
     child_critic = Critic(subset["obs_child"], **kw)
@@ -258,15 +299,22 @@ def surgery_transfer(path, env_fingerprints: dict, *, log_std_init: float = 0.0)
             else:
                 raise TransferError(f"unexpected critic shape for {key}")
     pol = meta["policy"]
-    parent_actor = TanhGaussianActor(subset["obs_parent"], subset["act_parent"],
-                                     log_std_init=0.0,
-                                     log_std_min=float(pol.get("log_std_min", -5.0)),
-                                     log_std_max=float(pol.get("log_std_max", 2.0)))
-    parent_actor.load_state_dict({k: torch.as_tensor(
-        np.asarray(v, dtype=np.float32)) for k, v in body["actor"].items()})
-    parent_critic = Critic(subset["obs_parent"])
-    parent_critic.load_state_dict({k: torch.as_tensor(
-        np.asarray(v, dtype=np.float32)) for k, v in body["critic"].items()})
+    try:
+        parent_actor = TanhGaussianActor(subset["obs_parent"],
+                                         subset["act_parent"],
+                                         log_std_init=0.0,
+                                         log_std_min=float(pol.get("log_std_min", -5.0)),
+                                         log_std_max=float(pol.get("log_std_max", 2.0)),
+                                         hidden=tuple(hidden))
+        parent_actor.load_state_dict({k: torch.as_tensor(
+            np.asarray(v, dtype=np.float32)) for k, v in body["actor"].items()})
+        parent_critic = Critic(subset["obs_parent"], hidden=tuple(hidden))
+        parent_critic.load_state_dict({k: torch.as_tensor(
+            np.asarray(v, dtype=np.float32)) for k, v in body["critic"].items()})
+    except (RuntimeError, KeyError) as e:
+        raise TransferError(
+            f"parent weights do not fit the parent architecture "
+            f"(hidden={list(hidden)}): {e}") from e
     round_trip = _round_trip_proof(parent_actor, parent_critic, child_actor,
                                    child_critic, subset, torch)
     return {"actor": child_actor, "critic": child_critic, "subset": subset,

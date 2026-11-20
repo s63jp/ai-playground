@@ -29,13 +29,13 @@ trainer:
   already consume (`scene_spec` once per session, `frame` per decision,
   `reset`/`episode_end` per episode).
 
-Runs are isolated on their own port (default 8770) with their own run dir
-(default experiments/rl_playback/<name>/); the checkpoint's run dir
+Playback is served on the one dashboard server via rest_playback.py
+(`/api/rl_playback/*`, its own Bus/SSE) and isolates its writes in its own run
+dir (default experiments/rl_playback/<name>/); the checkpoint's run dir
 (experiments/rl/b3_run1) is only ever READ, never written.
 """
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import subprocess
@@ -615,53 +615,3 @@ class PlaybackSession:
         with self._lock:
             self.state = "stopped"
         self._broadcast("status", self._status_payload())
-
-
-# ---------------------------------------------------------------------- CLI
-def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--port", type=int, default=8770)
-    ap.add_argument("--checkpoint", required=True)
-    ap.add_argument("--stage", default="sustained", choices=sorted(STAGES))
-    ap.add_argument("--inference", default="deterministic", choices=list(MODES))
-    ap.add_argument("--speed", type=float, default=1.0)
-    ap.add_argument("--seed-base", type=int, default=EVAL_SEED_BASE)
-    ap.add_argument("--name", default=None)
-    ap.add_argument("--out-root", default=str(ROOT / "experiments" / "rl_playback"))
-    ap.add_argument("--frame-hz", type=float, default=30.0)
-    ap.add_argument("--bind", default="127.0.0.1",
-                    help="loopback only by policy; any other value is refused")
-    args = ap.parse_args(argv)
-    if args.bind not in ("127.0.0.1", "localhost", "::1"):
-        ap.error("refusing to bind anything but loopback (project policy)")
-    from .bus import Bus
-    from .server import App, LiveHTTPServer
-    session = PlaybackSession(checkpoint=args.checkpoint, stage=args.stage,
-                              inference=args.inference, speed=args.speed,
-                              seed_base=args.seed_base, name=args.name,
-                              root=args.out_root)
-    bus = Bus(frame_hz=args.frame_hz)
-    # App wires the session's _frame_sink (the bus) and _broadcast itself.
-    app = App(session=session, bus=bus, b3=None, out_root=Path(args.out_root),
-              frame_hz=args.frame_hz, refresher=False)
-    start = session.start()
-    if not start.get("ok"):
-        raise SystemExit(f"playback failed to start: {start}")
-    httpd = LiveHTTPServer(("127.0.0.1", args.port), app)
-    print(f"[rl_playback] {SERVER_VERSION} on "
-          f"http://127.0.0.1:{httpd.server_address[1]}/playback.html",
-          flush=True)
-    print(f"[rl_playback] checkpoint: {args.checkpoint}", flush=True)
-    print("[rl_playback] read-only: no PPO updates; the checkpoint's run dir "
-          "is never written; the live-training sidecar on :8766 is a separate "
-          "process and is untouched", flush=True)
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        httpd.server_close()
-
-
-if __name__ == "__main__":
-    main()

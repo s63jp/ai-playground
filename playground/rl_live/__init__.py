@@ -10,9 +10,13 @@ stack in front of the user:
   interop.py    the single seam to the B3 trainer modules (lazy imports)
   session.py    the live session state machine (start/pause/resume/stop/save)
   bus.py        SSE fanout (latest-wins frames, bounded event queues)
-  server.py     localhost-only sidecar on :8766 serving the live viewer
+  rest.py       the FastAPI mount for live training on the dashboard server
+  rest_playback.py  the FastAPI mount for checkpoint playback on that server
+  playback.py   PlaybackSession: a saved brain drives the sim (no PPO updates)
 
-Nothing here trains anything by itself: a live training run only starts when
+The live viewer and checkpoint playback are served by the ONE dashboard server
+(`playground serve`) via the mounts above — there is no separate sidecar
+process. Nothing here trains anything by itself: a live training run only starts when
 the user asks for it; it uses the real LocoEnv + PPOTrainer + checkpoint
 format, in this process, writing only under its own run directory.
 """

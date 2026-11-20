@@ -234,7 +234,10 @@ rl:
     ent_coef: 0.0            # Gaussian-entropy bonus coefficient
     value_coef: 0.5          # value-loss coefficient
     max_grad_norm: 0.5       # global-norm clip per network
-    hidden: [64, 64]         # actor and critic trunk widths
+    hidden: [64, 64]         # actor and critic trunk widths — any 1..8 list
+                             # of positive ints (e.g. [128, 128], [256, 256]);
+                             # checkpoints restore their OWN recorded widths,
+                             # so historical (64, 64) lineages stay loadable
     log_std_init: 0.0        # initial action sigma = 1.0
     target_kl: null          # optional early-stop KL threshold
   # Training-run driver settings (scripts/rl_ppo.py / PPOTrainer).
