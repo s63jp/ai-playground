@@ -3,7 +3,7 @@
 **Status:** protected, read-only reference brains. Never overwrite, retrain in place, convert, or delete.
 **Location:** `baselines/` at the repository root (tracked by Git, not ignored).
 **Machine-readable record:** [`manifest.json`](manifest.json). Every file is listed under its brain, with a repository-relative path, role, size, and SHA-256.
-**Copied:** 2026-11-20 (M6-B0). Original source: second checkout `C:\Users\jamie\ai-playground\experiments\rl\` (read-only, unmodified).
+**Copied:** 2026-11-20 (M6-B0). Original source: the `experiments/rl/` folder of the second working copy, which lives outside this repository (read-only, unmodified). A verified copy is kept in the 2026-11-20 preservation backup, also outside this repository. Provenance identifiers are in `manifest.json`.
 
 ---
 
