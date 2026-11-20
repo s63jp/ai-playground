@@ -39,11 +39,50 @@ def test_status_objectives_b3(env):
     assert st["b3_available"] is True
     assert st["session"]["trainer_available"] == interop.trainer_available()
     objs = client.get("/api/rl_live/objectives").json()
-    assert [o["id"] for o in objs["objectives"]] == ["walking"]
+    ids = [o["id"] for o in objs["objectives"]]
+    assert ids[0] == "walking"
+    # the M7-1a S1 individual-limb objectives are offered alongside walking
+    s1_ids = {o["id"] for o in objs["objectives"] if o.get("s1")}
+    assert s1_ids == {"m7_s1_left_arm", "m7_s1_right_arm", "m7_s1_head",
+                      "m7_s1_torso", "m7_s1_left_leg", "m7_s1_right_leg",
+                      "m7_s1_all"}
     assert objs["stage_ladder"][0]["id"] == "standing"
     b3 = client.get("/api/rl_b3/telemetry?limit=1").json()
     assert b3["available"] is True and b3["latest"]["iteration"] == 2
     assert b3["records"] == [b3["latest"]]
+
+
+def test_experiments_listing_and_eval_file(env):
+    client, handle, tmp = env
+    exp = tmp / "runs" / "exp1"
+    exp.mkdir(parents=True, exist_ok=True)
+    (exp / "run_config.json").write_text(json.dumps(
+        {"objective": "m7_s1_head", "limb_stage_id": "m7_s1_head", "s1": True}),
+        encoding="utf-8")
+    (exp / "ckpt_final.json").write_text("{}", encoding="utf-8")
+    (exp / "s1_eval_m7_s1_head.json").write_text(
+        json.dumps({"mastered": False}), encoding="utf-8")
+    j = client.get("/api/rl_live/experiments").json()
+    names = {e["name"]: e for e in j["experiments"]}
+    assert "exp1" in names
+    assert names["exp1"]["limb_stage_id"] == "m7_s1_head"
+    assert "ckpt_final.json" in names["exp1"]["checkpoints"]
+    assert "s1_eval_m7_s1_head.json" in names["exp1"]["evals"]
+    # stored verdict is readable back
+    v = client.get("/api/rl_live/experiment/exp1/eval/s1_eval_m7_s1_head.json").json()
+    assert v["mastered"] is False
+
+
+def test_evaluate_guards(env):
+    client, handle, tmp = env
+    # missing experiment/checkpoint -> 404
+    r = client.post("/api/rl_live/evaluate",
+                    json={"experiment": "nope", "stage_id": "m7_s1_head"})
+    assert r.status_code == 404
+    # path traversal refused
+    r = client.post("/api/rl_live/evaluate",
+                    json={"experiment": "../etc", "stage_id": "m7_s1_head"})
+    assert r.status_code == 400
 
 
 def test_spec_404_until_started(env):

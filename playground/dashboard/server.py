@@ -62,6 +62,12 @@ def create_app(cfg: dict | None = None, db: Database | None = None) -> FastAPI:
     # dashboard, with read-only telemetry of the running B3 experiment.
     from ..rl_live.rest import register_rl_live_routes
     register_rl_live_routes(app, cfg)
+    # Checkpoint playback (migrated from the standalone :8766 sidecar): the
+    # unique playback functionality now lives on the ONE dashboard backend,
+    # on its own /api/rl_playback/* route family + Bus so it coexists with
+    # live training.
+    from ..rl_live.rest_playback import register_rl_playback_routes
+    register_rl_playback_routes(app, cfg)
 
     def mem(agent_id: str) -> MemoryStore:
         known = set(agent_ids(cfg)) | {p.name for p in memory_root(cfg).iterdir() if p.is_dir()}

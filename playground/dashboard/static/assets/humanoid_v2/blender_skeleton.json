@@ -1,0 +1,2326 @@
+{
+ "source": "humanoid-robot/assets/humanoid_robot_rigged.blend",
+ "blender_version": "5.2.1 LTS",
+ "armature": "humanoid_rig",
+ "armature_matrix_world": [
+  [
+   1.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  [
+   0.0,
+   1.0,
+   0.0,
+   0.0
+  ],
+  [
+   0.0,
+   0.0,
+   1.0,
+   0.0
+  ],
+  [
+   0.0,
+   0.0,
+   0.0,
+   1.0
+  ]
+ ],
+ "unit_scale": 1.0,
+ "bones": [
+  {
+   "name": "pelvis",
+   "parent": null,
+   "matrix_local": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     -1.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.885
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "head_local": [
+    0.0,
+    0.0,
+    0.885
+   ],
+   "tail_local": [
+    0.0,
+    0.0,
+    1.015
+   ]
+  },
+  {
+   "name": "spine",
+   "parent": "pelvis",
+   "matrix_local": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     -1.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     1.015
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "head_local": [
+    0.0,
+    0.0,
+    1.015
+   ],
+   "tail_local": [
+    0.0,
+    0.0,
+    1.17
+   ]
+  },
+  {
+   "name": "chest",
+   "parent": "spine",
+   "matrix_local": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     -1.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     1.17
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "head_local": [
+    0.0,
+    0.0,
+    1.17
+   ],
+   "tail_local": [
+    0.0,
+    0.0,
+    1.44
+   ]
+  },
+  {
+   "name": "neck",
+   "parent": "chest",
+   "matrix_local": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     -1.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     1.44
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "head_local": [
+    0.0,
+    0.0,
+    1.44
+   ],
+   "tail_local": [
+    0.0,
+    0.0,
+    1.56
+   ]
+  },
+  {
+   "name": "head",
+   "parent": "neck",
+   "matrix_local": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     -1.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     1.56
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "head_local": [
+    0.0,
+    0.0,
+    1.56
+   ],
+   "tail_local": [
+    0.0,
+    0.0,
+    1.755
+   ]
+  },
+  {
+   "name": "clavicle.L",
+   "parent": "chest",
+   "matrix_local": [
+    [
+     -0.068802,
+     0.997631,
+     -0.0,
+     0.03
+    ],
+    [
+     -0.0,
+     -0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.99763,
+     0.068802,
+     0.0,
+     1.39
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "head_local": [
+    0.03,
+    0.0,
+    1.39
+   ],
+   "tail_local": [
+    0.175,
+    0.0,
+    1.4
+   ]
+  },
+  {
+   "name": "upperarm.L",
+   "parent": "clavicle.L",
+   "matrix_local": [
+    [
+     0.951057,
+     0.309017,
+     0.0,
+     0.175
+    ],
+    [
+     -0.0,
+     0.0,
+     1.0,
+     -0.0
+    ],
+    [
+     0.309017,
+     -0.951057,
+     0.0,
+     1.4
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "head_local": [
+    0.175,
+    0.0,
+    1.4
+   ],
+   "tail_local": [
+    0.267705,
+    0.0,
+    1.114683
+   ]
+  },
+  {
+   "name": "forearm.L",
+   "parent": "upperarm.L",
+   "matrix_local": [
+    [
+     0.951057,
+     0.309017,
+     -0.0,
+     0.267705
+    ],
+    [
+     0.0,
+     -0.0,
+     1.0,
+     -0.0
+    ],
+    [
+     0.309017,
+     -0.951057,
+     -0.0,
+     1.114683
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "head_local": [
+    0.267705,
+    0.0,
+    1.114683
+   ],
+   "tail_local": [
+    0.349595,
+    0.0,
+    0.862653
+   ]
+  },
+  {
+   "name": "hand.L",
+   "parent": "forearm.L",
+   "matrix_local": [
+    [
+     0.951057,
+     0.309017,
+     0.0,
+     0.349595
+    ],
+    [
+     -0.0,
+     0.0,
+     1.0,
+     -0.0
+    ],
+    [
+     0.309017,
+     -0.951057,
+     0.0,
+     0.862653
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "head_local": [
+    0.349595,
+    0.0,
+    0.862653
+   ],
+   "tail_local": [
+    0.408308,
+    0.0,
+    0.681952
+   ]
+  },
+  {
+   "name": "clavicle.R",
+   "parent": "chest",
+   "matrix_local": [
+    [
+     -0.068802,
+     -0.997631,
+     0.0,
+     -0.03
+    ],
+    [
+     0.0,
+     -0.0,
+     1.0,
+     0.0
+    ],
+    [
+     -0.99763,
+     0.068802,
+     0.0,
+     1.39
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "head_local": [
+    -0.03,
+    0.0,
+    1.39
+   ],
+   "tail_local": [
+    -0.175,
+    0.0,
+    1.4
+   ]
+  },
+  {
+   "name": "upperarm.R",
+   "parent": "clavicle.R",
+   "matrix_local": [
+    [
+     0.951057,
+     -0.309017,
+     -0.0,
+     -0.175
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     -0.0
+    ],
+    [
+     -0.309017,
+     -0.951057,
+     0.0,
+     1.4
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "head_local": [
+    -0.175,
+    0.0,
+    1.4
+   ],
+   "tail_local": [
+    -0.267705,
+    0.0,
+    1.114683
+   ]
+  },
+  {
+   "name": "forearm.R",
+   "parent": "upperarm.R",
+   "matrix_local": [
+    [
+     0.951057,
+     -0.309017,
+     0.0,
+     -0.267705
+    ],
+    [
+     -0.0,
+     -0.0,
+     1.0,
+     -0.0
+    ],
+    [
+     -0.309017,
+     -0.951057,
+     -0.0,
+     1.114683
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "head_local": [
+    -0.267705,
+    0.0,
+    1.114683
+   ],
+   "tail_local": [
+    -0.349595,
+    0.0,
+    0.862653
+   ]
+  },
+  {
+   "name": "hand.R",
+   "parent": "forearm.R",
+   "matrix_local": [
+    [
+     0.951057,
+     -0.309017,
+     -0.0,
+     -0.349595
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     -0.0
+    ],
+    [
+     -0.309017,
+     -0.951057,
+     0.0,
+     0.862653
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "head_local": [
+    -0.349595,
+    0.0,
+    0.862653
+   ],
+   "tail_local": [
+    -0.408308,
+    0.0,
+    0.681952
+   ]
+  },
+  {
+   "name": "thigh.L",
+   "parent": "pelvis",
+   "matrix_local": [
+    [
+     0.999932,
+     0.011627,
+     -0.0,
+     0.095
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.011627,
+     -0.999932,
+     -0.0,
+     0.9
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "head_local": [
+    0.095,
+    0.0,
+    0.9
+   ],
+   "tail_local": [
+    0.1,
+    0.0,
+    0.47
+   ]
+  },
+  {
+   "name": "shin.L",
+   "parent": "thigh.L",
+   "matrix_local": [
+    [
+     1.0,
+     -0.0,
+     0.0,
+     0.1
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     -1.0,
+     -0.0,
+     0.47
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "head_local": [
+    0.1,
+    0.0,
+    0.47
+   ],
+   "tail_local": [
+    0.1,
+    0.0,
+    0.115
+   ]
+  },
+  {
+   "name": "foot.L",
+   "parent": "shin.L",
+   "matrix_local": [
+    [
+     1.0,
+     -0.0,
+     0.0,
+     0.1
+    ],
+    [
+     -0.0,
+     0.928477,
+     0.371391,
+     0.0
+    ],
+    [
+     -0.0,
+     -0.371391,
+     0.928477,
+     0.115
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "head_local": [
+    0.1,
+    0.0,
+    0.115
+   ],
+   "tail_local": [
+    0.1,
+    0.2,
+    0.035
+   ]
+  },
+  {
+   "name": "thigh.R",
+   "parent": "pelvis",
+   "matrix_local": [
+    [
+     0.999932,
+     -0.011627,
+     0.0,
+     -0.095
+    ],
+    [
+     -0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     -0.011627,
+     -0.999932,
+     -0.0,
+     0.9
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "head_local": [
+    -0.095,
+    0.0,
+    0.9
+   ],
+   "tail_local": [
+    -0.1,
+    0.0,
+    0.47
+   ]
+  },
+  {
+   "name": "shin.R",
+   "parent": "thigh.R",
+   "matrix_local": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     -0.1
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     -0.0,
+     -1.0,
+     -0.0,
+     0.47
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "head_local": [
+    -0.1,
+    0.0,
+    0.47
+   ],
+   "tail_local": [
+    -0.1,
+    0.0,
+    0.115
+   ]
+  },
+  {
+   "name": "foot.R",
+   "parent": "shin.R",
+   "matrix_local": [
+    [
+     1.0,
+     -0.0,
+     0.0,
+     -0.1
+    ],
+    [
+     -0.0,
+     0.928477,
+     0.371391,
+     0.0
+    ],
+    [
+     -0.0,
+     -0.371391,
+     0.928477,
+     0.115
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "head_local": [
+    -0.1,
+    0.0,
+    0.115
+   ],
+   "tail_local": [
+    -0.1,
+    0.2,
+    0.035
+   ]
+  }
+ ],
+ "meshes": [
+  {
+   "name": "abdomen",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 96,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "spine": 96
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "ankle_L",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 762,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "foot.L": 762
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "ankle_R",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 762,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "foot.R": 762
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "chest",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 96,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "chest": 96
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "chest_plate",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 96,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "chest": 96
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "elbow_L",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 762,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "forearm.L": 762
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "elbow_R",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 762,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "forearm.R": 762
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "faceplate",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 96,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "head": 96
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "foot_L",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 96,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "foot.L": 96
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "foot_R",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 96,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "foot.R": 96
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "forearm_L",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 64,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "forearm.L": 64
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "forearm_R",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 64,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "forearm.R": 64
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "hand_L",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 96,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "hand.L": 96
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "hand_R",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 96,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "hand.R": 96
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "head",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 762,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "head": 762
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "hip_L",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 762,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "thigh.L": 762
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "hip_R",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 762,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "thigh.R": 762
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "knee_L",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 762,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "shin.L": 762
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "knee_R",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 762,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "shin.R": 762
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "neck",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 64,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "neck": 64
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "neck_ring_1",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 64,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "neck": 64
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "neck_ring_2",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 64,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "neck": 64
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "pelvis",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 96,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "pelvis": 96
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "setup_floor",
+   "parent": null,
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     -0.001
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 4,
+   "armature_modifiers": [],
+   "dominant_bone_counts": {},
+   "unweighted_verts": 4,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 0
+  },
+  {
+   "name": "shin_L",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 64,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "shin.L": 64
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "shin_R",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 64,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "shin.R": 64
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "shoulder_L",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 762,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "upperarm.L": 762
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "shoulder_R",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 762,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "upperarm.R": 762
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "spine_joint_low",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 64,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "spine": 64
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "spine_joint_up",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 64,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "chest": 64
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "thigh_L",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 64,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "thigh.L": 64
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "thigh_R",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 64,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "thigh.R": 64
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "upperarm_L",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 64,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "upperarm.L": 64
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "upperarm_R",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 64,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "upperarm.R": 64
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "wrist_L",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 762,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "hand.L": 762
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  },
+  {
+   "name": "wrist_R",
+   "parent": "humanoid_rig",
+   "parent_type": "OBJECT",
+   "matrix_world": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "n_verts": 762,
+   "armature_modifiers": [
+    "humanoid_rig"
+   ],
+   "dominant_bone_counts": {
+    "hand.R": 762
+   },
+   "unweighted_verts": 0,
+   "verts_with_secondary_weight_gt_0.01": 0,
+   "max_secondary_weight": 0.0,
+   "n_vertex_groups": 1
+  }
+ ],
+ "other_objects": [
+  {
+   "name": "humanoid_rig",
+   "type": "ARMATURE"
+  },
+  {
+   "name": "setup_camera",
+   "type": "CAMERA"
+  },
+  {
+   "name": "setup_light_fill",
+   "type": "LIGHT"
+  },
+  {
+   "name": "setup_light_key",
+   "type": "LIGHT"
+  },
+  {
+   "name": "setup_light_rim",
+   "type": "LIGHT"
+  }
+ ]
+}

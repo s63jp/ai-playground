@@ -105,6 +105,27 @@ def _parse_stage_budgets(s: str | None):
     return out
 
 
+def _rl_cfg_with_hidden_override(rl: dict, hidden_arg) -> dict:
+    """Per-run architecture override (scripts/rl_ppo.py train --hidden).
+
+    `--hidden 256,256` selects the actor/critic trunk widths for THIS run
+    without editing `config/default.yaml` (whose 64x64 default stays the B3/B4
+    baseline). The override is spliced into the rl dict BEFORE PPOConfig
+    validation, so the resulting widths pass through exactly the same
+    from_rl_cfg rules as a YAML-set value (1..8 layers of positive ints,
+    PPOError otherwise), and the selected widths are recorded wherever the
+    config is echoed (config.json carries ppo_cfg.as_dict()).
+    """
+    if hidden_arg is None or str(hidden_arg).strip() == "":
+        return rl
+    try:
+        widths = [int(h) for h in str(hidden_arg).split(",")]
+    except ValueError as e:
+        raise PPOError(f"--hidden must be comma-separated layer widths "
+                       f"(e.g. 256,256): {e}") from e
+    return {**rl, "ppo": {**(rl.get("ppo") or {}), "hidden": widths}}
+
+
 def _make_env_and_curriculum(cfg):
     env = LocoEnv(cfg={"agent_body": {"type": "humanoid"},
                        **(_rl_cfg(cfg) or {})})
@@ -122,7 +143,8 @@ def cmd_train(a):
     cp_freq = int(run.get("checkpoint_freq", 200_000))
     stage_budgets = _parse_stage_budgets(a.stage_budget) if a.stage_budget \
         else run.get("stage_budgets")
-    ppo_cfg = PPOConfig.from_rl_cfg(rl)
+    ppo_cfg = PPOConfig.from_rl_cfg(
+        _rl_cfg_with_hidden_override(rl, getattr(a, "hidden", None)))
     if a.ent_coef is not None:
         ppo_cfg.ent_coef = float(a.ent_coef)
     if a.lr is not None:
@@ -136,6 +158,21 @@ def cmd_train(a):
 
     env, cur = _make_env_and_curriculum(cfg)
     op, fork_from = _resolve_operation(a)
+    if getattr(a, "stages", None):
+        from playground.rl.curriculum import (STAGE_LADDERS,
+                                              m7_s1_launch_block_reason)
+        if a.stages not in STAGE_LADDERS:
+            raise PPOError(f"unknown --stages {a.stages!r}: allowed "
+                           f"{sorted(STAGE_LADDERS)}")
+        if a.stages == "m7_s1":
+            reason = m7_s1_launch_block_reason()
+            if reason:
+                raise PPOError(f"M7-1a limb ladder blocked: {reason}")
+        run_ladder = a.stages
+        cur = Curriculum(env, stages=STAGE_LADDERS[run_ladder])
+        cur.select(0)
+    else:
+        run_ladder = "default"
     out = Path(a.out) if a.out else _run_dir(cfg, a.name)
     out.mkdir(parents=True, exist_ok=True)
     fork_record = None
@@ -294,6 +331,7 @@ def cmd_train(a):
     (out / "config.json").write_text(json.dumps({
         "ppo": ppo_cfg.as_dict(), "total_steps": total_steps, "seed": seed,
         "stage_budgets": stage_budgets,
+        "stage_ladder": run_ladder,
         "operation": op,
         "fork_from": (str(fork_from) if fork_from else None),
         "run_parent": fork_record,
@@ -304,6 +342,7 @@ def cmd_train(a):
     (out / "result.json").write_text(json.dumps({
         **summary, "wall_s": round(wall, 1),
         "operation": op,
+        "stage_ladder": run_ladder,
         "fork_from": (str(fork_from) if fork_from else None),
         "final_checkpoint": final["path"],
         "faulted_windows_total": trainer.faulted_windows_total,
@@ -371,6 +410,24 @@ def policy_eval_checkpoint(a):
 
 
 # ------------------------------------------------------------------ baselines
+def cmd_eval_s1(a):
+    """Held-out S1 capability (mastery) eval for one individual limb — the
+    honest gate: a limb is reported mastered ONLY on measured tracking against
+    the recorded bands, never on step count."""
+    from playground.rl.s1_eval import (EVAL_EPISODES, EVAL_SEED_BASE,
+                                        evaluate_s1_limb)
+    verdict = evaluate_s1_limb(
+        a.checkpoint, a.stage,
+        episodes=(a.episodes or EVAL_EPISODES),
+        seed_base=(a.seed_base if a.seed_base is not None else EVAL_SEED_BASE),
+        write_to=a.out)
+    print(json.dumps(verdict, indent=2))
+    if a.require_mastered and not verdict["mastered"]:
+        raise PPOError(f"{a.stage} is NOT mastered "
+                       f"({sum(1 for r in verdict['joints'].values() if not r['pass'])} "
+                       f"joint band(s) failing)")
+
+
 def cmd_baselines(a):
     cfg = load_config(None, overrides={})
     rl = _rl_cfg(cfg)
@@ -432,6 +489,14 @@ def main(argv=None):
                         "is given, fresh otherwise (the tag is recorded in "
                         "every checkpoint + the run metadata)")
     t.add_argument("--out", default=None)
+    t.add_argument("--hidden", default=None,
+                   help="comma-separated actor/critic trunk widths for this "
+                        "run (e.g. 256,256); default: rl.ppo.hidden from the "
+                        "YAML config (64,64)")
+    t.add_argument("--stages", default=None,
+                   help="the stage ladder for this run: a ladder name "
+                        "exported by playground.rl.curriculum (e.g. "
+                        "m7_s1); default: the B2 standing ladder")
     e = sub.add_parser("eval")
     e.add_argument("--checkpoint", required=True)
     e.add_argument("--stage", default="sustained")
@@ -439,6 +504,15 @@ def main(argv=None):
     e.add_argument("--seed-base", type=int, default=None)
     e.add_argument("--gait-heading", type=float, default=0.0)
     e.add_argument("--out", default=None)
+    es = sub.add_parser("eval-s1")
+    es.add_argument("--checkpoint", required=True)
+    es.add_argument("--stage", required=True,
+                    help="S1 limb stage id (e.g. m7_s1_head, m7_s1_left_leg)")
+    es.add_argument("--episodes", type=int, default=None)
+    es.add_argument("--seed-base", type=int, default=None)
+    es.add_argument("--out", default=None, help="write the verdict JSON here")
+    es.add_argument("--require-mastered", action="store_true",
+                    help="exit non-zero unless the limb meets every gate band")
     b = sub.add_parser("baselines")
     b.add_argument("--stage", default="sustained")
     b.add_argument("--episodes", type=int, default=None)
@@ -450,6 +524,8 @@ def main(argv=None):
             cmd_train(args)
         elif args.cmd == "eval":
             cmd_eval(args)
+        elif args.cmd == "eval-s1":
+            cmd_eval_s1(args)
         elif args.cmd == "baselines":
             cmd_baselines(args)
     except CheckpointError as exc:

@@ -55,6 +55,17 @@ def build_session_trainer(env, curriculum, *, name: str, seed: int,
                 "rollout_steps", "epochs", "minibatch", "max_grad_norm"):
         if key in overrides and overrides[key] is not None:
             setattr(ppo_cfg, key, type(getattr(ppo_cfg, key))(overrides[key]))
+
+    if "hidden" in overrides and overrides["hidden"] is not None:
+        try:
+            hidden = tuple(int(width) for width in overrides["hidden"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("hidden must be a sequence of positive layer widths") from exc
+
+        if not hidden or len(hidden) > 8 or any(width < 1 for width in hidden):
+            raise ValueError("hidden must contain 1-8 positive layer widths")
+
+        ppo_cfg.hidden = hidden
     torch.manual_seed(int(seed))
 
     env_cfg = {"agent_body": {"type": "humanoid"}, **rl}
@@ -72,8 +83,17 @@ def build_session_trainer(env, curriculum, *, name: str, seed: int,
             "ppo_cfg_dict": ppo_cfg.as_dict()}
 
 
-def build_session_env(env_cfg_overrides: dict | None = None):
-    """Construct LocoEnv + bound Curriculum (standing stage applied)."""
+def build_session_env(env_cfg_overrides: dict | None = None, *,
+                      limb_stage_id: str | None = None):
+    """Construct LocoEnv + bound Curriculum.
+
+    Default: the B3/B4 walking ladder (standing stage applied), unchanged.
+    When `limb_stage_id` is given (an M7-1a S1 limb), the curriculum is the
+    2-stage live limb ladder — the standing base then that one limb — so the
+    live session trains an individual limb exactly as the CLI `--stages m7_s1`
+    lineage would, but focused on the selected limb. The launch gate is
+    enforced by the caller (the session) before this runs.
+    """
     from playground.config import load_config
     from playground.rl.curriculum import Curriculum
     from playground.rl.env import LocoEnv
@@ -81,8 +101,83 @@ def build_session_env(env_cfg_overrides: dict | None = None):
     rl = dict(cfg.get("rl") or {})
     rl.update(dict(env_cfg_overrides or {}))
     env = LocoEnv(cfg={"agent_body": {"type": "humanoid"}, **rl})
-    cur = Curriculum(env)     # binds + applies the standing stage
+    if limb_stage_id:
+        from playground.rl.curriculum import m7_s1_limb_ladder
+        cur = Curriculum(env, stages=m7_s1_limb_ladder(limb_stage_id))
+        cur.select(0)         # standing base first
+    else:
+        cur = Curriculum(env)  # binds + applies the standing stage
     return env, cur
+
+
+def list_experiments(root) -> dict:
+    """List experiment run dirs under `root` with their checkpoints, S1 eval
+    verdicts, and objective/limb metadata. Read-only; shared by the live and
+    playback dashboard mounts so the two never drift."""
+    import json
+    from pathlib import Path
+    root = Path(root)
+    items = []
+    if root.exists():
+        for d in sorted(root.iterdir()):
+            if not d.is_dir():
+                continue
+            cfg = None
+            cfgp = d / "run_config.json"
+            if cfgp.exists():
+                try:
+                    cfg = json.loads(cfgp.read_text(encoding="utf-8"))
+                except Exception:
+                    cfg = None
+            items.append({"name": d.name,
+                          "checkpoints": sorted(p.name for p in d.glob("ckpt_*.json")),
+                          "evals": sorted(p.name for p in d.glob("s1_eval_*.json")),
+                          "objective": (cfg or {}).get("objective"),
+                          "limb_stage_id": (cfg or {}).get("limb_stage_id"),
+                          "s1": bool((cfg or {}).get("s1"))})
+    return {"experiments": items, "root": str(root)}
+
+
+def run_s1_evaluation(root, *, experiment, checkpoint="ckpt_final.json",
+                      stage_id=None, episodes=12) -> dict:
+    """Run the S1 capability (mastery) eval on a saved checkpoint under
+    `root/experiment`. Returns {"ok": True, "verdict": ...} or
+    {"ok": False, "error": {"code", "message"}}. The caller guards the
+    training-running state and maps errors to HTTP status."""
+    import json
+    from pathlib import Path
+    root = Path(root)
+    try:
+        episodes = max(1, min(24, int(episodes)))
+    except (TypeError, ValueError):
+        episodes = 12
+    name, ckpt = str(experiment or ""), str(checkpoint or "")
+    if not name or any(b in name for b in ("/", "\\", "..")) or \
+            any(b in ckpt for b in ("/", "\\", "..")):
+        return {"ok": False, "error": {"code": "invalid_config",
+                "message": "experiment and checkpoint must be plain names"}}
+    run_dir = root / name
+    ckpt_path = run_dir / ckpt
+    if not ckpt_path.exists():
+        return {"ok": False, "error": {"code": "not_found",
+                "message": f"checkpoint {ckpt_path} does not exist"}}
+    if not stage_id:
+        cfgp = run_dir / "run_config.json"
+        if cfgp.exists():
+            try:
+                stage_id = json.loads(cfgp.read_text(encoding="utf-8")).get("limb_stage_id")
+            except Exception:
+                stage_id = None
+    if not stage_id:
+        return {"ok": False, "error": {"code": "invalid_config",
+                "message": "stage_id required (no limb_stage_id in run_config)"}}
+    try:
+        from playground.rl.s1_eval import evaluate_s1_limb
+        verdict = evaluate_s1_limb(str(ckpt_path), stage_id, episodes=episodes,
+                                   write_to=run_dir / f"s1_eval_{stage_id}.json")
+    except Exception as exc:
+        return {"ok": False, "error": {"code": "eval_failed", "message": str(exc)}}
+    return {"ok": True, "verdict": verdict}
 
 
 def save_session_checkpoint(path, *, trainer, curriculum, seed: int,

@@ -19,6 +19,7 @@ Only one live session per sidecar process, by construction.
 
 from __future__ import annotations
 
+import copy
 import json
 import threading
 import time
@@ -28,18 +29,39 @@ from pathlib import Path
 from .interop import build_session_env, build_session_trainer, save_session_checkpoint
 from .tap import FrameTapEnv
 
-# First supported objective (B3's ladder); more objectives later register here.
+# Objectives the live session can train. "walking" is B3's full ladder; the
+# M7-1a S1 objectives are the individual-limb-control stages, generated from
+# M7_S1_STAGES so they stay in lockstep with the ladder. Each S1 objective
+# trains the 2-stage limb ladder (standing base -> the selected limb) and is
+# gated by the recorded calibration evidence (m7_s1_launch_block_reason).
 WALKING_STAGE_BUDGETS = {"standing": 200000, "controlled": 500000}
-OBJECTIVES = {
-    "walking": {
-        "label": "Walking (standing → controlled → sustained)",
-        "stage_budgets": dict(WALKING_STAGE_BUDGETS),
-        "env_overrides": {},
-    },
-}
+S1_STANDING_WARMUP = 20_000      # default standing warmup before the limb stage
+
+
+def _build_objectives() -> dict:
+    objs = {
+        "walking": {
+            "label": "Walking (standing → controlled → sustained)",
+            "stage_budgets": dict(WALKING_STAGE_BUDGETS),
+            "env_overrides": {},
+            "s1": False, "limb_stage_id": None,
+        },
+    }
+    from playground.rl.curriculum import M7_S1_STAGES
+    for s in M7_S1_STAGES[1:]:
+        objs[s.id] = {
+            "label": f"S1 · {s.name}",
+            "stage_budgets": {"standing": S1_STANDING_WARMUP},
+            "env_overrides": {},
+            "s1": True, "limb_stage_id": s.id,
+        }
+    return objs
+
+
+OBJECTIVES = _build_objectives()
 
 _ALLOWED_PPO_KEYS = ("lr", "ent_coef", "clip_eps", "gamma", "gae_lambda",
-                     "rollout_steps", "epochs", "minibatch", "max_grad_norm")
+                     "rollout_steps", "epochs", "minibatch", "max_grad_norm", "hidden")
 
 ITERATION_CACHE = 200
 
@@ -53,6 +75,8 @@ class SessionConfig:
     stage_budgets: dict = field(default_factory=dict)
     ppo_overrides: dict = field(default_factory=dict)
     env_overrides: dict = field(default_factory=dict)
+    limb_stage_id: str | None = None   # set for M7-1a S1 limb objectives
+    s1: bool = False
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -142,7 +166,7 @@ class LiveBrainSession:
     _ALLOWED_ENV_KEYS = ("agent_body.visual",)
 
     def start(self, *, objective="walking", name=None, seed=None,
-              total_steps=None, ppo_overrides=None,
+              total_steps=None, ppo_overrides=None, stage_budgets=None,
               env_overrides=None) -> dict:
         with self._lock:
             if self.busy():
@@ -157,6 +181,17 @@ class LiveBrainSession:
             if preset is None:
                 return {"ok": False, "error": {"code": "unknown_objective",
                         "message": f"objectives available: {sorted(OBJECTIVES)}"}}
+            # M7-1a S1 limb objectives: enforce the recorded-calibration launch
+            # gate (satisfied by evidence, never bypassed) before any training.
+            if preset.get("s1"):
+                try:
+                    from playground.rl.curriculum import m7_s1_launch_block_reason
+                    reason = m7_s1_launch_block_reason()
+                except Exception as exc:
+                    reason = f"S1 launch gate check failed: {exc}"
+                if reason:
+                    return {"ok": False, "error": {"code": "s1_gate_blocked",
+                            "message": f"S1 limb training blocked: {reason}"}}
             try:
                 seed = int(seed) if seed is not None else 20261118
                 total_steps = int(total_steps) if total_steps is not None else 2_000_000
@@ -170,7 +205,9 @@ class LiveBrainSession:
             if bad:
                 return {"ok": False, "error": {"code": "invalid_config",
                         "message": f"unknown ppo keys: {sorted(bad)}"}}
-            env_ov = dict(preset.get("env_overrides") or {})
+            # deepcopy: the nested section dicts belong to OBJECTIVES, and the
+            # override loop below writes into them.
+            env_ov = copy.deepcopy(dict(preset.get("env_overrides") or {}))
             for key, val in (env_overrides or {}).items():
                 if key not in self._ALLOWED_ENV_KEYS:
                     return {"ok": False, "error": {
@@ -186,12 +223,22 @@ class LiveBrainSession:
             if "/" in name or "\\" in name or name in ("", ".", ".."):
                 return {"ok": False, "error": {"code": "invalid_config",
                         "message": "run name must be a plain folder name"}}
+            budgets = dict(preset["stage_budgets"])
+            if stage_budgets:
+                try:
+                    budgets.update({str(k): int(v)
+                                    for k, v in dict(stage_budgets).items()})
+                except (TypeError, ValueError):
+                    return {"ok": False, "error": {"code": "invalid_config",
+                            "message": "stage_budgets must map stage id -> int"}}
             self.config = SessionConfig(
                 name=name, objective=objective, seed=seed,
                 total_steps=total_steps,
-                stage_budgets=dict(preset["stage_budgets"]),
+                stage_budgets=budgets,
                 ppo_overrides=overrides,
-                env_overrides=env_ov)
+                env_overrides=env_ov,
+                limb_stage_id=preset.get("limb_stage_id"),
+                s1=bool(preset.get("s1")))
             self._paused = False
             self._stopping = False
             self._error = None
@@ -276,7 +323,9 @@ class LiveBrainSession:
 
     def _run(self):
         try:
-            env, cur = build_session_env(self.config.env_overrides)
+            env, cur = build_session_env(
+                self.config.env_overrides,
+                limb_stage_id=self.config.limb_stage_id)
             tap = FrameTapEnv(env, sink=self._frame_sink or (lambda m: None))
             run_dir = self.root / self.config.name
             run_dir.mkdir(parents=True, exist_ok=True)

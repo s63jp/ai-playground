@@ -45,9 +45,13 @@ def _actor_hidden(actor) -> list:
     the interior in-dims — (64,) for (64, 64) — which would have made the
     surgery rebuild a one-hidden-layer child for two-hidden-layer parents;
     caught by the M7-0b tests before any fork ran.)"""
+    # sort by LAYER INDEX (the trunk holds up to eight Linear layers under
+    # PPOConfig's 1..8 rule, so state-dict indexes reach 14 and a bare key
+    # sort would put "trunk.10.weight" before "trunk.2.weight" — recording
+    # a wrong architecture for 6+ layer trunks)
     items = sorted(((k, v) for k, v in actor.state_dict().items()
                     if k.startswith("trunk.") and k.endswith(".weight")),
-                   key=lambda kv: kv[0])
+                   key=lambda kv: int(kv[0].split(".")[1]))
     if not items:
         return []
     widths = [int(np.asarray(v).shape[1]) for _, v in items][1:]
@@ -290,15 +294,59 @@ def load_checkpoint(path, obs_fingerprint=None, action_fingerprint=None,
     if pol.get("class") != "TanhGaussianActor":
         raise CheckpointError(f"unknown actor class {pol.get('class')!r}")
     from .ppo import TanhGaussianActor, Critic  # local import: no cycle
-    actor = TanhGaussianActor(int(pol["obs_dim"]), int(pol["action_dim"]),
-                              log_std_min=float(pol["log_std_min"]),
-                              log_std_max=float(pol["log_std_max"]))
-    actor.load_state_dict({k: torch.tensor(v, dtype=torch.float32)
-                           if not isinstance(v, torch.Tensor) else v
-                           for k, v in body["actor"].items()})
-    critic = Critic(int(pol["obs_dim"]))
-    critic.load_state_dict({k: torch.tensor(v, dtype=torch.float32)
-                            for k, v in body["critic"].items()})
+    # Rebuild actor and critic at the CHECKPOINT'S OWN architecture: the
+    # saved `policy.hidden` widths are authoritative when present (M7-0b
+    # additive field; every save records the trunk-derived widths), or fall
+    # back to the historical default when absent. Every pre-M7-0b checkpoint
+    # in this repository is (64, 64) — and should that ever be wrong, the
+    # strict tensor load below refuses the shape mismatch loudly, so the
+    # fallback can never silently substitute an architecture.
+    hidden = pol.get("hidden", None)
+    if hidden is not None:
+        try:
+            hidden_tuple = tuple(int(h) for h in hidden)
+        except (TypeError, ValueError) as e:
+            raise CheckpointError(
+                f"checkpoint policy.hidden is not a list of integer widths: "
+                f"{e}") from e
+        if not hidden_tuple or any(h < 1 for h in hidden_tuple):
+            raise CheckpointError(
+                f"checkpoint policy.hidden must be positive layer widths "
+                f"(got {pol['hidden']!r})")
+    else:
+        hidden_tuple = None
+    actor_kwargs = {
+        "obs_dim": int(pol["obs_dim"]),
+        "action_dim": int(pol["action_dim"]),
+        "log_std_min": float(pol["log_std_min"]),
+        "log_std_max": float(pol["log_std_max"])
+    }
+    if hidden_tuple is not None:
+        actor_kwargs["hidden"] = hidden_tuple
+    critic_kwargs = {"obs_dim": int(pol["obs_dim"])}
+    if hidden_tuple is not None:
+        critic_kwargs["hidden"] = hidden_tuple
+    hidden_label = (str(list(hidden_tuple)) if hidden_tuple is not None
+                    else "(64, 64) default")
+    try:
+        actor = TanhGaussianActor(**actor_kwargs)
+        actor.load_state_dict(
+            {k: torch.tensor(v, dtype=torch.float32)
+             if not isinstance(v, torch.Tensor) else v
+             for k, v in body["actor"].items()})
+    except (RuntimeError, KeyError) as e:
+        raise CheckpointError(
+            f"checkpoint actor weights do not fit the recorded architecture "
+            f"(hidden={hidden_label}): {e}") from e
+    try:
+        critic = Critic(**critic_kwargs)
+        critic.load_state_dict(
+            {k: torch.tensor(v, dtype=torch.float32)
+             for k, v in body["critic"].items()})
+    except (RuntimeError, KeyError) as e:
+        raise CheckpointError(
+            f"checkpoint critic weights do not fit the recorded architecture "
+            f"(hidden={hidden_label}): {e}") from e
     out = {"path": str(p), "meta": meta, "actor": actor, "critic": critic,
            "content_sha256": body["content_sha256"]}
     if meta.get("policy", {}).get("log_std") is not None:
