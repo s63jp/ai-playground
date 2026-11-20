@@ -145,6 +145,24 @@ def register_rl_live_routes(app, cfg: dict | None = None, *,
                         "live model"})
         return spec
 
+    @app.get("/api/rl_live/mesh/{name}")
+    def rl_live_mesh(name: str):
+        """Compiled vertex/face data for one mesh asset (the humanoid_v2 shell).
+
+        Populated as the scene spec is built, so it is available for exactly
+        the meshes the current model carries. The name is looked up in that
+        table, never used as a path.
+        """
+        from .frames import cached_mesh, cached_mesh_names
+        md = cached_mesh(name)
+        if md is None:
+            return JSONResponse(status_code=404, content={
+                "available": False, "mesh": name,
+                "known": cached_mesh_names(),
+                "note": "unknown mesh; start a session so the scene spec is "
+                        "built from the live model"})
+        return md
+
     @app.get("/api/rl_live/telemetry.json")
     def rl_live_telemetry(limit: int = 200):
         recs = session.recent_iterations(limit=min(500, max(1, limit)))
@@ -161,7 +179,9 @@ def register_rl_live_routes(app, cfg: dict | None = None, *,
             objective=body.get("objective", "walking"),
             name=body.get("name"), seed=body.get("seed"),
             total_steps=body.get("total_steps"),
-            ppo_overrides=body.get("ppo_overrides")), ERROR_CODES)
+            ppo_overrides=body.get("ppo_overrides"),
+            # visual-only; e.g. {"agent_body.visual": "humanoid_v2"}
+            env_overrides=body.get("env_overrides")), ERROR_CODES)
 
     @app.post("/api/rl_live/pause")
     def rl_live_pause():

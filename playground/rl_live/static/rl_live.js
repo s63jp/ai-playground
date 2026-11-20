@@ -83,6 +83,13 @@ function geomMesh(g) {
     case 'ellipsoid':
       geo = new THREE.SphereGeometry(1, 16, 12);
       break;
+    case 'mesh':
+      // The humanoid_v2 robot shell. Vertex data is fetched asynchronously
+      // from /api/rl_live/mesh/{name}; start with an empty geometry so the
+      // mesh takes its place in the body group immediately and the scene
+      // never waits on the network.
+      geo = new THREE.BufferGeometry();
+      break;
     default:
       return null;
   }
@@ -97,11 +104,44 @@ function geomMesh(g) {
     mesh.quaternion.set(g.quat[1], g.quat[2], g.quat[3], g.quat[0]);
   }
   if (g.type === 'ellipsoid') mesh.scale.set(s[0], s[1], s[2]);
+  if (g.type === 'mesh' && g.mesh) loadMeshGeometry(mesh, g.mesh);
   if (g.type === 'plane') {
     mesh.receiveShadow = false;
     mat.side = THREE.DoubleSide;
   }
   return mesh;
+}
+
+// Mesh assets are fetched once each and shared between geoms that reuse them.
+const meshGeoCache = new Map();          // mesh name -> Promise<BufferGeometry>
+window.__meshStats = { requested: 0, loaded: 0, failed: 0 };
+
+function fetchMeshGeometry(name) {
+  if (!meshGeoCache.has(name)) {
+    window.__meshStats.requested += 1;
+    meshGeoCache.set(name, fetch(`/api/rl_live/mesh/${encodeURIComponent(name)}`)
+      .then((r) => { if (!r.ok) throw new Error(`${r.status}`); return r.json(); })
+      .then((d) => {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(d.verts, 3));
+        geo.setIndex(d.faces);
+        geo.computeVertexNormals();
+        window.__meshStats.loaded += 1;
+        return geo;
+      })
+      .catch((err) => {
+        window.__meshStats.failed += 1;
+        console.warn('mesh load failed', name, err);
+        return null;            // the body keeps its collision geoms
+      }));
+  }
+  return meshGeoCache.get(name);
+}
+
+function loadMeshGeometry(mesh, name) {
+  fetchMeshGeometry(name).then((geo) => {
+    if (geo) mesh.geometry = geo;
+  });
 }
 
 function buildScene(spec) {

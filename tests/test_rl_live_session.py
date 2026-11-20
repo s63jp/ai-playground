@@ -179,3 +179,26 @@ def test_save_without_session_and_bad_tag(tmp_path):
     assert s.save(tag="x/y")["error"]["code"] == "invalid_config"
     s.stop()
     assert wait_state(s, "stopped")
+
+
+def test_env_override_allow_list_refuses_everything_else(tmp_path):
+    """Only agent_body.visual may be overridden per session; physics, the RL
+    contract and nested keys are refused before anything launches."""
+    s = make_session(tmp_path)
+    for key in ("agent_body.type", "agent_body.mass", "rl.gamma",
+                "agent_body.visual.extra", "world.timestep"):
+        r = s.start(name="ov", total_steps=5_000, env_overrides={key: "x"})
+        assert r["ok"] is False and r["error"]["code"] == "invalid_config", key
+    assert s.state == "idle"
+    assert s.status()["session"]["config"] is None
+
+
+def test_visual_override_is_recorded_and_merged_with_the_preset(tmp_path):
+    s = make_session(tmp_path)
+    r = s.start(name="vis_a", total_steps=5_000,
+                env_overrides={"agent_body.visual": "humanoid_v2"})
+    assert r["ok"] is True
+    assert s.config.env_overrides == {"agent_body": {"visual": "humanoid_v2"}}
+    assert wait_state(s, "running")
+    s.stop()
+    assert wait_state(s, "stopped")

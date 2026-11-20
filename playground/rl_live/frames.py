@@ -107,6 +107,55 @@ def _name_of(m, handle) -> str:
 
 
 # --------------------------------------------------------------- scene spec
+# Mesh payloads are cached as scene_spec() walks the model, because that is
+# the one place the live env is in scope. The viewer then pulls them by name
+# over REST instead of inflating every spec broadcast by ~600 KB.
+_MESH_CACHE: dict[str, dict] = {}
+
+
+def cached_mesh(name: str) -> dict | None:
+    """A mesh payload captured by the last scene_spec() call, or None."""
+    return _MESH_CACHE.get(name)
+
+
+def cached_mesh_names() -> list[str]:
+    return sorted(_MESH_CACHE)
+
+
+def mesh_data(env, name: str) -> dict | None:
+    """Compiled vertex/face data for one mesh asset, by name.
+
+    Served to the viewer so it can draw mesh geoms (the humanoid_v2 robot
+    shell). Deliberately read from the COMPILED model rather than the source
+    .obj files: mesh_vert is already bbox-centred and expressed in the geom
+    frame, matching geom_pos/geom_quat exactly, so the viewer needs no
+    re-centring and cannot drift from what physics actually holds.
+
+    Returns None for an unknown name (the caller answers 404) — the name is
+    matched against the model's own mesh table, so this is not a file path and
+    cannot be used to read arbitrary files.
+    """
+    m = env.world.m
+    mid = -1
+    for i in range(m.nmesh):
+        if _name_of(m, m.mesh(i)) == name:
+            mid = i
+            break
+    if mid < 0:
+        return None
+    va, vn = int(m.mesh_vertadr[mid]), int(m.mesh_vertnum[mid])
+    fa, fn = int(m.mesh_faceadr[mid]), int(m.mesh_facenum[mid])
+    verts = np.asarray(m.mesh_vert[va:va + vn], dtype=float)
+    faces = np.asarray(m.mesh_face[fa:fa + fn], dtype=int)
+    return {
+        "name": name,
+        "verts": [round(float(c), 5) for c in verts.ravel()],
+        "faces": [int(c) for c in faces.ravel()],
+        "nvert": vn,
+        "nface": fn,
+    }
+
+
 def scene_spec(env) -> dict:
     """Build the viewer's scene description from the live model.
 
@@ -128,7 +177,29 @@ def scene_spec(env) -> dict:
             tname = gtypes.get(tcode)
             if tname is None:
                 if tcode == int(getattr(_mujoco().mjtGeom, "mjGEOM_MESH", 7)):
-                    meshes_skipped += 1
+                    # Mesh geoms ARE emitted: the viewer fetches the compiled
+                    # vertex data by name from /api/rl_live/mesh/{name}. The
+                    # compiler sets geom_pos = mesh_pos and geom_quat =
+                    # mesh_quat, and mesh_vert is stored in the geom frame, so
+                    # the pos/quat below position the mesh with no correction.
+                    mid = int(m.geom_dataid[gid])
+                    mname = _name_of(m, m.mesh(mid)) if mid >= 0 else ""
+                    if not mname:
+                        meshes_skipped += 1
+                        continue
+                    if mname not in _MESH_CACHE:
+                        md = mesh_data(env, mname)
+                        if md is not None:
+                            _MESH_CACHE[mname] = md
+                    geoms.append({
+                        "type": "mesh",
+                        "mesh": mname,
+                        "size": _rlist(np.asarray(m.geom_size[gid], dtype=float), 4),
+                        "pos": _rlist(np.asarray(m.geom_pos[gid], dtype=float), 4),
+                        "quat": _rlist(np.asarray(m.geom_quat[gid], dtype=float), 5),
+                        "rgba": _rlist(np.asarray(m.geom_rgba[gid], dtype=float), 3),
+                        "group": int(m.geom_group[gid]),
+                    })
                 else:
                     geoms_skipped += 1
                 continue

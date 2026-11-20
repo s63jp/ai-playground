@@ -11,7 +11,8 @@ import numpy as np
 import pytest
 
 from playground.rl.env import LocoEnv
-from playground.rl_live.frames import FrameIndex, pack_frame, scene_spec
+from playground.rl_live.frames import (FrameIndex, _name_of, mesh_data,
+                                       pack_frame, scene_spec)
 from playground.rl_live.tap import FrameTapEnv, RecordingSink
 
 
@@ -32,7 +33,7 @@ def test_scene_spec_shape(tmp_path):
     for body in spec["bodies"]:
         for g in body["geoms"]:
             assert g["type"] in ("plane", "sphere", "capsule", "cylinder",
-                                 "box", "ellipsoid")
+                                 "box", "ellipsoid", "mesh")
             assert len(g["rgba"]) == 4
         assert "parent" in body
     assert isinstance(spec["meshes_skipped"], int)
@@ -116,3 +117,70 @@ def test_frame_json_budget(tmp_path):
     blob = json.dumps(frame)
     assert len(blob) < 12_000                    # per-frame JSON budget
     assert frame["v"] == 1
+
+
+# ------------------------------------------------- humanoid_v2 mesh geoms
+def make_visual_env(tmp_path):
+    return LocoEnv(cfg={"_root": str(tmp_path),
+                        "agent_body": {"type": "humanoid", "visual": "humanoid_v2"}})
+
+
+@pytest.fixture
+def fresh_mesh_cache(monkeypatch):
+    """scene_spec() fills a module-level cache; isolate each test from it."""
+    from playground.rl_live import frames
+    cache: dict = {}
+    monkeypatch.setattr(frames, "_MESH_CACHE", cache)
+    return cache
+
+
+def test_legacy_scene_has_no_mesh_geoms(tmp_path, fresh_mesh_cache):
+    spec = scene_spec(make_env(tmp_path))
+    assert not any(g["type"] == "mesh" for b in spec["bodies"] for g in b["geoms"])
+    assert fresh_mesh_cache == {}
+
+
+def test_visual_scene_emits_mesh_geoms_and_caches_their_data(tmp_path, fresh_mesh_cache):
+    spec = scene_spec(make_visual_env(tmp_path))
+    mesh_geoms = [g for b in spec["bodies"] for g in b["geoms"] if g["type"] == "mesh"]
+    assert len(mesh_geoms) == 35                  # the humanoid_v2 shell
+    assert spec["meshes_skipped"] == 0
+    assert set(fresh_mesh_cache) == {g["mesh"] for g in mesh_geoms}
+    for g in mesh_geoms:
+        assert len(g["pos"]) == 3 and len(g["quat"]) == 4 and len(g["rgba"]) == 4
+    json.dumps(spec)                              # still viewer-serialisable
+
+
+def test_mesh_data_matches_the_compiled_model(tmp_path):
+    env = make_visual_env(tmp_path)
+    m = env.world.m
+    mid = next(i for i in range(m.nmesh) if _name_of(m, m.mesh(i)) == "hv2_abdomen")
+    md = mesh_data(env, "hv2_abdomen")
+    va, vn = int(m.mesh_vertadr[mid]), int(m.mesh_vertnum[mid])
+    fa, fn = int(m.mesh_faceadr[mid]), int(m.mesh_facenum[mid])
+    assert md["name"] == "hv2_abdomen"
+    assert md["nvert"] == vn and md["nface"] == fn
+    np.testing.assert_allclose(np.array(md["verts"]).reshape(-1, 3),
+                               m.mesh_vert[va:va + vn], atol=1e-5)
+    np.testing.assert_array_equal(np.array(md["faces"]).reshape(-1, 3),
+                                  m.mesh_face[fa:fa + fn])
+    assert max(md["faces"]) < vn
+
+
+@pytest.mark.parametrize("name", ["nope", "../../secret", "hv2_abdomen.obj", ""])
+def test_mesh_data_refuses_names_outside_the_model(tmp_path, name):
+    assert mesh_data(make_visual_env(tmp_path), name) is None
+
+
+def test_session_visual_override_builds_the_shell(fresh_mesh_cache):
+    """The live session path (build_session_env) honours agent_body.visual,
+    and the default path still has no shell."""
+    from playground.rl_live.interop import build_session_env
+
+    def mesh_count(overrides):
+        env, _cur = build_session_env(overrides)
+        spec = scene_spec(env)
+        return sum(g["type"] == "mesh" for b in spec["bodies"] for g in b["geoms"])
+
+    assert mesh_count({"agent_body": {"visual": "humanoid_v2"}}) == 35
+    assert mesh_count({}) == 0

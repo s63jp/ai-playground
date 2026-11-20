@@ -135,8 +135,15 @@ class LiveBrainSession:
         return self.state in ("starting", "running", "paused")
 
     # ------------------------------------------------------------- controls
+    # Only the agent's VISUAL shell may be overridden per session: it changes
+    # rendering, never physics or the RL contract (proven in
+    # tests/test_humanoid_v2_integration.py). Widening this set would let a
+    # request reshape the world a brain was trained in.
+    _ALLOWED_ENV_KEYS = ("agent_body.visual",)
+
     def start(self, *, objective="walking", name=None, seed=None,
-              total_steps=None, ppo_overrides=None) -> dict:
+              total_steps=None, ppo_overrides=None,
+              env_overrides=None) -> dict:
         with self._lock:
             if self.busy():
                 return {"ok": False, "error": {"code": "busy",
@@ -163,6 +170,18 @@ class LiveBrainSession:
             if bad:
                 return {"ok": False, "error": {"code": "invalid_config",
                         "message": f"unknown ppo keys: {sorted(bad)}"}}
+            env_ov = dict(preset.get("env_overrides") or {})
+            for key, val in (env_overrides or {}).items():
+                if key not in self._ALLOWED_ENV_KEYS:
+                    return {"ok": False, "error": {
+                        "code": "invalid_config",
+                        "message": f"env override {key!r} not allowed; "
+                                   f"permitted: {list(self._ALLOWED_ENV_KEYS)}"}}
+                sect, _, leaf = key.partition(".")
+                env_ov.setdefault(sect, {})
+                if not isinstance(env_ov[sect], dict):
+                    env_ov[sect] = {}
+                env_ov[sect][leaf] = val
             name = (name or f"live_{time.strftime('%Y%m%d_%H%M%S')}").strip()
             if "/" in name or "\\" in name or name in ("", ".", ".."):
                 return {"ok": False, "error": {"code": "invalid_config",
@@ -172,7 +191,7 @@ class LiveBrainSession:
                 total_steps=total_steps,
                 stage_budgets=dict(preset["stage_budgets"]),
                 ppo_overrides=overrides,
-                env_overrides=dict(preset.get("env_overrides") or {}))
+                env_overrides=env_ov)
             self._paused = False
             self._stopping = False
             self._error = None

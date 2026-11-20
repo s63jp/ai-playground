@@ -108,3 +108,72 @@ def test_error_shape_and_codes(env):
     r = client.post("/api/rl_live/save", json={"tag": "x"})
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "nothing_to_save"
+
+
+# ------------------------------------------- humanoid_v2 mesh REST endpoint
+@pytest.fixture
+def fresh_mesh_cache(monkeypatch):
+    from playground.rl_live import frames
+    cache: dict = {}
+    monkeypatch.setattr(frames, "_MESH_CACHE", cache)
+    return cache
+
+
+def _build_visual_spec(tmp_path):
+    """Build the viewer spec for the humanoid_v2 world; this fills the mesh
+    cache exactly as a live session start does."""
+    from playground.rl.env import LocoEnv
+    from playground.rl_live.frames import scene_spec
+    scene_spec(LocoEnv(cfg={"_root": str(tmp_path),
+                            "agent_body": {"type": "humanoid",
+                                           "visual": "humanoid_v2"}}))
+
+
+def test_mesh_404_until_a_scene_spec_is_built(env, fresh_mesh_cache):
+    client, _handle, _tmp = env
+    r = client.get("/api/rl_live/mesh/hv2_abdomen")
+    assert r.status_code == 404
+    body = r.json()
+    assert body["available"] is False and body["known"] == []
+
+
+def test_mesh_served_by_name_after_scene_spec(env, fresh_mesh_cache):
+    client, _handle, tmp = env
+    _build_visual_spec(tmp)
+    r = client.get("/api/rl_live/mesh/hv2_abdomen")
+    assert r.status_code == 200
+    md = r.json()
+    assert md["name"] == "hv2_abdomen"
+    assert md["nvert"] == 96 and md["nface"] == 188
+    assert len(md["verts"]) == 3 * md["nvert"]
+    assert len(md["faces"]) == 3 * md["nface"]
+    assert max(md["faces"]) < md["nvert"]
+
+
+@pytest.mark.parametrize("name", ["nope", "..%2Fsecret", "..%5Csecret"])
+def test_mesh_refuses_anything_not_in_the_model(env, fresh_mesh_cache, name):
+    client, _handle, tmp = env
+    _build_visual_spec(tmp)
+    r = client.get(f"/api/rl_live/mesh/{name}")
+    assert r.status_code == 404
+
+
+def test_start_refuses_env_overrides_outside_the_allow_list(tmp_path, monkeypatch):
+    """The REST body reaches the session's allow-list. Refusal happens before
+    any trainer is launched, so this test starts nothing."""
+    monkeypatch.setattr("playground.rl_live.interop.trainer_available",
+                        lambda: True)
+    b3p = tmp_path / "b3" / "progress.jsonl"
+    b3p.parent.mkdir(parents=True, exist_ok=True)
+    b3p.write_text("", encoding="utf-8")
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    register_rl_live_routes(app, {"rl_live": {"b3_progress": str(b3p)}},
+                            out_root=tmp_path / "runs_guard", frame_hz=10_000)
+    client = TestClient(app)
+    r = client.post("/api/rl_live/start", json={
+        "env_overrides": {"agent_body.type": "other"}})
+    assert r.status_code == 400
+    err = r.json()["error"]
+    assert err["code"] == "invalid_config" and "not allowed" in err["message"]
+    assert client.get("/api/rl_live/status").json()["session"]["state"] == "idle"

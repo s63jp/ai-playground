@@ -68,6 +68,9 @@ function geomMesh(g) {
     case 'cylinder': geo = new THREE.CylinderGeometry(s[0], s[0], s[1] * 2, 16); geo.rotateX(Math.PI / 2); break;  // Y-axis -> MuJoCo Z-axis
     case 'box': geo = new THREE.BoxGeometry(2 * s[0], 2 * s[1], 2 * s[2]); break;
     case 'ellipsoid': geo = new THREE.SphereGeometry(1, 16, 12); break;
+    // humanoid_v2 robot shell: vertex data arrives asynchronously from
+    // /api/rl_live/mesh/{name}, so start empty and never block the scene.
+    case 'mesh': geo = new THREE.BufferGeometry(); break;
     default: return null;
   }
   const mat = new THREE.MeshStandardMaterial({
@@ -78,8 +81,41 @@ function geomMesh(g) {
   mesh.position.fromArray(g.pos || [0, 0, 0]);
   if (g.quat && g.quat.length === 4) mesh.quaternion.set(g.quat[1], g.quat[2], g.quat[3], g.quat[0]);
   if (g.type === 'ellipsoid') mesh.scale.set(s[0], s[1], s[2]);
+  if (g.type === 'mesh' && g.mesh) loadMeshGeometry(mesh, g.mesh);
   if (g.type === 'plane') mat.side = THREE.DoubleSide;
   return mesh;
+}
+
+// Mesh assets: fetched once each, shared across geoms that reuse them. The
+// compiled vertices are already in the geom frame, so geom pos/quat above
+// place them with no correction.
+const meshGeoCache = new Map();
+window.__meshStats = { requested: 0, loaded: 0, failed: 0 };
+
+function fetchMeshGeometry(name) {
+  if (!meshGeoCache.has(name)) {
+    window.__meshStats.requested += 1;
+    meshGeoCache.set(name, fetch(`/api/rl_live/mesh/${encodeURIComponent(name)}`)
+      .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+      .then((d) => {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(d.verts, 3));
+        geo.setIndex(d.faces);
+        geo.computeVertexNormals();
+        window.__meshStats.loaded += 1;
+        return geo;
+      })
+      .catch((err) => {
+        window.__meshStats.failed += 1;
+        console.warn('mesh load failed', name, err);
+        return null;              // collision geoms still render
+      }));
+  }
+  return meshGeoCache.get(name);
+}
+
+function loadMeshGeometry(mesh, name) {
+  fetchMeshGeometry(name).then((geo) => { if (geo) mesh.geometry = geo; });
 }
 
 function buildScene(spec) {
@@ -306,6 +342,9 @@ async function bootSnapshot() {
 }
 
 window.__rl_live_show = () => { resize(); bootSnapshot(); };
+// QA hook, matching the dashboard's __view3d/__replay convention: lets
+// automated checks frame the rig and count what is actually in the scene.
+window.__rlLive3D = { scene, camera, controls, rigMeshes };
 resize();
 
 /* ------------------------------------------------------------ render loop */
